@@ -1,0 +1,2 @@
+# cmgr
+CTF Challenge Manager
