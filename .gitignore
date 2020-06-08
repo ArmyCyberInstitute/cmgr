@@ -1,2 +1,2 @@
 # Ignore binary targets
-cmgr
+cmd/cmgr/cmgr
