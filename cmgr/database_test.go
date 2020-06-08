@@ -1,7 +1,5 @@
 package cmgr
 
-//BUG(jrolli): TestDatabaseSchema needs
-
 import (
 	"testing"
 

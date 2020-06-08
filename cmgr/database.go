@@ -14,7 +14,7 @@ import (
 func (m *Manager) initDatabase() error {
 	dbPath, isSet := os.LookupEnv(DB_ENV)
 	if !isSet {
-		dbPath = "./cmgr.db"
+		dbPath = "cmgr.db"
 	}
 
 	db, err := sqlx.Open("sqlite3", dbPath+"?_fk=true")
