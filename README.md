@@ -75,10 +75,12 @@ points for improving metrics collection for research purposes.
 Basic concept is to use environment variables with sane defaults to control
 basic implementation details.
 
-`CMGR_CHALLENGE_DIR` path to the directory which contains all known challenges
+`CMGR_DIR` path to the directory which contains all known challenges
 (nested arbitrarily).
 
-`CMGR_CHALLENGE_STATE_DB` path to the SQLite database file storing state
+`CMGR_ARTIFACT_DIR` path to a writable directory for storing artifact tarballs.
+
+`CMGR_DB` path to the SQLite database file storing state
 (handles concurrency by enforcing table locks before file modifications)
 
 **Note:** There are a number of docker configuration options that need to be added.
@@ -239,7 +241,7 @@ for each instance.
 `challenges` is a list of challenge identifiers for known challenges.  If empty, then all
 challenges are selected.
 
-Throws an error if any challenge challenge identifiers are invalid.
+Throws an error if any challenge identifiers are invalid.
 
 Returns a list of the raw, untemplated challenge metadata.
 
@@ -277,7 +279,7 @@ to their instance metadata.
 
 ### Database Schema
 
-TBD
+See `schemaQuery` in [database.go](cmgr/database.go).
 
 ## Command Line Utility (`cmgr`)
 

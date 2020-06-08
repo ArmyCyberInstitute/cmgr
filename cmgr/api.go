@@ -1,39 +1,40 @@
 package cmgr
 
 import (
-	"context"
 	"errors"
-
-	"github.com/docker/docker/client"
 )
 
+// Creates a new instance of the challenge manager validating the appropriate
+// environment variables in the process.  A return value of `nil` indicates
+// a fatal error occurred during intitialization.
 func NewManager(logLevel LogLevel) *Manager {
-	cli, err := client.NewEnvClient()
-	if err != nil {
-		return nil
-	}
-
 	mgr := new(Manager)
-	mgr.client = cli
-	mgr.ctx = context.Background()
 	mgr.log = newLogger(logLevel)
 
-	ping, err := cli.Ping(mgr.ctx)
-	if err != nil {
-		mgr.log.error(err)
+	if err := mgr.setChallengeDirectory(); err != nil {
 		return nil
 	}
 
-	mgr.log.infof("connected to docker (API v%s)", ping.APIVersion)
+	if err := mgr.initDocker(); err != nil {
+		return nil
+	}
+
+	if err := mgr.initDatabase(); err != nil {
+		return nil
+	}
+
 	return mgr
 }
 
-func (m *Manager) DetectChanges(filepath string) ([]int, error) {
-	return nil, errors.New("not implemented")
+func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
+	cu := new(ChallengeUpdates)
+	cu.Errors = []error{errors.New("not implemented")}
+	return cu
 }
 
-func (m *Manager) Update(filepath string) ([]int, error) {
-	return nil, errors.New("not implemented")
+func (m *Manager) Update(fp string) *ChallengeUpdates {
+	cu := m.DetectChanges(fp)
+	return cu
 }
 
 func (m *Manager) Build(challenge ChallengeId, seeds []string, flagFormat string) ([]BuildId, error) {
@@ -54,6 +55,10 @@ func (m *Manager) Destroy(build BuildId) error {
 
 func (m *Manager) CheckInstance(instance InstanceId) (bool, error) {
 	return false, errors.New("not implemented")
+}
+
+func (m *Manager) ListChallenges() []ChallengeId {
+	return nil
 }
 
 func (m *Manager) GetChallengeMetadata(challenge ChallengeId) (*ChallengeMetadata, error) {
