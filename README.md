@@ -222,7 +222,7 @@ Throws an error if any instances marked for destruction are currently running.
 
 No return value.
 
-#### `check_instances(instance_ids)`
+#### `check_instances(instance_id)`
 
 Creates and runs a docker container in a new directory with the static
 artifact files as well as the instance metadata (without flag) saved in
