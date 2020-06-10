@@ -56,12 +56,14 @@ const (
 	CREATE TABLE IF NOT EXISTS challenges (
 		id TEXT NOT NULL PRIMARY KEY,
 		name TEXT NOT NULL,
+		namespace TEXT NOT NULL,
+		challengetype TEXT NOT NULL,
 		description TEXT NOT NULL,
-		detailsTemplate TEXT,
-		version INTEGER NOT NULL,
-		hasSolveScript INTEGER NOT NULL CHECK(hasSolveScript == 0 OR hasSolveScript == 1),
+		details TEXT,
+		checksum INT NOT NULL,
+		solvescript INTEGER NOT NULL CHECK(solvescript == 0 OR solvescript == 1),
 		templatable INTEGER NOT NULL CHECK(templatable == 0 OR templatable == 1),
-		maxUsers INTEGER NOT NULL CHECK(maxUsers >= 0),
+		maxusers INTEGER NOT NULL CHECK(maxusers >= 0),
 		category TEXT,
 		points INTEGER NOT NULL CHECK(points >= 0)
 	);
@@ -99,7 +101,7 @@ const (
 		id INTEGER PRIMARY KEY,
 		flag TEXT NOT NULL,
 		seed TEXT NOT NULL,
-		lastSolved INTEGER,
+		lastsolved INTEGER,
 		challenge TEXT NOT NULL,
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -115,7 +117,7 @@ const (
 
 	CREATE TABLE IF NOT EXISTS instances (
 		id INTEGER PRIMARY KEY,
-		lastSolved INTEGER,
+		lastsolved INTEGER,
 		build INTEGER NOT NULL,
 		FOREIGN KEY (build) REFERENCES builds (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -123,11 +125,11 @@ const (
 
 	CREATE TABLE IF NOT EXISTS portAssignments (
 		instance INTEGER NOT NULL,
-		nameId INTEGER NOT NULL,
+		nameid INTEGER NOT NULL,
 		port INTEGER NOT NULL CHECK (port > 0 AND port < 65536),
 		FOREIGN KEY (instance) REFERENCES instances (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT,
-		FOREIGN KEY (nameId) REFERENCES portNames (id)
+		FOREIGN KEY (nameid) REFERENCES portNames (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
 	);
 `

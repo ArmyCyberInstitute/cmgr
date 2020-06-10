@@ -93,6 +93,8 @@ Authoritative:
 
 - Name
 
+- Namespace (optional, '/' separated)
+
 - challenge identifier (sanitized name + hash of relative file-path from `PICO_CHALLENGE_DIR` for "problem.json")
 
 - Description (static information only)

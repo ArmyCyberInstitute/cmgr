@@ -27,8 +27,39 @@ func NewManager(logLevel LogLevel) *Manager {
 }
 
 func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
+	if fp == "" {
+		fp = m.chalDir
+	}
+
 	cu := new(ChallengeUpdates)
-	cu.Errors = []error{errors.New("not implemented")}
+
+	challenges, errs := m.inventoryChallenges(fp)
+	db_metadata := []*ChallengeMetadata{}
+
+	err := m.db.Select(&db_metadata, "SELECT id, checksum FROM challenges;")
+
+	if err != nil {
+		cu.Errors = append(errs, err)
+		return cu
+	}
+
+	for _, curr := range db_metadata {
+		newMeta, ok := challenges[curr.Id]
+		if !ok {
+			cu.Removed = append(cu.Removed, curr)
+		} else if curr.Checksum == newMeta.Checksum {
+			cu.Unmodified = append(cu.Unmodified, curr)
+		} else {
+			cu.Updated = append(cu.Updated, newMeta)
+		}
+		delete(challenges, curr.Id)
+	}
+
+	for _, metadata := range challenges {
+		cu.Added = append(cu.Added, metadata)
+	}
+
+	cu.Errors = errs
 	return cu
 }
 
