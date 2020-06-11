@@ -10,13 +10,27 @@ import (
 )
 
 func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetadata, error) {
+	var md *ChallengeMetadata
+	var err error
+
 	// Screen out non-problem files
 	if info.Name() == "problem.json" {
-		return m.loadJsonChallenge(path, info)
+		md, err = m.loadJsonChallenge(path, info)
 	}
 
-	return nil, nil
+	if err != nil {
+		err = m.validate()
+	}
+
+	return md, err
 }
+
+// Validates the challenge metadata for compliance with expectations
+func (m *Manager) validate() error {
+	return nil
+}
+
+// BUG(jrolli): Need to actually implement the validation.
 
 type hacksportAttrs struct {
 	Author       string `json:"author"`

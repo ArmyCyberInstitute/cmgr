@@ -9,9 +9,8 @@ import (
 
 func main() {
 	log.SetFlags(0)
-	mgr := cmgr.NewManager(cmgr.DEBUG)
-	printChanges(mgr.DetectChanges(""))
-
+	mgr := cmgr.NewManager(cmgr.WARN)
+	printChanges(mgr.Update(""))
 }
 
 func printChanges(status *cmgr.ChallengeUpdates) {
