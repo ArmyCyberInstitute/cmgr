@@ -52,7 +52,7 @@ func (m *Manager) initDatabase() error {
 // Gets just the ID and checksum for all known challenges
 func (m *Manager) listChallenges() ([]*ChallengeMetadata, error) {
 	metadata := []*ChallengeMetadata{}
-	err := m.db.Select(&metadata, "SELECT id, checksum FROM challenges;")
+	err := m.db.Select(&metadata, "SELECT * FROM challenges;")
 	return metadata, err
 }
 
@@ -73,9 +73,10 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 			continue
 		}
 
-		for _, hint := range metadata.Hints {
-			_, err = txn.Exec("INSERT INTO hints(challenge, hint) VALUES (?, ?);",
+		for i, hint := range metadata.Hints {
+			_, err = txn.Exec("INSERT INTO hints(challenge, idx, hint) VALUES (?, ?, ?);",
 				metadata.Id,
+				i,
 				hint)
 
 			if err != nil {
@@ -130,7 +131,7 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 	return errs
 }
 
-func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata) []error {
+func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebuild bool) []error {
 	errs := []error{}
 	for _, metadata := range updatedChallenges {
 		txn := m.db.MustBegin()
@@ -146,7 +147,7 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata) []err
 			continue
 		}
 
-		for _, hint := range metadata.Hints {
+		for i, hint := range metadata.Hints {
 			_, err = txn.Exec("DELETE FROM hints WHERE challenge = ?;", metadata.Id)
 
 			if err != nil {
@@ -159,8 +160,9 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata) []err
 				continue
 			}
 
-			_, err = txn.Exec("INSERT INTO hints(challenge, hint) VALUES (?, ?);",
+			_, err = txn.Exec("INSERT INTO hints(challenge, idx, hint) VALUES (?, ?, ?);",
 				metadata.Id,
+				i,
 				hint)
 
 			if err != nil {
@@ -231,6 +233,10 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata) []err
 			}
 		}
 
+		if rebuild {
+			// TODO(jrolli): Need to recurse into builds as appropriate.
+		}
+
 		if err := txn.Commit(); err != nil { // It's undocumented what this means...
 			m.log.error(err)
 			errs = append(errs, err)
@@ -276,7 +282,7 @@ func (m *Manager) removeChallenges(removedChallenges []*ChallengeMetadata) error
 		}
 
 		// This should throw an error and cause a rollback when builds exist for
-		// a challenge we are removed.
+		// a challenge we are removing.
 		_, err = txn.Exec("DELETE FROM challenges WHERE id = ?;", metadata.Id)
 		if err != nil {
 			m.log.error(err)
@@ -293,7 +299,38 @@ func (m *Manager) removeChallenges(removedChallenges []*ChallengeMetadata) error
 		m.log.error(err)
 		return err
 	}
+
 	return nil
+}
+
+func (m *Manager) safeToRefresh(old *ChallengeMetadata, new *ChallengeMetadata) bool {
+	var oldHints []string
+	err := m.db.Select(&oldHints, "SELECT hint FROM hints WHERE challenge=? ORDER BY idx;", old.Id)
+	if err != nil {
+		return false
+	}
+
+	hintsEqual := len(oldHints) == len(new.Hints)
+	if hintsEqual {
+		for i, v := range oldHints {
+			hintsEqual = hintsEqual && v == new.Hints[i]
+		}
+	}
+
+	portMapsEqual := len(old.PortMap) == len(new.PortMap)
+	if portMapsEqual {
+		for k, v := range old.PortMap {
+			newVal, ok := new.PortMap[k]
+			portMapsEqual = portMapsEqual && ok && v == newVal
+		}
+	}
+
+	safe := old.ChallengeType == new.ChallengeType &&
+		old.Details == new.Details && // This is overly conservative and could be better
+		hintsEqual && // This is overly conservative
+		portMapsEqual
+
+	return safe
 }
 
 const (
@@ -307,7 +344,8 @@ const (
 		challengetype TEXT NOT NULL,
 		description TEXT NOT NULL,
 		details TEXT,
-		checksum INT NOT NULL,
+		sourcechecksum INT NOT NULL,
+		metadatachecksum INT NOT NULL,
 		path TEXT NOT NULL,
 		solvescript INTEGER NOT NULL CHECK(solvescript == 0 OR solvescript == 1),
 		templatable INTEGER NOT NULL CHECK(templatable == 0 OR templatable == 1),
@@ -318,7 +356,9 @@ const (
 
 	CREATE TABLE IF NOT EXISTS hints (
 		challenge TEXT NOT NULL,
+		idx INT NOT NULL,
 		hint TEXT NOT NULL,
+		PRIMARY KEY (challenge, idx),
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
 	);
@@ -326,6 +366,7 @@ const (
 	CREATE TABLE IF NOT EXISTS tags (
 		challenge TEXT NOT NULL,
 		tag TEXT NOT NULL,
+		PRIMARY KEY (challenge, tag),
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
 	);
@@ -336,6 +377,7 @@ const (
 		challenge TEXT NOT NULL,
 		key TEXT NOT NULL,
 		value TEXT NOT NULL,
+		PRIMARY KEY (challenge, key),
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
 	);
@@ -382,6 +424,7 @@ const (
 		instance INTEGER NOT NULL,
 		nameid INTEGER NOT NULL,
 		port INTEGER NOT NULL CHECK (port > 0 AND port < 65536),
+		PRIMARY KEY (instance, nameid),
 		FOREIGN KEY (instance) REFERENCES instances (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT,
 		FOREIGN KEY (nameid) REFERENCES portNames (id)
@@ -396,7 +439,8 @@ const (
 		challengetype,
 		description,
 		details,
-		checksum,
+		sourcechecksum,
+		metadatachecksum,
 		path,
 		solvescript,
 		templatable,
@@ -411,7 +455,8 @@ const (
 		:challengetype,
 		:description,
 		:details,
-		:checksum,
+		:sourcechecksum,
+		:metadatachecksum,
 		:path,
 		:solvescript,
 		:templatable,
@@ -422,10 +467,12 @@ const (
 
 	challengeUpdateQuery string = `
 	UPDATE challenges SET
+	    name = :name,
 		challengetype = :challengetype,
 		description = :description,
 		details = :details,
-		checksum = :checksum,
+		sourcechecksum = :sourcechecksum,
+		metadatachecksum = :metadatachecksum,
 		path = :path,
 		solvescript = :solvescript,
 		templatable = :templatable,

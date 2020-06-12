@@ -24,27 +24,30 @@ type Manager struct {
 
 type ChallengeId string
 type ChallengeMetadata struct {
-	Id            ChallengeId       `json:"id"`
-	Name          string            `json:"name,omitempty"`
-	Namespace     string            `json:"namespace"`
-	ChallengeType string            `json:"challengetype"`
-	Description   string            `json:"descrition,omitempty"`
-	Details       string            `json:"details,omitempty"`
-	Hints         []string          `json:"hints,omitempty"`
-	Checksum      uint32            `json:"checksum"`
-	Path          string            `json:"path"`
-	SolveScript   bool              `json:"has_solve_script,omitempty"`
-	Templatable   bool              `json:"templatable,omitempty"`
-	PortMap       map[string]int    `json:"port_map,omitempty"`
-	MaxUsers      int               `json:"max_users,omitempty"`
-	Category      string            `json:"category,omitempty"`
-	Points        int               `json:"points,omitempty"`
-	Tags          []string          `json:"tags,omitempty"`
-	Attributes    map[string]string `json:"attributes,omitempty"`
-	Builds        []*BuildMetadata  `json:"builds,omitempty"`
+	Id               ChallengeId       `json:"id"`
+	Name             string            `json:"name,omitempty"`
+	Namespace        string            `json:"namespace"`
+	ChallengeType    string            `json:"challengetype"`
+	Description      string            `json:"descrition,omitempty"`
+	Details          string            `json:"details,omitempty"`
+	Hints            []string          `json:"hints,omitempty"`
+	SourceChecksum   uint32            `json:"source_checksum"`
+	MetadataChecksum uint32            `json:"metadata_checksum`
+	Path             string            `json:"path"`
+	Templatable      bool              `json:"templatable,omitempty"`
+	PortMap          map[string]int    `json:"port_map,omitempty"`
+	MaxUsers         int               `json:"max_users,omitempty"`
+	Category         string            `json:"category,omitempty"`
+	Points           int               `json:"points,omitempty"`
+	Tags             []string          `json:"tags,omitempty"`
+	Attributes       map[string]string `json:"attributes,omitempty"`
+
+	SolveScript bool             `json:"has_solve_script,omitempty"`
+	Builds      []*BuildMetadata `json:"builds,omitempty"`
 }
 type ChallengeUpdates struct {
 	Added      []*ChallengeMetadata `json:"added"`
+	Refreshed  []*ChallengeMetadata `json:"refreshed"`
 	Updated    []*ChallengeMetadata `json:"updated"`
 	Removed    []*ChallengeMetadata `json:"removed"`
 	Unmodified []*ChallengeMetadata `json:"unmodified"`
@@ -53,10 +56,11 @@ type ChallengeUpdates struct {
 
 type BuildId int
 type BuildMetadata struct {
-	Id          BuildId             `json:"id"`
-	Flag        string              `json:"flag"`
+	Id         BuildId           `json:"id"`
+	Flag       string            `json:"flag"`
+	LookupData map[string]string `json:"lookup_data,omitempty"`
+
 	Seed        string              `json:"seed"`
-	LookupData  map[string]string   `json:"lookup_data,omitempty"`
 	LastSolved  string              `json:"last_solved"`
 	ChallengeId ChallengeId         `json:"challenge_id"`
 	Instances   []*InstanceMetadata `json:"instances,omitempty"`

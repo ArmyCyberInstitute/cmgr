@@ -2,7 +2,9 @@ package cmgr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -16,17 +18,19 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 	// Screen out non-problem files
 	if info.Name() == "problem.json" {
 		md, err = m.loadJsonChallenge(path, info)
+	} else if info.Name() == "problem.md" {
+		err = errors.New("'problem.md' not supported yet")
 	}
 
-	if err != nil {
-		err = m.validate()
+	if err == nil && md != nil {
+		err = m.validate(md)
 	}
 
 	return md, err
 }
 
 // Validates the challenge metadata for compliance with expectations
-func (m *Manager) validate() error {
+func (m *Manager) validate(md *ChallengeMetadata) error {
 	return nil
 }
 
@@ -39,6 +43,12 @@ type hacksportAttrs struct {
 	Version      string `json:"version"`
 }
 
+// Loads the JSON information using the built-in encoding format.  This works
+// but results in a less-than-desireable end-user experience because of opaque
+// error codes.  It may be worth implementing a custom implementation that
+// leverages the decoder iteratively in order to manually provide more useful
+// debug information to challenge authors.  This would also allow us to avoid
+// the double-pass to catch unknown attributes.
 func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMetadata, error) {
 	m.log.debugf("Found challenge JSON at %s", path)
 
@@ -116,6 +126,13 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 			metadata.Attributes["version"] = attrs.Version
 		}
 	}
+
+	h := crc32.NewIEEE()
+	_, err = h.Write(append(data, []byte(path)...))
+	if err != nil {
+		return nil, err
+	}
+	metadata.MetadataChecksum = h.Sum32()
 
 	metadata.Id = ChallengeId(prefix + sanitizeName(metadata.Name))
 	return metadata, nil

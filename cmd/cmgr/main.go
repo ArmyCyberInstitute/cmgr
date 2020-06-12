@@ -9,7 +9,7 @@ import (
 
 func main() {
 	log.SetFlags(0)
-	mgr := cmgr.NewManager(cmgr.WARN)
+	mgr := cmgr.NewManager(cmgr.DEBUG)
 	printChanges(mgr.Update(""))
 }
 
@@ -27,6 +27,14 @@ func printChanges(status *cmgr.ChallengeUpdates) {
 		changes = true
 		fmt.Println("Added:")
 		for _, md := range status.Added {
+			fmt.Printf("    %s\n", md.Id)
+		}
+	}
+
+	if len(status.Refreshed) != 0 {
+		changes = true
+		fmt.Println("Refreshed:")
+		for _, md := range status.Refreshed {
 			fmt.Printf("    %s\n", md.Id)
 		}
 	}

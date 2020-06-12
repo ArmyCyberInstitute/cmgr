@@ -26,23 +26,35 @@ func NewManager(logLevel LogLevel) *Manager {
 	return mgr
 }
 
-// Traverses the entire directory and captures all valid challenge descriptions
-// it comes across.  In general, it will continue even when it encounters errors
-// (permission, poorly formatted JSON, etc.) in order to give the as much
-// feedback as possible to the caller.  However, it will fail fast on two
-// challenges with the same name and namespace.
+// Traverses the entire directory and captures all valid challenge
+// descriptions it comes across.  In general, it will continue even when it
+// encounters errors (permission, poorly formatted JSON, etc.) in order to
+// give the as much feedback as possible to the caller.  However, it will fail
+// fast on two challenges with the same name and namespace.
 //
-// This function does not have any side-effects on the database or built/running
-// challenge state, but changes that it detects will effect new builds.  It is
-// important to resolve any issues/errors it raises before making any other API
-// calls for affected challenges.  Failure to follow this guidance could result
-// in inconsistencies in deployed challenges.
+// This function does not have any side-effects on the database or
+// built/running challenge state, but changes that it detects will effect new
+// builds.  It is important to resolve any issues/errors it raises before
+// making any other API calls for affected challenges.  Failure to follow this
+// guidance could result in inconsistencies in deployed challenges.
+//
+// @param      fp    The filepath to a directory to check for changes
+//                   (defaults to root of the challenge directory if passed the empty string)
+//
+// @return     A struct with a list of the challenges
+//
 func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 	if fp == "" {
 		fp = m.chalDir
 	}
 
 	cu := new(ChallengeUpdates)
+
+	fp, err := m.normalizeDirPath(fp)
+	if err != nil {
+		cu.Errors = []error{err}
+		return cu
+	}
 
 	challenges, errs := m.inventoryChallenges(fp)
 	db_metadata, err := m.listChallenges()
@@ -55,9 +67,19 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 	for _, curr := range db_metadata {
 		newMeta, ok := challenges[curr.Id]
 		if !ok {
-			cu.Removed = append(cu.Removed, curr)
-		} else if curr.Checksum == newMeta.Checksum {
+			if pathInDirectory(curr.Path, fp) {
+				cu.Removed = append(cu.Removed, curr)
+			}
+			continue
+		}
+
+		sourceChanged := curr.SourceChecksum != newMeta.SourceChecksum
+		metadataChanged := curr.MetadataChecksum != newMeta.MetadataChecksum
+		if !sourceChanged && !metadataChanged {
 			cu.Unmodified = append(cu.Unmodified, curr)
+		} else if !sourceChanged && m.safeToRefresh(curr, newMeta) {
+			m.log.debugf("Marking %s as refresh", newMeta.Id)
+			cu.Refreshed = append(cu.Refreshed, newMeta)
 		} else {
 			cu.Updated = append(cu.Updated, newMeta)
 		}
@@ -72,19 +94,24 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 	return cu
 }
 
-// This challenge will update the global system state based off the changes
-// that are detected by a call to `DetectChanges`.  Specifically, in addition
-// to updating challenge metadata (new and existing) it will rebuild and, if
+// This will update the global system state based off the changes that are
+// detected by a call to `DetectChanges`.  Specifically, in addition to
+// updating challenge metadata (new and existing) it will rebuild and, if
 // successful restart, existing challenges and then remove the metadata for
 // challenges that can no longer be found.  Challenges that have not been
 // modified should not be affected.
 //
 // In the presence of errors, this function will do addition and updates as
-// best it can in order to preserve a consistent system state.  However, if
-// a build fails, it will keep the existing instance running and rollback the
+// best it can in order to preserve a consistent system state.  However, if a
+// build fails, it will keep the existing instance running and rollback the
 // challenge metadata.  Additionally, in the presence of errors it will not
 // perform any removals of challenge metadata (removing a built challenge is
 // considered an error).
+//
+// @param      fp    { parameter_description }
+//
+// @return     { description_of_the_return_value }
+//
 func (m *Manager) Update(fp string) *ChallengeUpdates {
 	cu := m.DetectChanges(fp)
 	errs := m.addChallenges(cu.Added)
@@ -92,7 +119,12 @@ func (m *Manager) Update(fp string) *ChallengeUpdates {
 		cu.Errors = append(cu.Errors, errs...)
 	}
 
-	errs = m.updateChallenges(cu.Updated)
+	errs = m.updateChallenges(cu.Refreshed, false)
+	if len(errs) != 0 {
+		cu.Errors = append(cu.Errors, errs...)
+	}
+
+	errs = m.updateChallenges(cu.Updated, true)
 	if len(errs) != 0 {
 		cu.Errors = append(cu.Errors, errs...)
 	}

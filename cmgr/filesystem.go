@@ -47,40 +47,12 @@ func (m *Manager) setChallengeDirectory() error {
 
 // Performs error checking and calls out to `filepath.Walk` to traverse the directory.
 func (m *Manager) inventoryChallenges(dir string) (map[ChallengeId]*ChallengeMetadata, []error) {
-	// Normalize the directory we are passed in
-	tgtDir, err := filepath.Abs(dir)
-	if err != nil {
-		m.log.errorf("bad directory string: %s", err)
-		return nil, []error{err}
-	}
-
-	info, err := os.Stat(tgtDir)
-	if err != nil {
-		m.log.errorf("could not stat directory: %s", err)
-		return nil, []error{err}
-	}
-
-	if !info.IsDir() {
-		m.log.errorf("expected a directory: %s", tgtDir)
-		return nil, []error{errors.New(tgtDir + " is not a directory")}
-	}
-
-	// Check that it is a sub-directory
-	if len(tgtDir) < len(m.chalDir) || // Sub-directory cannot be shorter string
-		tgtDir[:len(m.chalDir)] != m.chalDir || // Prefix must match
-		(len(tgtDir) > len(m.chalDir) && tgtDir[len(m.chalDir)] != os.PathSeparator) { // Not a directory prefix
-
-		err := fmt.Errorf("'%s' is not a sub-directory of '%s'", tgtDir, m.chalDir)
-		m.log.error(err)
-		return nil, []error{err}
-	}
-
 	// Crawl the directory
 	challenges := make(map[ChallengeId]*ChallengeMetadata)
 	errs := []error{}
 
-	m.log.infof("searching %s for challenges", tgtDir)
-	err = filepath.Walk(tgtDir, m.findChallenges(&challenges, &errs))
+	m.log.infof("searching %s for challenges", dir)
+	err := filepath.Walk(dir, m.findChallenges(&challenges, &errs))
 	if err != nil {
 		errs = append(errs, err)
 		return nil, errs
@@ -128,11 +100,10 @@ func (m *Manager) findChallenges(challengeMap *map[ChallengeId]*ChallengeMetadat
 			*errSlice = append(*errSlice, err)
 			return nil
 		}
-		metadata.Checksum = h.Sum32()
-		metadata.Path = filepath.Dir(path[len(m.chalDir)+1:])
-		m.log.infof("found challenge %s (checksum: %x)",
-			metadata.Id,
-			metadata.Checksum)
+		metadata.SourceChecksum = h.Sum32()
+
+		metadata.Path = path
+		m.log.infof("found challenge %s", metadata.Id)
 
 		if val, ok := (*challengeMap)[metadata.Id]; ok {
 			err := fmt.Errorf("found multiple challenges with id '%s' at '%s' and '%s'",
@@ -154,6 +125,41 @@ func sanitizeName(dirty string) string {
 	return re.ReplaceAllLiteralString(strings.ToLower(dirty), "-")
 }
 
+func (m *Manager) normalizeDirPath(dir string) (string, error) {
+	// Normalize the directory we are passed in
+	tgtDir, err := filepath.Abs(dir)
+	if err != nil {
+		m.log.errorf("bad directory string: %s", err)
+		return "", err
+	}
+
+	info, err := os.Stat(tgtDir)
+	if err != nil {
+		m.log.errorf("could not stat directory: %s", err)
+		return "", err
+	}
+
+	if !info.IsDir() {
+		m.log.errorf("expected a directory: %s", tgtDir)
+		return "", errors.New(tgtDir + " is not a directory")
+	}
+
+	// Check that it is a sub-directory
+	if pathInDirectory(tgtDir, m.chalDir) {
+		err := fmt.Errorf("'%s' is not a sub-directory of '%s'", tgtDir, m.chalDir)
+		m.log.error(err)
+		return "", err
+	}
+
+	return tgtDir, nil
+}
+
+func pathInDirectory(path, dir string) bool {
+	return len(path) < len(dir) || // Sub-directory cannot be shorter string
+		path[:len(dir)] != dir || // Prefix must match
+		(len(path) > len(dir) && path[len(dir)] != os.PathSeparator)
+}
+
 // The challenge checksum is a checksum of file properties (name, size, mode)
 // for all filetypes as well as the actual file contents for non-directories.
 // This is a stable checksum because the Go specification for `Walk` promises
@@ -166,11 +172,17 @@ func challengeChecksum(h hash.Hash) filepath.WalkFunc {
 			return err
 		}
 
-		// Ignore "hidden" files (from a *nix perspective)
-		if info.Name()[0] == '.' {
+		// Ignore "hidden" files, READMEs, and problem configs
+		if info.Name()[1] == '.' ||
+			info.Name() == "README" ||
+			info.Name() == "README.md" ||
+			info.Name() == "problem.json" ||
+			info.Name() == "problem.md" {
+
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
+
 			return nil
 		}
 
