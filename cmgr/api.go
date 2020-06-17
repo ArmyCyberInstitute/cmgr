@@ -11,7 +11,7 @@ func NewManager(logLevel LogLevel) *Manager {
 	mgr := new(Manager)
 	mgr.log = newLogger(logLevel)
 
-	if err := mgr.setChallengeDirectory(); err != nil {
+	if err := mgr.setDirectories(); err != nil {
 		return nil
 	}
 
@@ -138,8 +138,8 @@ func (m *Manager) Update(fp string) *ChallengeUpdates {
 	return cu
 }
 
-func (m *Manager) Build(challenge ChallengeId, seeds []string, flagFormat string) ([]BuildId, error) {
-	return nil, errors.New("`Build` not implemented")
+func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) ([]BuildId, error) {
+	return m.buildImages(challenge, seeds, flagFormat)
 }
 
 func (m *Manager) Start(build BuildId) (InstanceId, error) {
@@ -159,15 +159,20 @@ func (m *Manager) CheckInstance(instance InstanceId) (bool, error) {
 }
 
 func (m *Manager) ListChallenges() []ChallengeId {
-	return nil
+	md, _ := m.listChallenges()
+	list := make([]ChallengeId, len(md), len(md))
+	for i, challenge := range md {
+		list[i] = challenge.Id
+	}
+	return list
 }
 
 func (m *Manager) GetChallengeMetadata(challenge ChallengeId) (*ChallengeMetadata, error) {
-	return nil, errors.New("`GetChallengeMetadata` not implemented")
+	return m.lookupChallengeMetadata(challenge)
 }
 
 func (m *Manager) GetBuildMetadata(build BuildId) (*BuildMetadata, error) {
-	return nil, errors.New("`GetBuildMetadata` not implemented")
+	return m.lookupBuildMetadata(build)
 }
 
 func (m *Manager) GetInstanceMetadata(instance InstanceId) (*InstanceMetadata, error) {

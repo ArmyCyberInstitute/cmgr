@@ -1,11 +1,13 @@
 package cmgr
 
 import (
+	"archive/tar"
 	"errors"
 	"fmt"
 	"hash"
 	"hash/crc32"
 	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,7 +16,7 @@ import (
 
 // Reads the environment variable CMGR_CHALLENGE_DIR and then normalizes it
 // to an absolute path and validates that it is a directory.
-func (m *Manager) setChallengeDirectory() error {
+func (m *Manager) setDirectories() error {
 	var err error
 
 	chalDir, isSet := os.LookupEnv(DIR_ENV)
@@ -40,6 +42,31 @@ func (m *Manager) setChallengeDirectory() error {
 	if !info.IsDir() {
 		m.log.error("challenge directory must be a directory")
 		return errors.New(m.chalDir + " is not a directory")
+	}
+
+	artifactsDir, isSet := os.LookupEnv(ARTIFACT_DIR_ENV)
+	if !isSet {
+		artifactsDir = "."
+	}
+
+	m.artifactsDir, err = filepath.Abs(artifactsDir)
+
+	if err != nil {
+		m.log.errorf("could not resolve artifacts directory: %s", err)
+		return err
+	}
+
+	m.log.infof("artifacts directory: %s", m.artifactsDir)
+
+	info, err = os.Stat(m.artifactsDir)
+	if err != nil {
+		m.log.errorf("could not stat the artifacts directory: %s", err)
+		return err
+	}
+
+	if !info.IsDir() {
+		m.log.error("artifacts directory must be a directory")
+		return errors.New(m.artifactsDir + " is not a directory")
 	}
 
 	return nil
@@ -173,11 +200,7 @@ func challengeChecksum(h hash.Hash) filepath.WalkFunc {
 		}
 
 		// Ignore "hidden" files, READMEs, and problem configs
-		if info.Name()[1] == '.' ||
-			info.Name() == "README" ||
-			info.Name() == "README.md" ||
-			info.Name() == "problem.json" ||
-			info.Name() == "problem.md" {
+		if challengeIgnore(info.Name()) {
 
 			if info.IsDir() {
 				return filepath.SkipDir
@@ -210,4 +233,94 @@ func challengeChecksum(h hash.Hash) filepath.WalkFunc {
 
 		return nil
 	}
+}
+
+func challengeIgnore(name string) bool {
+	return (name[0] == '.' && name != ".dockerignore") ||
+		name == "README" ||
+		name == "README.md" ||
+		name == "problem.json" ||
+		name == "problem.md"
+}
+
+func (m *Manager) createBuildContext(cm *ChallengeMetadata, dockerfile []byte) (io.ReadCloser, error) {
+	tmpFile, err := ioutil.TempFile("", "*.tar")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(tmpFile.Name())
+	m.log.debug(tmpFile.Name())
+
+	newCtx := tar.NewWriter(tmpFile)
+	defer newCtx.Close()
+
+	if dockerfile != nil {
+		hdr := tar.Header{Name: "Dockerfile", Mode: 0644, Size: int64(len(dockerfile))}
+
+		err = newCtx.WriteHeader(&hdr)
+		if err != nil {
+			return nil, err
+		}
+
+		_, err = newCtx.Write(dockerfile)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Iterate
+	challengeDir := filepath.Dir(cm.Path)
+	err = filepath.Walk(challengeDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		// Ignore "hidden" files, READMEs, and problem configs
+		if challengeIgnore(info.Name()) || challengeDir == path {
+
+			if info.IsDir() && challengeDir != path {
+				return filepath.SkipDir
+			}
+
+			return nil
+		}
+
+		m.log.debug(path)
+
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return nil
+		}
+
+		archivePath := path[len(challengeDir)+1:]
+		hdr.Name = archivePath
+
+		err = newCtx.WriteHeader(hdr)
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		fd, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+
+		_, err = io.Copy(newCtx, fd)
+		if err != nil {
+			return err
+		}
+		fd.Close()
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return os.Open(tmpFile.Name())
 }

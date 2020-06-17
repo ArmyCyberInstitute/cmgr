@@ -56,6 +56,74 @@ func (m *Manager) listChallenges() ([]*ChallengeMetadata, error) {
 	return metadata, err
 }
 
+func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMetadata, error) {
+	metadata := new(ChallengeMetadata)
+	txn := m.db.MustBegin()
+
+	err := txn.Get(metadata, "SELECT * FROM challenges WHERE id=?", challenge)
+
+	if err == nil {
+		err = txn.Select(&metadata.Hints, "SELECT hint FROM hints WHERE challenge=? ORDER BY idx", challenge)
+	}
+
+	if err == nil {
+		err = txn.Select(&metadata.Tags, "SELECT tag FROM tags WHERE challenge=?", challenge)
+	}
+
+	var ports []portTuple
+	if err == nil {
+		err = txn.Select(&ports, "SELECT name, port FROM portNames WHERE challenge=?", challenge)
+	}
+
+	metadata.PortMap = make(map[string]int)
+	for _, port := range ports {
+		metadata.PortMap[port.Name] = port.Port
+	}
+
+	if err == nil {
+		err = txn.Commit()
+		if err != nil {
+			m.log.errorf("failed to commit read-only transaction: %s", err)
+		}
+	} else {
+		m.log.errorf("read of database failed: %s", err)
+		closeErr := txn.Rollback()
+		if closeErr != nil {
+			m.log.errorf("rollback failed: %s", err)
+			err = closeErr
+		}
+	}
+
+	return metadata, err
+}
+
+func (m *Manager) lookupBuildMetadata(build BuildId) (*BuildMetadata, error) {
+	metadata := new(BuildMetadata)
+	txn := m.db.MustBegin()
+
+	err := txn.Get(metadata, "SELECT * FROM builds WHERE id=?", build)
+
+	if err == nil {
+		err = m.db.Select(&metadata.LookupData, "SELECT key, value FROM lookupData WHERE build=?", build)
+	}
+
+	if err == nil {
+		err = txn.Commit()
+		if err != nil {
+			m.log.errorf("failed to commit read-only transaction: %s", err)
+		}
+	} else {
+		m.log.errorf("read of database failed: %s", err)
+		closeErr := txn.Rollback()
+		if closeErr != nil {
+			m.log.errorf("rollback failed: %s", err)
+			err = closeErr
+		}
+	}
+
+	return metadata, err
+}
+
 // Adds the discovered challenges to the database
 func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 	errs := []error{}
@@ -108,6 +176,23 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 
 		for k, v := range metadata.Attributes {
 			_, err = txn.Exec("INSERT INTO attributes(challenge, key, value) VALUES (?, ?, ?);",
+				metadata.Id,
+				k,
+				v)
+
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				continue
+			}
+		}
+
+		for k, v := range metadata.PortMap {
+			_, err = txn.Exec("INSERT INTO portNames(challenge, name, port) VALUES (?, ?, ?);",
 				metadata.Id,
 				k,
 				v)
@@ -233,6 +318,35 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			}
 		}
 
+		for k, v := range metadata.Attributes {
+			_, err = txn.Exec("DELETE FROM portNames WHERE challenge = ?;", metadata.Id)
+
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				continue
+			}
+
+			_, err = txn.Exec("INSERT INTO portNames(challenge, name, port) VALUES (?, ?, ?);",
+				metadata.Id,
+				k,
+				v)
+
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				continue
+			}
+		}
+
 		if rebuild {
 			// TODO(jrolli): Need to recurse into builds as appropriate.
 		}
@@ -245,10 +359,91 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 	return errs
 }
 
+func (m *Manager) saveBuildMetadata(builds []BuildMetadata) ([]BuildId, error) {
+	txn := m.db.MustBegin()
+	ids := make([]BuildId, 0, len(builds))
+	for _, build := range builds {
+		res, err := txn.NamedExec(buildInsertQuery, build)
+
+		if err != nil {
+			m.log.error(err)
+			cerr := txn.Rollback()
+			if cerr != nil { // If rollback fails, we're in trouble.
+				m.log.error(cerr)
+				err = cerr
+			}
+			return nil, err
+		}
+
+		buildId, err := res.LastInsertId()
+		if err != nil {
+			m.log.error(err)
+			cerr := txn.Rollback()
+			if cerr != nil { // If rollback fails, we're in trouble.
+				m.log.error(cerr)
+				err = cerr
+			}
+			return nil, err
+		}
+
+		for k, v := range build.LookupData {
+			_, err = txn.Exec("INSERT INTO lookupData(build, key, value) VALUES (?, ?, ?);",
+				buildId,
+				k,
+				v)
+
+			if err != nil {
+				m.log.error(err)
+				cerr := txn.Rollback()
+				if cerr != nil { // If rollback fails, we're in trouble.
+					m.log.error(cerr)
+					err = cerr
+				}
+				return nil, err
+			}
+		}
+
+		for _, image := range build.ImageIds {
+			_, err = txn.Exec("INSERT INTO images(build, id) VALUES (?, ?);",
+				buildId,
+				image)
+
+			if err != nil {
+				m.log.error(err)
+				cerr := txn.Rollback()
+				if cerr != nil { // If rollback fails, we're in trouble.
+					m.log.error(cerr)
+					err = cerr
+				}
+				return nil, err
+			}
+		}
+
+		ids = append(ids, BuildId(buildId))
+	}
+
+	err := txn.Commit()
+	if err != nil { // It's undocumented what this means...
+		m.log.error(err)
+	}
+	return ids, err
+}
+
 func (m *Manager) removeChallenges(removedChallenges []*ChallengeMetadata) error {
 	txn := m.db.MustBegin()
 	for _, metadata := range removedChallenges {
-		_, err := txn.Exec("DELETE FROM attributes WHERE challenge = ?;", metadata.Id)
+		_, err := txn.Exec("DELETE FROM portNames WHERE challenge = ?;", metadata.Id)
+		if err != nil {
+			m.log.error(err)
+			rbErr := txn.Rollback()
+			if rbErr != nil { // If rollback fails, we're in trouble.
+				m.log.error(rbErr)
+				return rbErr
+			}
+			return err
+		}
+
+		_, err = txn.Exec("DELETE FROM attributes WHERE challenge = ?;", metadata.Id)
 		if err != nil {
 			m.log.error(err)
 			rbErr := txn.Rollback()
@@ -388,7 +583,6 @@ const (
 		id INTEGER PRIMARY KEY,
 		challenge TEXT NOT NULL,
 		name TEXT NOT NULL,
-		service TEXT NOT NULL,
 		port INTEGER NOT NULL CHECK (port > 0 AND port < 65536),
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -397,11 +591,19 @@ const (
 	CREATE TABLE IF NOT EXISTS builds (
 		id INTEGER PRIMARY KEY,
 		flag TEXT NOT NULL,
-		seed TEXT NOT NULL,
+		seed INTEGER NOT NULL,
+		hasartifacts INTEGER NOT NULL CHECK (hasartifacts = 0 OR hasartifacts = 1),
 		lastsolved INTEGER,
 		challenge TEXT NOT NULL,
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
+	);
+
+	CREATE TABLE IF NOT EXISTS images (
+		build INTEGER NOT NULL,
+		id TEXT NOT NULL,
+		FOREIGN KEY (build) REFERENCES builds (id)
+		    ON UPDATE RESTRICT ON DELETE RESTRICT
 	);
 
 	CREATE TABLE IF NOT EXISTS lookupData (
@@ -413,7 +615,7 @@ const (
 	);
 
 	CREATE TABLE IF NOT EXISTS instances (
-		id INTEGER PRIMARY KEY,
+		id TEXT PRIMARY KEY,
 		lastsolved INTEGER,
 		build INTEGER NOT NULL,
 		FOREIGN KEY (build) REFERENCES builds (id)
@@ -480,4 +682,18 @@ const (
 		category = :category,
 		points = :points
 	WHERE id = :id;`
+
+	buildInsertQuery string = `
+	INSERT INTO builds (
+		flag,
+		seed,
+		hasartifacts,
+		challenge
+	)
+	VALUES (
+		:flag,
+		:seed,
+		:hasartifacts,
+		:challengeid
+	);`
 )

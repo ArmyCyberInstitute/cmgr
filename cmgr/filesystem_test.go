@@ -10,7 +10,7 @@ import (
 
 // Uses three well known unix filepaths to verify that `setChallengeDir`
 // properly validates the value on load.
-func TestSetChallengeDirectory(t *testing.T) {
+func TestSetDirectories(t *testing.T) {
 	cwd, err := filepath.Abs(".")
 	if err != nil {
 		t.Fatalf("error in test harness: %s", err)
@@ -33,23 +33,23 @@ func TestSetChallengeDirectory(t *testing.T) {
 	mgr.log = newLogger(DISABLED)
 
 	os.Setenv(DIR_ENV, tmpdir)
-	if err = mgr.setChallengeDirectory(); err != nil {
+	if err = mgr.setDirectories(); err != nil {
 		t.Errorf("'/tmp' should be a valid challenge directory")
 	}
 
 	os.Setenv(DIR_ENV, tmpfile.Name())
-	if mgr.setChallengeDirectory() == nil {
+	if mgr.setDirectories() == nil {
 		t.Errorf("'/dev/null' is invalid (not a directory)")
 	}
 
 	os.Setenv(DIR_ENV, filepath.Join(tmpdir, "doesnotexist"))
-	if mgr.setChallengeDirectory() == nil {
+	if mgr.setDirectories() == nil {
 		t.Errorf("non-existent file should have failed")
 	}
 
 	os.Unsetenv(DIR_ENV)
 
-	if err = mgr.setChallengeDirectory(); err != nil {
+	if err = mgr.setDirectories(); err != nil {
 		t.Fatalf("current working directory should be valid: %s", err)
 	}
 

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/ArmyCyberInstitute/cmgr/cmgr"
 )
@@ -10,7 +11,14 @@ import (
 func main() {
 	log.SetFlags(0)
 	mgr := cmgr.NewManager(cmgr.DEBUG)
-	printChanges(mgr.Update(""))
+	updates := mgr.Update("")
+
+	if len(updates.Unmodified) > 0 {
+		_, err := mgr.Build(updates.Unmodified[0].Id, []int{1}, "flag{%s}")
+		if err != nil {
+			os.Exit(-1)
+		}
+	}
 }
 
 func printChanges(status *cmgr.ChallengeUpdates) {

@@ -14,12 +14,14 @@ const (
 )
 
 type Manager struct {
-	cli     *client.Client
-	ctx     context.Context
-	log     *logger
-	chalDir string
-	db      *sqlx.DB
-	dbPath  string
+	cli                  *client.Client
+	ctx                  context.Context
+	log                  *logger
+	chalDir              string
+	artifactsDir         string
+	db                   *sqlx.DB
+	dbPath               string
+	challengeDockerfiles map[string][]byte
 }
 
 type ChallengeId string
@@ -27,7 +29,7 @@ type ChallengeMetadata struct {
 	Id               ChallengeId       `json:"id"`
 	Name             string            `json:"name,omitempty"`
 	Namespace        string            `json:"namespace"`
-	ChallengeType    string            `json:"challengetype"`
+	ChallengeType    string            `json:"challenge_type"`
 	Description      string            `json:"descrition,omitempty"`
 	Details          string            `json:"details,omitempty"`
 	Hints            []string          `json:"hints,omitempty"`
@@ -56,14 +58,17 @@ type ChallengeUpdates struct {
 
 type BuildId int
 type BuildMetadata struct {
-	Id         BuildId           `json:"id"`
+	Id BuildId `json:"id"`
+
 	Flag       string            `json:"flag"`
 	LookupData map[string]string `json:"lookup_data,omitempty"`
 
-	Seed        string              `json:"seed"`
-	LastSolved  string              `json:"last_solved"`
-	ChallengeId ChallengeId         `json:"challenge_id"`
-	Instances   []*InstanceMetadata `json:"instances,omitempty"`
+	Seed         int                 `json:"seed"`
+	ImageIds     []string            `json:"images"`
+	HasArtifacts bool                `json:"has_artifacts"`
+	LastSolved   string              `json:"last_solved"`
+	ChallengeId  ChallengeId         `json:"challenge_id"`
+	Instances    []*InstanceMetadata `json:"instances,omitempty"`
 }
 
 type InstanceId int
@@ -72,4 +77,9 @@ type InstanceMetadata struct {
 	Ports      map[string]int `json:"ports,omitempty"`
 	LastSolved string         `json:"last_solved"`
 	BuildId    BuildId        `json:"build_id"`
+}
+
+type portTuple struct {
+	Name string
+	Port int
 }

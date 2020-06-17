@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 )
 
 func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetadata, error) {
@@ -31,10 +32,72 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 
 // Validates the challenge metadata for compliance with expectations
 func (m *Manager) validate(md *ChallengeMetadata) error {
-	return nil
+	dfPath := filepath.Dir(md.Path) + "/Dockerfile"
+	_, err := os.Stat(dfPath)
+	customDockerfile := err == nil
+	m.log.debugf("Dockerfile at %s: %t", dfPath, customDockerfile)
+
+	// Validate challenge type
+	err = nil
+	if md.ChallengeType == "" {
+		err = fmt.Errorf("invalid challenge (%s): missing the challenge type", md.Id)
+	} else if md.ChallengeType == "custom" && !customDockerfile {
+		err = fmt.Errorf("invalid challenge (%s): 'custom' challenge type is missing 'Dockerfile'", md.Id)
+	} else if customDockerfile {
+		err = fmt.Errorf("invalid challenge (%s): 'Dockerfile' forbidden except for 'custom' challenge type", md.Id)
+	} else if m.getDockerfile(md.ChallengeType) == nil {
+		err = fmt.Errorf("invalid challenge (%s): unrecognized type of '%s'", md.Id, md.ChallengeType)
+	}
+
+	if err != nil {
+		m.log.error(err)
+		return err
+	}
+
+	var data []byte
+	if md.ChallengeType == "custom" {
+		f, err := os.Open(dfPath)
+		if err != nil {
+			m.log.errorf("could not open custom Dockerfile for (%s): %s", md.Id, err)
+			return err
+		}
+
+		data, err = ioutil.ReadAll(f)
+		if err != nil {
+			m.log.errorf("could not read custom Dockerfile for (%s): %s", md.Id, err)
+			return err
+		}
+	} else {
+		data = m.getDockerfile(md.ChallengeType)
+	}
+
+	if data == nil || len(data) == 0 {
+		err = fmt.Errorf("could not find valid Dockerfile ")
+	}
+
+	dockerfile := string(data)
+
+	re := regexp.MustCompile(`#\s*PUBLISH\s+(\d+)\s+AS\s+(\w+)\s*`)
+	matches := re.FindAllStringSubmatch(dockerfile, -1)
+	m.log.debugf("found %d ports", len(matches))
+	if len(matches) > 0 {
+		if md.PortMap == nil {
+			md.PortMap = make(map[string]int)
+		}
+		for _, match := range matches {
+			port, err := strconv.Atoi(match[1])
+			if err != nil {
+				m.log.errorf("could not convert Dockerfile port to int: %s", err)
+				return err
+			}
+			md.PortMap[match[2]] = port
+		}
+	}
+
+	return err
 }
 
-// BUG(jrolli): Need to actually implement the validation.
+// BUG(jrolli): Need to actually implement more validation.
 
 type hacksportAttrs struct {
 	Author       string `json:"author"`
@@ -104,9 +167,9 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 			return nil, err
 		}
 
+		metadata.ChallengeType = "hacksport"
 		metadata.Details = metadata.Description
 		metadata.Description = ""
-		metadata.Templatable = true
 		metadata.SolveScript = false
 
 		metadata.Attributes = make(map[string]string)
