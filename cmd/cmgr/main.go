@@ -14,10 +14,11 @@ func main() {
 	updates := mgr.Update("")
 
 	if len(updates.Unmodified) > 0 {
-		_, err := mgr.Build(updates.Unmodified[0].Id, []int{1}, "flag{%s}")
+		builds, err := mgr.Build(updates.Unmodified[0].Id, []int{1}, "flag{%s}")
 		if err != nil {
 			os.Exit(-1)
 		}
+		_, err = mgr.Start(builds[0])
 	}
 }
 

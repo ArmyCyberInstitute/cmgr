@@ -23,7 +23,4 @@ WORKDIR /app
 CMD flask run
 
 EXPOSE 8000
-
 # PUBLISH 8000 AS http
-# Templatable=true
-# MaxUsers=0

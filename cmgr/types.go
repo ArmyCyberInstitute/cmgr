@@ -30,7 +30,7 @@ type ChallengeMetadata struct {
 	Name             string            `json:"name,omitempty"`
 	Namespace        string            `json:"namespace"`
 	ChallengeType    string            `json:"challenge_type"`
-	Description      string            `json:"descrition,omitempty"`
+	Description      string            `json:"description,omitempty"`
 	Details          string            `json:"details,omitempty"`
 	Hints            []string          `json:"hints,omitempty"`
 	SourceChecksum   uint32            `json:"source_checksum"`
@@ -56,7 +56,7 @@ type ChallengeUpdates struct {
 	Errors     []error              `json:"errors"`
 }
 
-type BuildId int
+type BuildId int64
 type BuildMetadata struct {
 	Id BuildId `json:"id"`
 
@@ -64,22 +64,26 @@ type BuildMetadata struct {
 	LookupData map[string]string `json:"lookup_data,omitempty"`
 
 	Seed         int                 `json:"seed"`
-	ImageIds     []string            `json:"images"`
+	Images       []Image             `json:"images"`
 	HasArtifacts bool                `json:"has_artifacts"`
-	LastSolved   string              `json:"last_solved"`
-	ChallengeId  ChallengeId         `json:"challenge_id"`
+	LastSolved   int                 `json:"last_solved"`
+	Challenge    ChallengeId         `json:"challenge_id"`
 	Instances    []*InstanceMetadata `json:"instances,omitempty"`
 }
 
-type InstanceId int
+type ImageId int64
+type Image struct {
+	Id       ImageId  `json:"id"`
+	DockerId string   `json:"docker_id"`
+	Ports    []string `json:"exposed_ports"`
+	Build    BuildId  `json:"build"`
+}
+
+type InstanceId int64
 type InstanceMetadata struct {
 	Id         InstanceId     `json:"id"`
 	Ports      map[string]int `json:"ports,omitempty"`
-	LastSolved string         `json:"last_solved"`
-	BuildId    BuildId        `json:"build_id"`
-}
-
-type portTuple struct {
-	Name string
-	Port int
+	LastSolved int            `json:"last_solved"`
+	Build      BuildId        `json:"build_id"`
+	Network    string         `json:"network"`
 }

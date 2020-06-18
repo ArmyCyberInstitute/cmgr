@@ -77,7 +77,7 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 		metadataChanged := curr.MetadataChecksum != newMeta.MetadataChecksum
 		if !sourceChanged && !metadataChanged {
 			cu.Unmodified = append(cu.Unmodified, curr)
-		} else if !sourceChanged && m.safeToRefresh(curr, newMeta) {
+		} else if !sourceChanged && m.safeToRefresh(newMeta) {
 			m.log.debugf("Marking %s as refresh", newMeta.Id)
 			cu.Refreshed = append(cu.Refreshed, newMeta)
 		} else {
@@ -108,9 +108,10 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 // perform any removals of challenge metadata (removing a built challenge is
 // considered an error).
 //
-// @param      fp    { parameter_description }
+// @param      fp    The filepath to a directory to check for changes
+//                   (defaults to root of the challenge directory if passed the empty string)
 //
-// @return     { description_of_the_return_value }
+// @return     A struct with a list of the challenges
 //
 func (m *Manager) Update(fp string) *ChallengeUpdates {
 	cu := m.DetectChanges(fp)
@@ -138,12 +139,24 @@ func (m *Manager) Update(fp string) *ChallengeUpdates {
 	return cu
 }
 
+// Templates out a challenge and generates concrete images, flags, and lookup
+// values for the seeds provided.  This function may take a significant amount
+// of time because it will implicitly download base docker images and build
+// the artifacts.
+//
+// @param      challenge   The challenge to build
+// @param      seeds       The seeds to use for randomization and the flag
+// @param      flagFormat  The requested flag format
+//
+// @return     A list of build IDs (same order as seeds that were passed) or
+//             an error.
+//
 func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) ([]BuildId, error) {
 	return m.buildImages(challenge, seeds, flagFormat)
 }
 
 func (m *Manager) Start(build BuildId) (InstanceId, error) {
-	return 0, errors.New("`Start` not implemented")
+	return m.startContainer(build)
 }
 
 func (m *Manager) Stop(instance InstanceId) error {
@@ -176,7 +189,7 @@ func (m *Manager) GetBuildMetadata(build BuildId) (*BuildMetadata, error) {
 }
 
 func (m *Manager) GetInstanceMetadata(instance InstanceId) (*InstanceMetadata, error) {
-	return nil, errors.New("`GetInstanceMetadata` not implemented")
+	return m.lookupInstanceMetadata(instance)
 }
 
 func (m *Manager) DumpState(challenges []ChallengeId) ([]*ChallengeMetadata, error) {

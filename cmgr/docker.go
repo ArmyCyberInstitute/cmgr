@@ -12,11 +12,13 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 )
 
 func (m *Manager) initDocker() error {
@@ -90,7 +92,11 @@ func (m *Manager) buildImages(challenge ChallengeId, seeds []int, format string)
 		sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%s", cMeta.Id, format, seedStr)))
 		sumStr := fmt.Sprintf("%x", sum)
 
-		imageIds := []string{sumStr} // TODO(jrolli): Figure out how this expands to multi-image challenges
+		image := Image{DockerId: sumStr, Ports: []string{}}
+		for _, port := range cMeta.PortMap {
+			image.Ports = append(image.Ports, fmt.Sprintf("%d/tcp", port))
+		}
+		images := []Image{image} // TODO(jrolli): Figure out how this expands to multi-image challenges
 
 		// Setup build options
 		imageName := fmt.Sprintf("%s:%x", cMeta.Id, sum)
@@ -112,7 +118,7 @@ func (m *Manager) buildImages(challenge ChallengeId, seeds []int, format string)
 		_, err = ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			m.log.errorf("failed to read build response from docker: %d", err)
+			m.log.errorf("failed to read build response from docker: %s", err)
 			return nil, err
 		}
 
@@ -122,7 +128,7 @@ func (m *Manager) buildImages(challenge ChallengeId, seeds []int, format string)
 
 		respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, "")
 		if err != nil {
-			m.log.errorf("failed to create artifacts container: %d", err)
+			m.log.errorf("failed to create artifacts container: %s", err)
 			return nil, err
 		}
 
@@ -242,11 +248,103 @@ func (m *Manager) buildImages(challenge ChallengeId, seeds []int, format string)
 				Flag:         flag,
 				Seed:         seed,
 				LookupData:   lookups,
-				ImageIds:     imageIds,
+				Images:       images,
 				HasArtifacts: len(files) > 0,
-				ChallengeId:  cMeta.Id,
+				Challenge:    cMeta.Id,
 			})
 	}
 
 	return m.saveBuildMetadata(builds)
+}
+
+func (m *Manager) startContainer(build BuildId) (InstanceId, error) {
+	// Get build metadata
+	bMeta, err := m.lookupBuildMetadata(build)
+	if err != nil {
+		return 0, err
+	}
+
+	iMeta := InstanceMetadata{
+		Build: bMeta.Id,
+		Ports: make(map[string]int),
+	}
+
+	revPortMap, err := m.getReversePortMap(bMeta.Challenge)
+	if err != nil {
+		return 0, err
+	}
+
+	// Create a bridge just for this container
+	netSpec := types.NetworkCreate{
+		Driver: "bridge",
+	}
+	respNC, err := m.cli.NetworkCreate(m.ctx, "cmgr-internal", netSpec)
+	if err != nil {
+		m.log.errorf("could not create challenge network: %s", err)
+		return 0, err
+	}
+	iMeta.Network = respNC.ID
+
+	// Call create in docker
+	for _, image := range bMeta.Images {
+		exposedPorts := nat.PortSet{}
+		publishedPorts := nat.PortMap{}
+		for _, portStr := range image.Ports {
+			port := nat.Port(portStr)
+			exposedPorts[port] = struct{}{}
+			publishedPorts[port] = []nat.PortBinding{{HostIP: "0.0.0.0"}}
+		}
+
+		cConfig := container.Config{
+			Image:        fmt.Sprintf("%s:%s", bMeta.Challenge, image.DockerId),
+			ExposedPorts: exposedPorts,
+		}
+
+		hConfig := container.HostConfig{
+			PortBindings: publishedPorts,
+		}
+
+		nConfig := network.NetworkingConfig{
+			EndpointsConfig: map[string]*network.EndpointSettings{
+				"cmgr-internal": {NetworkID: iMeta.Network},
+			},
+		}
+
+		respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, "")
+		if err != nil {
+			m.log.errorf("failed to create instance container: %s", err)
+			return 0, err
+		}
+
+		cid := respCC.ID
+		m.log.infof("created new image: %s", cid)
+
+		err = m.cli.ContainerStart(m.ctx, cid, types.ContainerStartOptions{})
+		if err != nil {
+			m.log.errorf("failed to start container: %s", err)
+			return 0, err
+		}
+
+		cInfo, err := m.cli.ContainerInspect(m.ctx, cid)
+		if err != nil {
+			m.log.errorf("failed to get container info: %s", err)
+			return 0, err
+		}
+
+		for cPort, hPortInfo := range cInfo.NetworkSettings.Ports {
+			if len(hPortInfo) == 0 {
+				continue
+			}
+
+			hPort, err := strconv.Atoi(string(hPortInfo[0].HostPort))
+			if err != nil {
+				return 0, err
+			}
+			iMeta.Ports[revPortMap[string(cPort)]] = hPort
+			m.log.debugf("container port %s mapped to %s", cPort, hPortInfo[0].HostPort)
+		}
+	}
+
+	// Store instance metadata
+	return m.saveInstanceMetadata(&iMeta)
 }
