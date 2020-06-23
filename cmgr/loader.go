@@ -23,16 +23,22 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 		err = errors.New("'problem.md' not supported yet")
 	}
 
-	if err == nil && md != nil {
-		err = m.validate(md)
+	if err != nil || md == nil {
+		return md, err
 	}
+
+	solverPath := filepath.Join(filepath.Dir(path), "solver")
+	info, err = os.Stat(solverPath)
+	md.SolveScript = err == nil && info.IsDir()
+
+	err = m.validate(md)
 
 	return md, err
 }
 
 // Validates the challenge metadata for compliance with expectations
 func (m *Manager) validate(md *ChallengeMetadata) error {
-	dfPath := filepath.Dir(md.Path) + "/Dockerfile"
+	dfPath := filepath.Join(m.chalDir, filepath.Dir(md.Path), "Dockerfile")
 	_, err := os.Stat(dfPath)
 	customDockerfile := err == nil
 	m.log.debugf("Dockerfile at %s: %t", dfPath, customDockerfile)
@@ -97,7 +103,9 @@ func (m *Manager) validate(md *ChallengeMetadata) error {
 	return err
 }
 
-// BUG(jrolli): Need to actually implement more validation.
+// BUG(jrolli): Need to actually implement more validation such as verifying
+// that published ports are referenced and that there are no clearly invalid
+// format strings in the details and hints.
 
 type hacksportAttrs struct {
 	Author       string `json:"author"`
@@ -138,7 +146,7 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 	}
 
 	// Validate Namespace
-	re := regexp.MustCompile(`^([a-zA-Z0-9](/[a-zA-Z0-9])*)?$`)
+	re := regexp.MustCompile(`^([a-zA-Z0-9]+(/[a-zA-Z0-9]+)*)?$`)
 	if !re.MatchString(metadata.Namespace) {
 		err := fmt.Errorf("invalid namespace (limited to ASCII alphanumeric + '/'): %s",
 			metadata.Namespace)

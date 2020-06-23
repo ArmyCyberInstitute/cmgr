@@ -1,4 +1,5 @@
 # Ignore binary targets
 cmd/cmgr/cmgr
+bin
 *.db
 *.tar.gz

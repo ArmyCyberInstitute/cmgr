@@ -37,5 +37,11 @@ jobs:
     - name: Build
       run: go build -v ./...
 
-    - name: Test
+    - name: Unit Tests
       run: go test -v ./...
+
+    - name: Prepare Integration Tests
+      run: mkdir bin && go build -v -o bin ./... && mkdir artifacts
+
+    - name: Integration Tests
+      run: CMGR_DIR=examples CMGR_ARTIFACT_DIR=artifacts bin/cmgr test examples

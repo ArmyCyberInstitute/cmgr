@@ -315,7 +315,7 @@ print the name of every instance as it rebuilds or redeploys it.  With
 
 Stops all known instances and then destroys all builds.
 
-### `cmgr test <challenge_path> [--no-solve|--require-solve]`
+### `cmgr test [--no-solve|--require-solve] [<path>]`
 
 Short-cut for running update, build, start, solve, stop, and destroy in
 sequence (breaking the sequence and printing the relevant IDs on the first

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <meta name="description" content="">
+  <meta name="author" content="">
+
+  <title>{{challenge_name}}</title>
+</head>
+
+<body>
+  <h1>{{challenge_name}}</h1>
+  <!-- Page Content -->
+  <div>
+    {% if loggedin %}
+    <form action="logout" method="post">
+      <input type="submit" value="Logout">
+    </form>
+    {% else %}
+    <p>Houdini was famous for getting <em>out</em> of things without a key.  Now a clever Internet magician has devised their latest trick of logging into a website without a valid password...</p>
+
+    <form action="login" method="post">
+      <table>
+      <tr>
+        <td><label for="username"><b>Username:</b></label></td>
+        <td><input type="text" id="username" name="username" required></td>
+      </tr>
+      <tr>
+        <td><label for="password"><b>Password:</b></label></td>
+        <td><input type="password" id="password" name="password" required></td>
+      </tr>
+      <tr><td><input type="submit" value="Login"></td><td></td></tr>
+      </table>
+    </form>
+    {% endif %}
+  </div>
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      {% for message in messages %}
+      <br><div>{{message}}</div><br>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  {% if error %}
+  <br><br><div id="error"><b>Oops! It looks like the following query caused an error...</b><br><code>{{error}}</code></div>
+  {% endif %}
+
+</body>
+
+</html>

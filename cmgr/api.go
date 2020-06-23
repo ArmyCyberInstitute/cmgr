@@ -1,7 +1,7 @@
 package cmgr
 
 import (
-	"errors"
+	"fmt"
 )
 
 // Creates a new instance of the challenge manager validating the appropriate
@@ -67,7 +67,7 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 	for _, curr := range db_metadata {
 		newMeta, ok := challenges[curr.Id]
 		if !ok {
-			if pathInDirectory(curr.Path, fp) {
+			if pathInDirectory(curr.Path, fp) || !pathInDirectory(curr.Path, m.chalDir) {
 				cu.Removed = append(cu.Removed, curr)
 			}
 			continue
@@ -75,7 +75,8 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 
 		sourceChanged := curr.SourceChecksum != newMeta.SourceChecksum
 		metadataChanged := curr.MetadataChecksum != newMeta.MetadataChecksum
-		if !sourceChanged && !metadataChanged {
+		solvescriptChanged := curr.SolveScript != newMeta.SolveScript
+		if !sourceChanged && !metadataChanged && !solvescriptChanged {
 			cu.Unmodified = append(cu.Unmodified, curr)
 		} else if !sourceChanged && m.safeToRefresh(newMeta) {
 			m.log.debugf("Marking %s as refresh", newMeta.Id)
@@ -156,19 +157,19 @@ func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) (
 }
 
 func (m *Manager) Start(build BuildId) (InstanceId, error) {
-	return m.startContainer(build)
+	return m.startContainers(build)
 }
 
 func (m *Manager) Stop(instance InstanceId) error {
-	return errors.New("`Stop` not implemented")
+	return m.stopContainers(instance)
 }
 
 func (m *Manager) Destroy(build BuildId) error {
-	return errors.New("`Destroy` not implemented")
+	return m.destroyImages(build)
 }
 
-func (m *Manager) CheckInstance(instance InstanceId) (bool, error) {
-	return false, errors.New("`CheckInstance` not implemented")
+func (m *Manager) CheckInstance(instance InstanceId) error {
+	return m.runSolver(instance)
 }
 
 func (m *Manager) ListChallenges() []ChallengeId {
@@ -193,5 +194,26 @@ func (m *Manager) GetInstanceMetadata(instance InstanceId) (*InstanceMetadata, e
 }
 
 func (m *Manager) DumpState(challenges []ChallengeId) ([]*ChallengeMetadata, error) {
-	return nil, errors.New("`DumpState` not implemented")
+	allChallenges, err := m.dumpState()
+	if len(challenges) == 0 {
+		return allChallenges, err
+	}
+
+	chalMap := make(map[ChallengeId]*ChallengeMetadata)
+	results := []*ChallengeMetadata{}
+	for _, challenge := range allChallenges {
+		chalMap[challenge.Id] = challenge
+	}
+
+	for _, cid := range challenges {
+		meta, ok := chalMap[cid]
+		if !ok {
+			err = fmt.Errorf("could not find challenge '%s'", cid)
+			m.log.error(err)
+			return nil, err
+		}
+		results = append(results, meta)
+	}
+
+	return results, nil
 }

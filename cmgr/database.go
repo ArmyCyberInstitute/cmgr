@@ -53,7 +53,7 @@ func (m *Manager) initDatabase() error {
 // Gets just the ID and checksum for all known challenges
 func (m *Manager) listChallenges() ([]*ChallengeMetadata, error) {
 	metadata := []*ChallengeMetadata{}
-	err := m.db.Select(&metadata, "SELECT id, path, sourcechecksum, metadatachecksum FROM challenges;")
+	err := m.db.Select(&metadata, "SELECT id, path, sourcechecksum, metadatachecksum, solvescript FROM challenges ORDER BY id;")
 	return metadata, err
 }
 
@@ -276,18 +276,18 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			continue
 		}
 
-		for i, hint := range metadata.Hints {
-			_, err = txn.Exec("DELETE FROM hints WHERE challenge = ?;", metadata.Id)
+		_, err = txn.Exec("DELETE FROM hints WHERE challenge = ?;", metadata.Id)
 
-			if err != nil {
+		if err != nil {
+			m.log.error(err)
+			err = txn.Rollback()
+			if err != nil { // If rollback fails, we're in trouble.
 				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				continue
+				return append(errs, err)
 			}
+			continue
+		}
+		for i, hint := range metadata.Hints {
 
 			_, err = txn.Exec("INSERT INTO hints(challenge, idx, hint) VALUES (?, ?, ?);",
 				metadata.Id,
@@ -305,18 +305,18 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			}
 		}
 
-		for _, tag := range metadata.Tags {
-			_, err = txn.Exec("DELETE FROM tags WHERE challenge = ?;", metadata.Id)
+		_, err = txn.Exec("DELETE FROM tags WHERE challenge = ?;", metadata.Id)
 
-			if err != nil {
+		if err != nil {
+			m.log.error(err)
+			err = txn.Rollback()
+			if err != nil { // If rollback fails, we're in trouble.
 				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				continue
+				return append(errs, err)
 			}
+			continue
+		}
+		for _, tag := range metadata.Tags {
 
 			_, err = txn.Exec("INSERT INTO tags(challenge, tag) VALUES (?, ?);",
 				metadata.Id,
@@ -333,18 +333,18 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			}
 		}
 
-		for k, v := range metadata.Attributes {
-			_, err = txn.Exec("DELETE FROM attributes WHERE challenge = ?;", metadata.Id)
+		_, err = txn.Exec("DELETE FROM attributes WHERE challenge = ?;", metadata.Id)
 
-			if err != nil {
+		if err != nil {
+			m.log.error(err)
+			err = txn.Rollback()
+			if err != nil { // If rollback fails, we're in trouble.
 				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				continue
+				return append(errs, err)
 			}
+			continue
+		}
+		for k, v := range metadata.Attributes {
 
 			_, err = txn.Exec("INSERT INTO attributes(challenge, key, value) VALUES (?, ?, ?);",
 				metadata.Id,
@@ -362,18 +362,18 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			}
 		}
 
-		for k, v := range metadata.Attributes {
-			_, err = txn.Exec("DELETE FROM portNames WHERE challenge = ?;", metadata.Id)
+		_, err = txn.Exec("DELETE FROM portNames WHERE challenge = ?;", metadata.Id)
 
-			if err != nil {
+		if err != nil {
+			m.log.error(err)
+			err = txn.Rollback()
+			if err != nil { // If rollback fails, we're in trouble.
 				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				continue
+				return append(errs, err)
 			}
+			continue
+		}
+		for k, v := range metadata.PortMap {
 
 			_, err = txn.Exec("INSERT INTO portNames(challenge, name, port) VALUES (?, ?, ?);",
 				metadata.Id,
@@ -392,7 +392,34 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 		}
 
 		if rebuild {
-			// TODO(jrolli): Need to recurse into builds as appropriate.
+			builds := []BuildId{}
+			err = txn.Select(&builds, "SELECT id FROM builds WHERE challenge=?;", metadata.Id)
+			if err != nil {
+				m.log.error(err)
+				errs = append(errs, err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				return errs
+			}
+
+			if len(builds) > 0 {
+				buildCtxFile, err := m.createBuildContext(metadata, m.getDockerfile(metadata.ChallengeType))
+				if err != nil {
+					m.log.errorf("failed to create build context: %s", err)
+					return append(errs, err)
+				}
+				buildCtx, err := os.Open(buildCtxFile)
+				if err != nil {
+					m.log.errorf("could not open build context: %s", err)
+					return append(errs, err)
+				}
+				defer buildCtx.Close()
+
+				return append(errs, errors.New("rebuild not implemented"))
+			}
 		}
 
 		if err := txn.Commit(); err != nil { // It's undocumented what this means...
@@ -403,7 +430,7 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 	return errs
 }
 
-func (m *Manager) saveBuildMetadata(builds []BuildMetadata) ([]BuildId, error) {
+func (m *Manager) saveBuildMetadata(builds []*BuildMetadata) ([]BuildId, error) {
 	txn := m.db.MustBegin()
 	ids := make([]BuildId, 0, len(builds))
 	for _, build := range builds {
@@ -524,7 +551,7 @@ func (m *Manager) removeBuildMetadata(build BuildId) error {
 
 func (m *Manager) saveInstanceMetadata(meta *InstanceMetadata) (InstanceId, error) {
 	txn := m.db.MustBegin()
-	res, err := txn.NamedExec("INSERT INTO instances(build, network) VALUES (:build, :network);", meta)
+	res, err := txn.NamedExec("INSERT INTO instances(build, network, lastsolved) VALUES (:build, :network, :lastsolved);", meta)
 
 	if err != nil {
 		m.log.errorf("failed to create instance entry: %s", err)
@@ -564,6 +591,22 @@ func (m *Manager) saveInstanceMetadata(meta *InstanceMetadata) (InstanceId, erro
 		}
 	}
 
+	for _, containerId := range meta.Containers {
+		_, err = txn.Exec("INSERT INTO containers(instance, id) VALUES (?, ?);",
+			id,
+			containerId)
+
+		if err != nil {
+			m.log.errorf("failed to record containers: %s", err)
+			cerr := txn.Rollback()
+			if cerr != nil { // If rollback fails, we're in trouble.
+				m.log.error(cerr)
+				err = cerr
+			}
+			return 0, err
+		}
+	}
+
 	err = txn.Commit()
 	if err != nil { // It's undocumented what this means...
 		m.log.error(err)
@@ -590,6 +633,10 @@ func (m *Manager) lookupInstanceMetadata(instance InstanceId) (*InstanceMetadata
 		metadata.Ports[kvPair.Name] = kvPair.Port
 	}
 
+	metadata.Containers = []string{}
+	if err == nil {
+		err = txn.Select(&metadata.Containers, "SELECT id FROM containers WHERE instance=?", instance)
+	}
 	if err == nil {
 		err = txn.Commit()
 		if err != nil {
@@ -659,27 +706,56 @@ func (m *Manager) safeToRefresh(new *ChallengeMetadata) bool {
 		return false
 	}
 
-	hintsEqual := len(old.Hints) == len(new.Hints)
-	if hintsEqual {
-		for i, v := range old.Hints {
-			hintsEqual = hintsEqual && v == new.Hints[i]
-		}
-	}
-
-	portMapsEqual := len(old.PortMap) == len(new.PortMap)
-	if portMapsEqual {
-		for k, v := range old.PortMap {
-			newVal, ok := new.PortMap[k]
-			portMapsEqual = portMapsEqual && ok && v == newVal
-		}
-	}
-
-	safe := old.ChallengeType == new.ChallengeType &&
-		old.Details == new.Details && // This is overly conservative and could be better
-		hintsEqual && // This is overly conservative
-		portMapsEqual
+	safe := old.ChallengeType == new.ChallengeType
 
 	return safe
+}
+
+func (m *Manager) dumpState() ([]*ChallengeMetadata, error) {
+	challenges, err := m.listChallenges()
+	if err != nil {
+		return nil, err
+	}
+
+	for i, challenge := range challenges {
+		meta, err := m.lookupChallengeMetadata(challenge.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		meta.Builds = []*BuildMetadata{}
+		err = m.db.Select(&meta.Builds, "SELECT id FROM builds WHERE challenge=?", challenge.Id)
+		if err != nil {
+			m.log.errorf("failed to select builds for '%s': %s", challenge.Id, err)
+			return nil, err
+		}
+
+		for j, build := range meta.Builds {
+			bMeta, err := m.lookupBuildMetadata(build.Id)
+			if err != nil {
+				return nil, err
+			}
+
+			bMeta.Instances = []*InstanceMetadata{}
+			err = m.db.Select(&bMeta.Instances, "SELECT id FROM instances WHERE build=?", bMeta.Id)
+			if err != nil {
+				m.log.errorf("failed to select instances for '%s/%d': %s", challenge.Id, bMeta.Id, err)
+				return nil, err
+			}
+
+			for k, instance := range bMeta.Instances {
+				iMeta, err := m.lookupInstanceMetadata(instance.Id)
+				if err != nil {
+					return nil, err
+				}
+
+				bMeta.Instances[k] = iMeta
+			}
+			meta.Builds[j] = bMeta
+		}
+		challenges[i] = meta
+	}
+	return challenges, nil
 }
 
 const (
@@ -744,6 +820,7 @@ const (
 	CREATE TABLE IF NOT EXISTS builds (
 		id INTEGER PRIMARY KEY,
 		flag TEXT NOT NULL,
+		format TEXT NOT NULL,
 		seed INTEGER NOT NULL,
 		hasartifacts INTEGER NOT NULL CHECK (hasartifacts = 0 OR hasartifacts = 1),
 		lastsolved INTEGER,
@@ -788,6 +865,13 @@ const (
 		instance INTEGER NOT NULL,
 		name TEXT NOT NULL,
 		port INTEGER NOT NULL CHECK (port > 0 AND port < 65536),
+		FOREIGN KEY (instance) REFERENCES instances (id)
+			ON UPDATE RESTRICT ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS containers (
+		instance INTEGER NOT NULL,
+		id TEXT NOT NULL PRIMARY KEY,
 		FOREIGN KEY (instance) REFERENCES instances (id)
 			ON UPDATE RESTRICT ON DELETE CASCADE
 	);`
@@ -846,6 +930,7 @@ const (
 	INSERT INTO builds (
 		flag,
 		seed,
+		format,
 		hasartifacts,
 		lastsolved,
 		challenge
@@ -853,6 +938,7 @@ const (
 	VALUES (
 		:flag,
 		:seed,
+		:format,
 		:hasartifacts,
 		:lastsolved,
 		:challenge

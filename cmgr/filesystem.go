@@ -172,7 +172,7 @@ func (m *Manager) normalizeDirPath(dir string) (string, error) {
 	}
 
 	// Check that it is a sub-directory
-	if pathInDirectory(tgtDir, m.chalDir) {
+	if !pathInDirectory(tgtDir, m.chalDir) {
 		err := fmt.Errorf("'%s' is not a sub-directory of '%s'", tgtDir, m.chalDir)
 		m.log.error(err)
 		return "", err
@@ -182,9 +182,9 @@ func (m *Manager) normalizeDirPath(dir string) (string, error) {
 }
 
 func pathInDirectory(path, dir string) bool {
-	return len(path) < len(dir) || // Sub-directory cannot be shorter string
-		path[:len(dir)] != dir || // Prefix must match
-		(len(path) > len(dir) && path[len(dir)] != os.PathSeparator)
+	return len(path) >= len(dir) && // Sub-directory cannot be shorter string
+		path[:len(dir)] == dir && // Prefix must match
+		(len(path) == len(dir) || path[len(dir)] == os.PathSeparator)
 }
 
 // The challenge checksum is a checksum of file properties (name, size, mode)
@@ -240,15 +240,15 @@ func challengeIgnore(name string) bool {
 		name == "README" ||
 		name == "README.md" ||
 		name == "problem.json" ||
-		name == "problem.md"
+		name == "problem.md" ||
+		name == "solver"
 }
 
-func (m *Manager) createBuildContext(cm *ChallengeMetadata, dockerfile []byte) (io.ReadCloser, error) {
+func (m *Manager) createBuildContext(cm *ChallengeMetadata, dockerfile []byte) (string, error) {
 	tmpFile, err := ioutil.TempFile("", "*.tar")
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	defer os.Remove(tmpFile.Name())
 	m.log.debug(tmpFile.Name())
 
 	newCtx := tar.NewWriter(tmpFile)
@@ -259,12 +259,12 @@ func (m *Manager) createBuildContext(cm *ChallengeMetadata, dockerfile []byte) (
 
 		err = newCtx.WriteHeader(&hdr)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 
 		_, err = newCtx.Write(dockerfile)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 	}
 
@@ -319,8 +319,8 @@ func (m *Manager) createBuildContext(cm *ChallengeMetadata, dockerfile []byte) (
 	})
 
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	return os.Open(tmpFile.Name())
+	return tmpFile.Name(), nil
 }

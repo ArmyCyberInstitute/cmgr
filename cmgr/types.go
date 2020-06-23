@@ -64,6 +64,7 @@ type BuildMetadata struct {
 	LookupData map[string]string `json:"lookup_data,omitempty"`
 
 	Seed         int                 `json:"seed"`
+	Format       string              `json:"format"`
 	Images       []Image             `json:"images"`
 	HasArtifacts bool                `json:"has_artifacts"`
 	LastSolved   int                 `json:"last_solved"`
@@ -83,6 +84,7 @@ type InstanceId int64
 type InstanceMetadata struct {
 	Id         InstanceId     `json:"id"`
 	Ports      map[string]int `json:"ports,omitempty"`
+	Containers []string       `json:"containers"`
 	LastSolved int            `json:"last_solved"`
 	Build      BuildId        `json:"build_id"`
 	Network    string         `json:"network"`
