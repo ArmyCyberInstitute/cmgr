@@ -388,6 +388,7 @@ func (m *Manager) startContainers(build BuildId) (InstanceId, error) {
 }
 
 func (m *Manager) stopContainers(instance InstanceId) error {
+	m.log.debugf("stopping instance %d", instance)
 	iMeta, err := m.lookupInstanceMetadata(instance)
 	if err != nil {
 		return err
@@ -418,6 +419,7 @@ func (m *Manager) stopContainers(instance InstanceId) error {
 }
 
 func (m *Manager) destroyImages(build BuildId) error {
+	m.log.debugf("destroying build %d", build)
 	bMeta, err := m.lookupBuildMetadata(build)
 	if err != nil {
 		return err

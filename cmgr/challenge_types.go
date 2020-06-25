@@ -28,6 +28,7 @@ ARG SEED
 
 const flaskDockerfile = `
 FROM ubuntu:20.04
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update
 RUN apt-get -y install python3-pip build-essential
@@ -39,10 +40,10 @@ ENV FLASK_RUN_PORT=8000
 
 # End of shared layers for all flask challenges
 
-COPY Dockerfile packages.txt* .
-RUN if [ -f packages.txt ]; then xargs -a packages.txt sudo apt install -y; fi
+COPY Dockerfile packages.txt* ./
+RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
 
-COPY Dockerfile requirements.txt* .
+COPY Dockerfile requirements.txt* ./
 RUN if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi
 
 COPY --chown=flask:flask . /app
@@ -71,15 +72,16 @@ EXPOSE 8000
 
 const phpDockerfile = `
 FROM ubuntu:20.04
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update
-RUN apt-get -y install php build-essential
+RUN apt-get -y install php
 RUN groupadd -r php && useradd -r -d /app -g php php
 
 # End of shared layers for all php challenges
 
-COPY Dockerfile packages.txt* .
-RUN if [ -f packages.txt ]; then xargs -a packages.txt sudo apt install -y; fi
+COPY Dockerfile packages.txt* ./
+RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
 
 COPY --chown=php:php . /app
 
@@ -93,13 +95,13 @@ RUN install -d -m 0700 /challenge && \
 
 USER php:php
 
-RUN find /app -name \( -name *.php -o -name *.txt -o -name *.html \) \
-              -exec sed -i -e "s|{{flag}}|$FLAG|g"                   \
-                           -e "s|{{seed}}|$SEED|g"                   \
+RUN find /app \( -name *.php -o -name *.txt -o -name *.html \) \
+              -exec sed -i -e "s|{{flag}}|$FLAG|g"             \
+                           -e "s|{{seed}}|$SEED|g"             \
                         {} \;
 
 WORKDIR /app
-CMD php -S 0.0.0.0:8000 -t /app
+CMD php -S 0.0.0.0:8000
 
 EXPOSE 8000
 # PUBLISH 8000 AS http
@@ -107,15 +109,16 @@ EXPOSE 8000
 
 const solverDockerfile = `
 FROM ubuntu:20.04
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update
 RUN apt-get -y install python3-pip python3-dev git libssl-dev libffi-dev build-essential
 RUN pip3 install pwntools
 
-COPY Dockerfile packages.txt* .
-RUN if [ -f packages.txt ]; then xargs -a packages.txt sudo apt install -y; fi
+COPY Dockerfile packages.txt* ./
+RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
 
-COPY Dockerfile requirements.txt* .
+COPY Dockerfile requirements.txt* ./
 RUN if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi
 
 COPY . /solve

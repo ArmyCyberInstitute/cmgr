@@ -1,0 +1,20 @@
+{
+  "name": "PHP-Sqlite",
+  "namespace": "cmgr/examples",
+  "challenge_type": "php",
+  "category": "Web Security",
+  "points": 50,
+  "description": "We found a new website. Try to see if you can login!",
+  "details": "The website running at {{link('/')}}.",
+    "tags" : [
+        "SQL",
+        "sqlite",
+        "php",
+        "example"
+    ],
+  "attributes": {
+    "author": "Tim Becker",
+    "organization": "ForAllSecure",
+    "event": "Sample"
+  }
+}

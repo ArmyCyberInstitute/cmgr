@@ -18,7 +18,7 @@ func main() {
 	}
 
 	log.SetFlags(0)
-	mgr := cmgr.NewManager(cmgr.ERROR)
+	mgr := cmgr.NewManager(cmgr.DEBUG)
 
 	switch os.Args[1] {
 	case "list":
@@ -365,81 +365,8 @@ func main() {
 
 		exitCode := 0
 		for _, cMeta := range metalist {
-			// Build
-			buildIds, err := mgr.Build(cMeta.Id, []int{42}, "flag{%s}")
-			if err != nil {
+			if !runTest(mgr, cMeta, solve, required) {
 				exitCode = -1
-				fmt.Printf("error (%s): could not build: %s\n", cMeta.Id, err)
-				continue
-			}
-			build := buildIds[0]
-			if solve {
-				defer mgr.Destroy(build)
-			}
-
-			// Start
-			instance, err := mgr.Start(build)
-			if err != nil {
-				exitCode = -1
-				fmt.Printf("error (%s): could not start instance: %s\n", cMeta.Id, err)
-				continue
-			}
-			if solve {
-				defer mgr.Stop(instance)
-			}
-
-			// Solve
-			if solve && cMeta.SolveScript {
-				err = mgr.CheckInstance(instance)
-				if err != nil {
-					exitCode = -1
-					fmt.Printf("error (%s): solver failed: %s\n", cMeta.Id, err)
-					continue
-				}
-			} else if solve && required {
-				exitCode = -1
-				fmt.Printf("error (%s): no solver found\n", cMeta.Id)
-				continue
-			} else if !solve {
-				bMeta, err := mgr.GetBuildMetadata(build)
-				if err != nil {
-					exitCode = -1
-					fmt.Printf("error (%s): could not get build metadata: %s\n", cMeta.Id, err)
-					continue
-				}
-
-				iMeta, err := mgr.GetInstanceMetadata(instance)
-				if err != nil {
-					exitCode = -1
-					fmt.Printf("error (%s): could not get instance metadata: %s\n", cMeta.Id, err)
-					continue
-				}
-
-				// Interactive so print some useful information
-				fmt.Printf("%s|%d|%d\n", cMeta.Id, build, instance)
-				fmt.Printf("    flag: %s\n", bMeta.Flag)
-
-				if len(bMeta.LookupData) > 0 {
-					fmt.Println("    lookup data:")
-					for k, v := range bMeta.LookupData {
-						fmt.Printf("        %s: %s\b", k, v)
-					}
-				}
-
-				if bMeta.HasArtifacts {
-					artDir, isSet := os.LookupEnv(cmgr.ARTIFACT_DIR_ENV)
-					if !isSet {
-						artDir = "."
-					}
-					fmt.Printf("    artifacts file: %s.tar.gz\n", filepath.Join(artDir, bMeta.Images[0].DockerId))
-				}
-
-				if len(iMeta.Ports) > 0 {
-					fmt.Println("    ports:")
-					for name, port := range iMeta.Ports {
-						fmt.Printf("        %s: %d\n", name, port)
-					}
-				}
 			}
 		}
 		os.Exit(exitCode)
@@ -655,4 +582,80 @@ func getMetaByDir(m *cmgr.Manager, dir string) []*cmgr.ChallengeMetadata {
 	}
 
 	return cu.Unmodified
+}
+
+func runTest(mgr *cmgr.Manager, cMeta *cmgr.ChallengeMetadata, solve, required bool) bool {
+
+	// Build
+	buildIds, err := mgr.Build(cMeta.Id, []int{42}, "flag{%s}")
+	if err != nil {
+		fmt.Printf("error (%s): could not build: %s\n", cMeta.Id, err)
+		return false
+	}
+	build := buildIds[0]
+	if solve {
+		defer mgr.Destroy(build)
+	}
+
+	// Start
+	instance, err := mgr.Start(build)
+	if err != nil {
+		fmt.Printf("error (%s): could not start instance: %s\n", cMeta.Id, err)
+		return false
+	}
+	if solve {
+		defer mgr.Stop(instance)
+	}
+
+	// Solve
+	if solve && cMeta.SolveScript {
+		err = mgr.CheckInstance(instance)
+		if err != nil {
+			fmt.Printf("error (%s): solver failed: %s\n", cMeta.Id, err)
+			return false
+		}
+	} else if solve && required {
+		fmt.Printf("error (%s): no solver found\n", cMeta.Id)
+		return false
+	} else if !solve {
+		bMeta, err := mgr.GetBuildMetadata(build)
+		if err != nil {
+			fmt.Printf("error (%s): could not get build metadata: %s\n", cMeta.Id, err)
+			return false
+		}
+
+		iMeta, err := mgr.GetInstanceMetadata(instance)
+		if err != nil {
+			fmt.Printf("error (%s): could not get instance metadata: %s\n", cMeta.Id, err)
+			return false
+		}
+
+		// Interactive so print some useful information
+		fmt.Printf("%s|%d|%d\n", cMeta.Id, build, instance)
+		fmt.Printf("    flag: %s\n", bMeta.Flag)
+
+		if len(bMeta.LookupData) > 0 {
+			fmt.Println("    lookup data:")
+			for k, v := range bMeta.LookupData {
+				fmt.Printf("        %s: %s\b", k, v)
+			}
+		}
+
+		if bMeta.HasArtifacts {
+			artDir, isSet := os.LookupEnv(cmgr.ARTIFACT_DIR_ENV)
+			if !isSet {
+				artDir = "."
+			}
+			fmt.Printf("    artifacts file: %s.tar.gz\n", filepath.Join(artDir, bMeta.Images[0].DockerId))
+		}
+
+		if len(iMeta.Ports) > 0 {
+			fmt.Println("    ports:")
+			for name, port := range iMeta.Ports {
+				fmt.Printf("        %s: %d\n", name, port)
+			}
+		}
+	}
+
+	return true
 }
