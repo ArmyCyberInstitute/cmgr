@@ -24,8 +24,8 @@ jobs:
           go get -v -t -d ./...
           mkdir bin
           go build -v -o bin ./...
-          cd bin && tar czvf cmgr.tar.gz cmgr cmgrd
           tar czvf examples.tar.gz examples
+          cd bin && tar czvf cmgr.tar.gz cmgr cmgrd
 
       - name: Create Release
         id: create_release
