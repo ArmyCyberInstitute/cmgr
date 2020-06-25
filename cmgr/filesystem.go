@@ -241,7 +241,8 @@ func challengeIgnore(name string) bool {
 		name == "README.md" ||
 		name == "problem.json" ||
 		name == "problem.md" ||
-		name == "solver"
+		name == "solver" ||
+		name == "cmgr.db"
 }
 
 func (m *Manager) createBuildContext(cm *ChallengeMetadata, dockerfile []byte) (string, error) {
