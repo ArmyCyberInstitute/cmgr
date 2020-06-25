@@ -537,15 +537,49 @@ Usage: %s <command> [<args>]
 
 Available commands:
   list [--verbose]
+      lists all of the challenges currently indexed
+
   info [<path>]
+      provides information on all challenges underneath the provided path
+      (defaults to current directory if not provided)
+
   update [--verbose] [--dry-run] [<path>]
+      updates the metadata for all challenges underneath the provided path and
+      rebuilds/restarts and existing builds/insances of those challenges; the
+      '--dry-run' flag will print the changes it detects without updating the
+      system state; path defaults to the root challenge directory if omitted.
+
   build [--flag-format=<format_string>] <challenge> <seed> [<seed>...]
+      creates a new, templated build of the challenge using the provided flag
+      format for each seed provided; the flag format defaults to 'flag{%%s}'
+      if not provided; prints a list of Build IDs that were created
+
   start <build identfier>
+      creates a new running instance of the build and prints its ID to stdout
+
   stop <instance identifier>
+      stops the given instance
+
   destroy <build identifier>
+      destroys the given build if no instances are running, otherwise it exits
+      with a non-zero exit code and does nothing; reclaims disk space used by
+      Docker images and artifact files
+
   reset [--verbose]
+      stops all known instances and destroys all known builds
+
   test [--no-solve|--require-solve] [<path>]
+      shortcut for calling 'update' on the given path followed by build,
+      start, check, stop, destroy for each challenge in the directory;
+      'no-solve' will skip the last three steps and leave an instance of each
+      challenge running while 'require-solve' will treat the absence of a
+      solve script as an error.
+
   system-dump [--summary|--json] [<challenge> ...]
+      lists the challenges along with their builds and instances; only counts
+      are given for 'summary' and all metadata is given in JSON format for
+      'json'; all challenges are listed if no challenge IDs are provided
+
 `, os.Args[0])
 }
 

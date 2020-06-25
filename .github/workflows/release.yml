@@ -1,5 +1,7 @@
 on:
   push:
+    branches:
+    - master
     tags:
     - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
 
@@ -24,7 +26,8 @@ jobs:
           go get -v -t -d ./...
           mkdir bin
           go build -v -o bin ./...
-          cd bin && tar czvf cmgr.tar.gz cmgr
+          tar czvf examples.tar.gz examples
+          cd bin && tar czvf cmgr.tar.gz cmgr cmgrd
 
       - name: Create Release
         id: create_release
@@ -37,8 +40,8 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Upload Release Asset
-        id: upload-release-asset
+      - name: Upload Binaries
+        id: upload-binaries
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -46,4 +49,15 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
           asset_path: ./bin/cmgr.tar.gz
           asset_name: cmgr.tar.gz
+          asset_content_type: application/octet-stream
+
+      - name: Upload Examples
+        id: upload-examples
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
+          asset_path: ./examples.tar.gz
+          asset_name: examples.tar.gz
           asset_content_type: application/octet-stream
