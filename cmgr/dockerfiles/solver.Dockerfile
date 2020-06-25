@@ -1,6 +1,6 @@
 FROM ubuntu:20.04
 
-RUN apt-get update -y
+RUN apt-get update
 RUN apt-get -y install python3-pip python3-dev git libssl-dev libffi-dev build-essential
 RUN pip3 install pwntools
 
