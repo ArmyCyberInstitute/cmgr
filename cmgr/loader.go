@@ -27,17 +27,27 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 		return md, err
 	}
 
+	prefix := ""
+	if md.Namespace != "" {
+		prefix = md.Namespace + "/"
+	}
+	md.Id = ChallengeId(prefix + sanitizeName(md.Name))
+
 	solverPath := filepath.Join(filepath.Dir(path), "solver")
 	info, err = os.Stat(solverPath)
 	md.SolveScript = err == nil && info.IsDir()
 
-	err = m.validate(md)
+	err = m.processDockerfile(md)
+
+	if err == nil {
+		err = m.validate(md)
+	}
 
 	return md, err
 }
 
 // Validates the challenge metadata for compliance with expectations
-func (m *Manager) validate(md *ChallengeMetadata) error {
+func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 	dfPath := filepath.Join(m.chalDir, filepath.Dir(md.Path), "Dockerfile")
 	_, err := os.Stat(dfPath)
 	customDockerfile := err == nil
@@ -103,6 +113,16 @@ func (m *Manager) validate(md *ChallengeMetadata) error {
 	return err
 }
 
+func (m *Manager) validate(meta *ChallengeMetadata) error {
+	var err error
+	if meta.Name == "" {
+		err = errors.New("must provide a challenge name")
+		m.log.error(err)
+	}
+
+	return err
+}
+
 // BUG(jrolli): Need to actually implement more validation such as verifying
 // that published ports are referenced and that there are no clearly invalid
 // format strings in the details and hints.
@@ -154,11 +174,6 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 		return nil, err
 	}
 
-	prefix := ""
-	if metadata.Namespace != "" {
-		prefix = metadata.Namespace + "/"
-	}
-
 	// Indicates that this is a legacy hacksport challenge that needs lifting
 	if metadata.ChallengeType == "" {
 		_, err := os.Stat(filepath.Join(filepath.Dir(path), "challenge.py"))
@@ -205,6 +220,5 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 	}
 	metadata.MetadataChecksum = h.Sum32()
 
-	metadata.Id = ChallengeId(prefix + sanitizeName(metadata.Name))
 	return metadata, nil
 }
