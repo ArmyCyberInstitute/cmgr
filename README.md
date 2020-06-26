@@ -1,386 +1,116 @@
-# ~Hacksport 2.0~ Challenge Management Interface
+# cmgr
+
+**cmgr** is a new backend designed to simplify challenge development and
+management for Jeopardy-style CTFs.  It provides a CLI (`cmgr`) intended for
+development and managing available challenges on a back-end challenge server
+as well as a REST server (`cmgrd`) which exposes the minimal set of commands
+necessary for a front-end web interface to leverage it to host a competition
+or training platform.
+
+## Quickstart
+
+Assuming you already have Docker installed, the following code snippet will
+download example challenges and the **cmgr** binaries and initialize a
+database file that tracks those challenges.
+
+```sh
+wget https://github.com/ArmyCyberInstitute/cmgr/releases/latest/download/examples.tar.gz
+wget https://github.com/ArmyCyberInstitute/cmgr/releases/latest/download/cmgr.tar.gz
+tar xzvf examples.tar.gz
+cd examples
+tar xzvf ../cmgr.tar.gz
+./cmgr update
+```
+
+At this point, you could launch the REST server on port 42000 with `./cmgrd` or
+start interacting with it directly via the CLI with `./cmgr`.
+
+## Configuration
+
+**cmgr** is configured using environment variables.  In particular, it
+currently uses the following variables:
+
+- *CMGR\_DB*: path to cmgr's database file (defaults to 'cmgr.db')
+
+- *CMGR\_DIR*: directory containing all challenges (defaults to '.')
+
+- *CMGR\_ARTIFACT\_DIR*: directory for storing artifact bundles (defaults to '.')
+
+Additionally, we rely on the Docker SDK's ability to self-configure base off
+environment variables.  The documentation for those variables can be found at
+[https://docs.docker.com/engine/reference/commandline/cli/](https://docs.docker.com/engine/reference/commandline/cli/).
+
+## Developing...
+
+### Challenges
+
+One of our design goals is to make developing challenges for CTFs as simple as
+possible so that developers can focus on the content and not quirks of the
+platform.  We have specific challenge types that make it as easy as possible to
+create new challenges of a particular flavor, and the documentation for each
+type and how to use them are in the [examples](examples/) directory.
+
+Additionally, we have a simple interface for creating automated solvers for
+your challenges.  It is as simple as creating a directory named `solver` with
+a Python script called `solve.py`.  This script will get its own Docker
+container on the same network as the instance it is checking and start with
+all of the artifact files and additional information provided to competitors in
+its working directory.  Once it solves the challenge, it just needs to write
+the flag value to a file named `flag` in its current working directory and
+**cmgr** will validate the answer and report it back to the user.
+
+In both the challenge and solver cases, we support challenge authors using
+custom Dockerfiles to support creative challenges that go beyond the most
+common types of challenges.  In order to support the other automation aspects
+of the system, there are some requirements for certain files to be created
+during the build phase of the Docker image and are documented in the `custom`
+challenge type example.
+
+Testing challenges is meant to be as easy as executing `cmgr test` from the
+directory of an individual challenge or the directory containing all of the
+challenges for an event.  This is intended to support quick feedback cycles
+for developers as well as enabling automated quality control during the
+preparation for an event.
+
+### Front-Ends
+
+Another design of this project is to make it easier for custom front-end
+interfaces for CTFs to reuse existing content/challenges rather than forcing
+organizers to port between systems.  To make this possible, `cmgrd` exposes a
+very simple REST API which allows a front-end to manage all of the important
+tasks of running a competition or training environment.  The OpenAPI specification
+can be found [here](cmd/cmgrd/swagger.yaml).
+
+### Back-End
+
+If you're interested in contributing, modifying, or extending **cmgr**, the
+core functionality of the project is implemented in a single Go library under
+the `cmgr` directory.  You can view the API documentation on
+[go.dev](https://pkg.go.dev/github.com/ArmyCyberInstitute/cmgr/cmgr).
+Additionally, the _SQLite3_ database is intended to function as a read-only
+API and its schema can be found [here](cmgr/databases.go).
+
+In order to work on the back-end, you will need to have _Go_ installed and
+_cgo_ enabled for at least the initial build where the _sqlite3_ driver is
+built and installed.  To get started, you can run:
+
+```sh
+git clone https://github.com/ArmyCyberInstitute/cmgr
+cd cmgr
+go get -v -t -d ./...
+go build -v ./...
+```
 
-## Overview
+## Acknowledgments
 
-**Note:** This document is currently focused primarily on the front-end API of
-the system.  As we refactor the challenge developer API, we will start
-incorporating more of that documentation into this repository and probably
-split the documentation into multiple files.  At the moment, the goal is
-modify as little of the challenge-facing API as possible to allow maximum
-portability of legacy challenges.
+This project is heavily inspired by the
+[picoCTF](https://github.com/picoCTF/picoCTF) platform and seeks to be a next
+generation implementation of the _hacksport_ back-end for CTF platforms built
+in its style.
 
-This is designed to be an overhaul of the `shell_manager` from "hacksport" in
-picoCTF.  The project consists of three main components: a Python library
-(cmgrlib), a CLI (cmgr), and a REST API service (cmgrd).  These can be used to
-manage the life-cycle of CTF challenges both during development as well as
-during events such as competitions or open-ended training sessions.
+## Contributing
 
-### Design Goals
-
-- Streamline challenge development with a useful, standalone CLI tool
-
-- Provide a simple interface for adding automated solvers to facilitate use of
-CI/CD in content development
-
-- Simplify challenge management by discovering challenges in a folder rather
-than explicitly adding each challenge individually
-
-- Every challenge exists in a container (no cross-contamination of system)
-
-- Provide easy on-ramp for legacy hacksport content.
-
-- Maintain a front-end agnostic challenge server.  A corollary to this is
-clearly defining the separation of concerns between challenge management and
-the display of information in an event.
-
-### Design Non-Goals
-
-- Directly support user shells.  This caused significant security challenges
-on the old "shell-server" concept.  If this functionality is needed, then it
-should exist on a dedicated server or inside containers (could be hacked into
-this framework via a "challenge" that provides `wetty` and `ssh` ports).
-
-- Full backwards compatibility hacksport.  The previous version tightly
-coupled low-level  build directives with the challenge orchestration.  This
-tries to separate the two concepts with build directives being covered by a
-Dockerfile.  Backwards compatibility is achieved by templating out a Dockerfile
-that shims existing challenges into a containerized build using the old
-hacksport library.
-
-- Handle authentication on the REST API.  This is easily (and probably more
-securely) achieved through the use of a reverse proxy such as _nginx_ and/or network security groups and firewall policies.
-
-### Description Templating
-
-To maximize deployment flexibility, the challenge server does not perform
-templating on challenge details and hints and instead defers that to the web
-server while providing all of the necessary information to construct a
-response.
-
-The primary reason for this decision, it enables far more flexibility on how
-to serve content such as allowing proxying of the dynamic websites and ports
-or remote hosting of the downloadable artifacts.  In particular, this easily
-allows a web front-end to host static artifacts directly and therefore
-restrict downloads to authenticated users assigned to that instance.  It also
-enables exploration of adding authentication mechanisms to instance connection
-through authenticated proxying (for web challenges) and dynamic port mappings
-(for other network challenges).  These mechanisms could potentially reduce the
-attack surface of hosting a competition while also providing possible hook
-points for improving metrics collection for research purposes.
-
-## Library API
-
-### Configuration
-
-Basic concept is to use environment variables with sane defaults to control
-basic implementation details.
-
-`CMGR_DIR` path to the directory which contains all known challenges
-(nested arbitrarily).
-
-`CMGR_ARTIFACT_DIR` path to a writable directory for storing artifact tarballs.
-
-`CMGR_DB` path to the SQLite database file storing state
-(handles concurrency by enforcing table locks before file modifications)
-
-**Note:** There are a number of docker configuration options that need to be added.
-
-### Metadata
-
-#### Challenge Metadata
-
-Authoritative:
-
-- Name
-
-- Namespace (optional, '/' separated)
-
-- challenge identifier (sanitized name + hash of relative file-path from `PICO_CHALLENGE_DIR` for "problem.json")
-
-- Description (static information only)
-
-- Details template (called "Description" in current hacksport)
-
-- Hints template
-
-- Version (root hash of Merkle tree of source material)
-
-- HasSolveScript
-
-Informational:
-
-- Templatable (do multiple "builds" make sense for a single event - e.g. does
-it have a static flag)
-
-- max-users (0 = no concerns, 1 = instance-per-user, 2+ = recommendation on
-limit)
-
-- Category
-
-- Points
-
-- Tags
-
-- Attributes
-
-    - LearningObjective
-
-    - DesignOverview
-
-    - Organization
-
-    - Author
-
-#### Build Metadata
-
-- flag
-
-- seed
-
-- last-checked (date-time) [last auto-solve of any instance for this build]
-
-#### Instance Metadata
-
-- Port information (dictionary of port "name" to port on challenge server)
-
-- last-checked (date-time)
-
-#### Templating Details
-
-In order to keep the front-end's requirements well-defined, the only allowed
-templating directives are `url_for(filename, display=None)`,
-`port(name=None)`, `http_base`, `hostname`, and `lookup(key_string)`.  The
-front-end is responsible for providing the `http_base` and `hostname` string
-definitions as well as function definitions for `url_for`, `port`, and
-`lookup` while the challenge server is responsible for providing a dictionary
-of "names" to ports and a dictionary of "keys" to "values" via the instance's
-metadata.  The templates provided by the challenge server are Jinja2 HTML
-templates.
-
-### Library Functions (cmgrlib)
-
-#### `detect_changes(challenges)`
-
-`challenges` is a list of challenge identifiers for known challenges
-
-Performs basic change detection on the challenges listed and reports back all
-changes that _would_ be made by `update()`.  If given the empty list
-(default), it crawls the entire challenge directory, updating everything as
-necessary.
-
-Returns a list of errors that occurred during validation of challenge
-directories (empty list if successful)
-
-#### `update(challenges)`
-
-`challenges` is a list of challenge identifiers for known challenges
-
-Performs basic change detection on the challenges listed and updates any
-existing state (builds or deploys) if necessary.  If given the empty list
-(default), it crawls the entire challenge directory, updating everything as
-necessary.
-
-Returns a list of errors that occurred during deployment (empty list if
-successful)
-
-#### `build(challenge, seeds, flag_format="flag{%s}")`
-
-`challenge` is the challenge identifier of a known challenge
-
-`seeds` is a list of byte strings to use as the seed for randomness.  If an
-empty list, then the instance names are used as the seeds instead.
-
-Builds the docker image(s), artifact tarball, and flag for the challenge using
-the given seeds for randomness.
-
-Throws an exception on an error.
-
-Returns a list of `build_id`s (opaque integers).
-
-#### `start(build_id)`
-
-`build_id` is the identifier for the build returned by `build()`
-
-Throws an error if challenge not already built or if errors occur during
-deployment process (should be very rare).
-
-Returns a list of `instance_id`s (opaque integers).
-
-#### `stop(instance_ids)`
-
-`instance_ids` is a list of valid instance identifiers.
-
-Terminates any active processes (i.e. docker containers) associated with the
-instance.
-
-No return value.
-
-#### `destroy(build_ids)`
-
-`build_ids` is a list of build identifiers as returned by `build`
-
-Will delete the artifacts and docker images for all indicated instances
-(freeing up disk space on challenge server).
-
-Throws an error if any instances marked for destruction are currently running.
-
-No return value.
-
-#### `check_instances(instance_id)`
-
-Creates and runs a docker container in a new directory with the static
-artifact files as well as the instance metadata (without flag) saved in
-`metadata.json`.  The container should output a single line with the flag on
-stdout which the function then compares against the known flag.
-
-Throws an error if there is no solve script.
-
-Returns a list of `true`, `false` corresponding to the solve state
-for each instance.
-
-#### `get_challenge_metadata(challenges)`
-
-`challenges` is a list of challenge identifiers for known challenges.  If empty, then all
-challenges are selected.
-
-Throws an error if any challenge identifiers are invalid.
-
-Returns a list of the raw, untemplated challenge metadata.
-
-#### `get_build_metadata(build_ids)`
-
-`build_ids` is the build identifier being queried
-
-Throws an error if the identifiers are invalid.
-
-Returns a list of associated static metadata in the same order as passed.
-
-#### `get_instance_metadata(build_id, instance_ids)`
-
-`build_id` is the build identifier being queried
-
-`instance_ids` are valid instance identifiers
-
-Throws an error if any identifiers are invalid.
-
-Returns a list of associated instance metadata in the same order as passed.
-
-#### `dump_challenge_state(challenges)`
-
-**Note:** This function is intended for administration/monitoring of the
-challenge system as a whole and not for routine challenge management.
-
-`challenges` is a list of challenge identifiers for known challenges.  If empty, then all
-challenges are selected.
-
-Throws an error if any challenge challenge identifiers are invalid.
-
-Returns a list of challenge state.  Each state is a map of known `build_id`s
-to their static metadata as well as a map of their associated `instance_id`s
-to their instance metadata.
-
-### Database Schema
-
-See `schemaQuery` in [database.go](cmgr/database.go).
-
-## Command Line Utility (`cmgr`)
-
-### `cmgr list [--verbose]`
-
-Lists the identifiers of all known challenges.  Verbose will include their unsanitized name in the output.
-
-### `cmgr info <challenge_path>`
-
-Pretty prints the challenge metadata for all challenges whose definitions start with that path.
-
-### `cmgr update [--verbose] [--dry-run] [<challenge>...]`
-
-Wrapper around `update`.  By default it will only print the names of
-challenges that have changed in status (new, updated, or deleted).  With
-verbose, it will print the name of every challenge as it processes it and
-print the name of every instance as it rebuilds or redeploys it.  With
-"dry-run", it will report back the planned changes without actually executing.
-
-### `cmgr build <challenge_id> [--flag-format=<format string>] <seed>[,<seed>...]`
-
-### `cmgr start <build_id>`
-
-### `cmgr check <instance_id> [<instance_id>...]`
-
-### `cmgr stop <instance_id> [<instance_id>...]`
-
-### `cmgr destroy <build_id> [<build_id>...]`
-
-### `cmgr reset [--verbose]`
-
-Stops all known instances and then destroys all builds.
-
-### `cmgr test [--no-solve|--require-solve] [<path>]`
-
-Short-cut for running update, build, start, solve, stop, and destroy in
-sequence (breaking the sequence and printing the relevant IDs on the first
-error).  If `--no-solve` is used, then the command only goes through `start`
-and prints the `build_id` and `instance_id` to stdout to allow the developer
-to interact with the instance.  If `--require-solve` is used, then missing
-solve scripts are treated as solve failures.
-
-### `cmgr system-dump [--verbose] [--quiet] [--json] [<challenge>...]`
-
-By default, will pretty-print all known challenges (or just the ones
-indicated) with their built static IDs and running instances.  `--verbose`
-will expand it to include all metadata while `--quiet` will consolidate it to
-just show every known challenge annotated with a count of static builds and a
-total count of running instances.
-
-## REST API Service (`cmgrd`)
-
-### `/challenges`
-
-#### GET
-
-Returns a JSON list of challenge challenge identifiers that are known to the server.
-
-### `/challenges/<challenge>`
-
-#### GET
-
-Calls `get_challenge_metadata()` on the passed challenge name
-
-#### POST
-
-Takes a JSON with a `seeds` fields which is a list strings which and an optional `flag_format` field which are passed to the `build()` library call.
-Returns a JSON list of the build metadata.
-
-### `/builds/<build_id>`
-
-#### GET
-
-Returns the results of `get_build_metadata()`
-
-#### POST
-
-Starts a new instance of the build.  Returns new instance's metadata.
-
-#### DELETE
-
-Destroys the build.
-
-### `/builds/<build_id>/artifacts.tar.gz`
-
-#### GET
-
-Returns tarball of static artifacts (not in a subdirectory) for the build ID.
-
-### `/instances/<instance_id>`
-
-#### GET
-
-Returns the results of `get_instance_metadata()`
-
-#### POST
-
-Runs the automated solve checker against the instance.
-
-#### DELETE
-
-Stops the instance.
+Please carefully read the [NOTICE](Notice), [CONTRIBUTING](CONTRIBUTING.md),
+[DISCLAIMER](DISCLAIMER.md), and [LICENSE](LICENSE) files for details on how
+to contribute as well as the copyright and licensing situations when
+contributing to the project.
