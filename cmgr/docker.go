@@ -432,21 +432,19 @@ func (m *Manager) destroyImages(build BuildId) error {
 
 	iro := types.ImageRemoveOptions{Force: false, PruneChildren: true}
 	for _, image := range bMeta.Images {
+		if bMeta.HasArtifacts {
+			artifactsFileName := fmt.Sprintf("%s.tar.gz", image.DockerId)
+			err := os.Remove(filepath.Join(m.artifactsDir, artifactsFileName))
+			if err != nil {
+				m.log.errorf("failed to remove artifacts file: %s", err)
+				return err
+			}
+		}
+
 		imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, image.DockerId)
 		_, err := m.cli.ImageRemove(m.ctx, imageName, iro)
 		if err != nil {
 			m.log.errorf("failed to remove image: %s", err)
-			return err
-		}
-
-		if !bMeta.HasArtifacts {
-			continue
-		}
-
-		artifactsFileName := fmt.Sprintf("%s.tar.gz", image.DockerId)
-		err = os.Remove(filepath.Join(m.artifactsDir, artifactsFileName))
-		if err != nil {
-			m.log.errorf("failed to remove artifacts file: %s", err)
 			return err
 		}
 	}

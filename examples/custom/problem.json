@@ -1,0 +1,18 @@
+{
+  "name": "custom-socat",
+  "namespace": "cmgr/examples",
+  "challenge_type": "custom",
+  "category": "Cryptography",
+  "points": 50,
+  "description": "We found a new website. Try to see if you can login!",
+  "details": "The website running at {{link('/')}}.",
+    "tags" : [
+        "crypto",
+        "custom",
+        "example"
+    ],
+  "attributes": {
+    "organization": "ACI",
+    "event": "Sample"
+  }
+}

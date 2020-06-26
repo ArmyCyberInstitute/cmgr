@@ -32,8 +32,9 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 		prefix = md.Namespace + "/"
 	}
 	md.Id = ChallengeId(prefix + sanitizeName(md.Name))
+	md.Path = filepath.Dir(path)
 
-	solverPath := filepath.Join(filepath.Dir(path), "solver")
+	solverPath := filepath.Join(md.Path, "solver")
 	info, err = os.Stat(solverPath)
 	md.SolveScript = err == nil && info.IsDir()
 
@@ -48,7 +49,7 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 
 // Validates the challenge metadata for compliance with expectations
 func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
-	dfPath := filepath.Join(m.chalDir, filepath.Dir(md.Path), "Dockerfile")
+	dfPath := filepath.Join(md.Path, "Dockerfile")
 	_, err := os.Stat(dfPath)
 	customDockerfile := err == nil
 	m.log.debugf("Dockerfile at %s: %t", dfPath, customDockerfile)
@@ -57,8 +58,10 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 	err = nil
 	if md.ChallengeType == "" {
 		err = fmt.Errorf("invalid challenge (%s): missing the challenge type", md.Id)
-	} else if md.ChallengeType == "custom" && !customDockerfile {
-		err = fmt.Errorf("invalid challenge (%s): 'custom' challenge type is missing 'Dockerfile'", md.Id)
+	} else if md.ChallengeType == "custom" {
+		if !customDockerfile {
+			err = fmt.Errorf("invalid challenge (%s): 'custom' challenge type is missing 'Dockerfile'", md.Id)
+		}
 	} else if customDockerfile {
 		err = fmt.Errorf("invalid challenge (%s): 'Dockerfile' forbidden except for 'custom' challenge type", md.Id)
 	} else if m.getDockerfile(md.ChallengeType) == nil {
