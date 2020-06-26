@@ -507,6 +507,17 @@ Available commands:
       are given for 'summary' and all metadata is given in JSON format for
       'json'; all challenges are listed if no challenge IDs are provided
 
+Relevant environment variables:
+  CMGR_DB - path to cmgr's database file (defaults to 'cmgr.db')
+
+  CMGR_DIR - directory containing all challenges (defaults to '.')
+
+  CMGR_ARTIFACT_DIR - directory for storing artifact bundles (defaults to '.')
+
+  Note: The Docker client is configured via Docker's standard environment
+      variables.  See https://docs.docker.com/engine/reference/commandline/cli/
+      for specific details.
+
 `, os.Args[0])
 }
 

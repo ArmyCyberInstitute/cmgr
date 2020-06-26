@@ -349,7 +349,7 @@ Calls `get_challenge_metadata()` on the passed challenge name
 #### POST
 
 Takes a JSON with a `seeds` fields which is a list strings which and an optional `flag_format` field which are passed to the `build()` library call.
-Returns a JSON dictionary mapping the new `build_id`s to their metadata.
+Returns a JSON list of the build metadata.
 
 ### `/builds/<build_id>`
 

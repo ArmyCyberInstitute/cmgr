@@ -22,8 +22,16 @@ type state struct {
 func main() {
 	var iface string
 	var port int
+	var help bool
 	flag.IntVar(&port, "port", 42000, "listening port for cmgrd")
-	flag.StringVar(&iface, "interface", "", "listening interface for cmgrd")
+	flag.StringVar(&iface, "address", "", "listening address for cmgrd")
+	flag.BoolVar(&help, "help", false, "display usage information")
+	flag.Parse()
+
+	if help {
+		printUsage()
+		os.Exit(0)
+	}
 
 	mgr := cmgr.NewManager(cmgr.INFO)
 	if mgr == nil {
@@ -39,6 +47,27 @@ func main() {
 
 	connStr := fmt.Sprintf("%s:%d", iface, port)
 	log.Fatal(http.ListenAndServe(connStr, nil))
+}
+
+func printUsage() {
+	fmt.Printf(`
+Usage: %s [<options>]
+  --address  the network address to listen on (default: 0.0.0.0)
+  --port     the port to listen on (default: 42000)
+  --help     display this message
+
+Relevant environment variables:
+  CMGR_DB - path to cmgr's database file (defaults to 'cmgr.db')
+
+  CMGR_DIR - directory containing all challenges (defaults to '.')
+
+  CMGR_ARTIFACT_DIR - directory for storing artifact bundles (defaults to '.')
+
+  Note: The Docker client is configured via Docker's standard environment
+      variables.  See https://docs.docker.com/engine/reference/commandline/cli/
+      for specific details.
+
+`, os.Args[0])
 }
 
 func (s state) listHandler(w http.ResponseWriter, r *http.Request) {

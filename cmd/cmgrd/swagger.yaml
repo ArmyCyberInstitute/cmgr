@@ -1,0 +1,293 @@
+swagger: "2.0"
+info:
+  description: "This is a minimal REST API for `cmgr` that allows front-ends for a CTF to remotely manage challenges and their templating for events.  It is not intended to replace `cmgr` entirely as it does not currently expose the challenge update process."
+  version: "0.2.0"
+  title: "cmgrd"
+  contact:
+    email: "code@acictf.com"
+  license:
+    name: "Apache 2.0"
+    url: "http://www.apache.org/licenses/LICENSE-2.0.html"
+tags:
+- name: "challenges"
+  description: "Management of templatable challenges as well as accessing their metadata."
+- name: "builds"
+  description: "Management of challenges that have been templated with a concrete flag and associated artifacts."
+- name: "instances"
+  description: "Management of challenge instances with which competitors can interact."
+schemes:
+- "http"
+paths:
+  /challenges:
+    get:
+      tags: [challenges]
+      produces: ["application/json"]
+      summary: "Lists all available challenges"
+      responses:
+        "500":
+          description: "A database error occurred in `cmgr`"
+        "200":
+          description: "A list of all valid challenge identifiers"
+          schema:
+            type: "array"
+            items:
+              type: string
+  /challenges/{challenge_id}:
+    parameters:
+      - name: "challenge_id"
+        in: "path"
+        description: "The identifier for the challenge"
+        required: true
+        type: "string"
+    get:
+      tags: [challenges]
+      produces: ["application/json"]
+      summary: "Gets the metadata for the challenge"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad challenge identifiers)"
+        "200":
+          description: "The metadata for the challenge"
+          schema:
+            $ref: "#/definitions/ChallengeMetadata"
+    post:
+      tags: [challenges]
+      produces: ["application/json"]
+      summary: "Builds templated versions of the challenge"
+      description: "Uses the flag format and seed to template out a new version of the challenge.  This may take a signficant amount of time."
+      parameters:
+        - in: "body"
+          name: "body"
+          description: "templating information for `cmgr`"
+          required: true
+          schema:
+            $ref: "#/definitions/BuildChallengeRequest"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad challenge identifiers)"
+        "200":
+          description: "A list of the new build IDs in the same order as seeds were given"
+          schema:
+            type: array
+            items:
+              type: integer
+              format: int64
+  /builds/{build_id}:
+    parameters:
+      - name: "build_id"
+        in: "path"
+        description: "The identifier for the build"
+        required: true
+        type: "string"
+    get:
+      tags: [builds]
+      produces: ["application/json"]
+      summary: "Gets the metadata for the build"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad build identifiers)"
+        "200":
+          description: "The metadata for the build"
+          schema:
+            $ref: "#/definitions/BuildMetadata"
+    post:
+      tags: [builds]
+      produces: ["application/json"]
+      summary: "Starts an instance of the build"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad build identifiers)"
+        "200":
+          description: "The identifier of the new instance"
+          schema:
+            type: integer
+            format: int64
+    delete:
+      tags: [builds]
+      produces: ["application/json"]
+      summary: "Destroys the build (releases resources)"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad build identifiers, but may also indicate that there are live instances of the build)"
+        "200":
+          description: "Indicates successfully deleted"
+  /instances/{instance_id}:
+    parameters:
+      - name: "instance_id"
+        in: "path"
+        description: "The identifier for the instance"
+        required: true
+        type: "string"
+    get:
+      tags: [instances]
+      produces: ["application/json"]
+      summary: "Gets the metadata for the instance"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad build identifiers)"
+        "200":
+          description: "The metadata for the instance"
+          schema:
+            $ref: "#/definitions/InstanceMetadata"
+    post:
+      tags: [instances]
+      produces: ["application/json"]
+      summary: "Runs the automated solver against the instance"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad build identifiers).  Could also indicate that the solve failed or does not exist."
+        "200":
+          description: "Indicates solve ran correctly"
+    delete:
+      tags: [instances]
+      produces: ["application/json"]
+      summary: "Stops an instance"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad build identifiers, but may also indicate that there are live instances of the build)"
+        "200":
+          description: "Indicates successfully stopped"
+definitions:
+  ChallengeMetadata:
+    type: "object"
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      namespace:
+        type: string
+      challenge_type:
+        type: string
+      description:
+        type: string
+      details:
+        type: string
+      hints:
+        type: array
+        items:
+          type: string
+      source_checksum:
+        type: integer
+        format: int64
+      metadata_checksum:
+        type: integer
+        format: int64
+      path:
+        type: string
+      templatable:
+        type: boolean
+      port_map:
+        type: object
+        additionalProperties:
+          type: integer
+          format: int32
+      max_users:
+        type: integer
+        format: int32
+      category:
+        type: string
+      poitns:
+        type: integer
+        format: int32
+      tags:
+        type: array
+        items:
+          type: string
+      attributes:
+        type: object
+        additionalProperties:
+          type: string
+      solve_script:
+        type: boolean
+  BuildMetadata:
+    type: object
+    properties:
+      id:
+        type: integer
+        format: int64
+      flag:
+        type: string
+      lookup_data:
+        type: object
+        additionalProperties:
+          type: string
+      seed:
+        type: integer
+        format: int32
+      format:
+        type: string
+      images:
+        type: array
+        items:
+          $ref: "#/definitions/Image"
+      has_artifacts:
+        type: boolean
+      last_solved:
+        type: integer
+        format: int64
+      challenge:
+        type: string
+  Image:
+    type: object
+    properties:
+      id:
+        type: integer
+        format: int64
+      docker_id:
+        type: string
+      ports:
+        type: array
+        items:
+          type: string
+      build:
+        type: integer
+        format: int64
+  InstanceMetadata:
+    type: object
+    properties:
+      id:
+        type: integer
+        format: int64
+      ports:
+        type: object
+        additionalProperties:
+          type: string
+      containers:
+        type: array
+        items:
+          type: string
+      last_solve:
+        type: integer
+        format: int64
+      build:
+        type: integer
+        format: int64
+      network:
+        type: string
+  BuildChallengeRequest:
+    type: object
+    properties:
+      flag_format:
+        type: string
+      seeds:
+        type: array
+        items:
+          type: integer
+          format: int32
