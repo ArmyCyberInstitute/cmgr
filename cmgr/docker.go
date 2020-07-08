@@ -104,7 +104,7 @@ func (m *Manager) buildImages(challenge ChallengeId, seeds []int, format string)
 }
 
 func (m *Manager) generateBuild(cMeta *ChallengeMetadata, buildCtx io.Reader, seed int, format string) (*BuildMetadata, error) {
-	seedStr := fmt.Sprintf("%x", seed)
+	seedStr := fmt.Sprintf("%d", seed)
 
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%s", cMeta.Id, format, seedStr)))
 	sumStr := fmt.Sprintf("%x", sum)
@@ -132,7 +132,14 @@ func (m *Manager) generateBuild(cMeta *ChallengeMetadata, buildCtx io.Reader, se
 		m.log.errorf("failed to build base image: %s", err)
 		return nil, err
 	}
-
+	/*
+		TODO: Code to read response, necessary for catching build errors
+		defer resp.Body.Close()
+		_, err = io.Copy(os.Stdout, resp.Body)
+		if err != nil {
+			log.Fatal(err, " :unable to read image build response")
+		}
+	*/
 	_, err = ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {

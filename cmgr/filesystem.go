@@ -239,7 +239,6 @@ func checksumIgnore(name string) bool {
 	return (name[0] == '.' && name != ".dockerignore") ||
 		name == "README" ||
 		name == "README.md" ||
-		name == "problem.json" ||
 		name == "problem.md" ||
 		name == "solver" ||
 		name == "cmgr.db"
