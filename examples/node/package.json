@@ -1,0 +1,11 @@
+{
+  "name": "node",
+  "version": "1.0.0",
+  "description": "An example of using Node for a CTF challenge.",
+  "main": "server.js",
+  "author": "ACI",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "express": "^4.17.1"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "Node Server",
+  "namespace": "cmgr/examples",
+  "challenge_type": "node",
+  "category": "Web Security",
+  "points": 50,
+  "description": "Now even challenges can be programmed in JavaScript!",
+  "details": "The website running at {{link('/')}}.",
+    "tags" : [
+        "node",
+        "example"
+    ],
+  "hints": [
+    "How do search engine robots know what <em>not</em> to crawl?",
+    "<a href='https://en.wikipedia.org/wiki/Robots_exclusion_standard' target='_blank'>This</a> might be helpful."
+  ],
+  "attributes": {
+    "organization": "ACI",
+    "event": "Sample"
+  }
+}
