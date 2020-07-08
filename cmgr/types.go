@@ -11,6 +11,7 @@ const (
 	DB_ENV           string = "CMGR_DB"
 	DIR_ENV          string = "CMGR_DIR"
 	ARTIFACT_DIR_ENV string = "CMGR_ARTIFACT_DIR"
+	REGISTRY_ENV     string = "CMGR_REGISTRY"
 )
 
 type Manager struct {
@@ -70,6 +71,7 @@ type BuildMetadata struct {
 	LastSolved   int                 `json:"last_solved"`
 	Challenge    ChallengeId         `json:"challenge_id"`
 	Instances    []*InstanceMetadata `json:"instances,omitempty"`
+	Tags         []string            `json:"tags"`
 }
 
 type ImageId int64

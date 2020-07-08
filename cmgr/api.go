@@ -37,12 +37,6 @@ func NewManager(logLevel LogLevel) *Manager {
 // builds.  It is important to resolve any issues/errors it raises before
 // making any other API calls for affected challenges.  Failure to follow this
 // guidance could result in inconsistencies in deployed challenges.
-//
-// @param      fp    The filepath to a directory to check for changes
-//                   (defaults to root of the challenge directory if passed the empty string)
-//
-// @return     A struct with a list of the challenges
-//
 func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 	if fp == "" {
 		fp = m.chalDir
@@ -108,12 +102,6 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 // challenge metadata.  Additionally, in the presence of errors it will not
 // perform any removals of challenge metadata (removing a built challenge is
 // considered an error).
-//
-// @param      fp    The filepath to a directory to check for changes
-//                   (defaults to root of the challenge directory if passed the empty string)
-//
-// @return     A struct with a list of the challenges
-//
 func (m *Manager) Update(fp string) *ChallengeUpdates {
 	cu := m.DetectChanges(fp)
 	errs := m.addChallenges(cu.Added)
@@ -140,38 +128,38 @@ func (m *Manager) Update(fp string) *ChallengeUpdates {
 	return cu
 }
 
-// Templates out a challenge and generates concrete images, flags, and lookup
-// values for the seeds provided.  This function may take a significant amount
-// of time because it will implicitly download base docker images and build
-// the artifacts.
-//
-// @param      challenge   The challenge to build
-// @param      seeds       The seeds to use for randomization and the flag
-// @param      flagFormat  The requested flag format
-//
-// @return     A list of build IDs (same order as seeds that were passed) or
-//             an error.
-//
+// Templates out a "challenge" and generates concrete images, flags, and
+// lookup values for the seeds provided which is called a "build" and returns
+// a list of identifiers that can be used to reference the build in other API
+// functions.  This function may take a significant amount of time because it
+// will implicitly download base docker images and build the artifacts.
 func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) ([]BuildId, error) {
 	return m.buildImages(challenge, seeds, flagFormat)
 }
 
+// Creates a running "instance" of the given build and returns its identifier
+// on success otherwise an error.
 func (m *Manager) Start(build BuildId) (InstanceId, error) {
 	return m.startContainers(build)
 }
 
+// Stops the running "instance".
 func (m *Manager) Stop(instance InstanceId) error {
 	return m.stopContainers(instance)
 }
 
+// Destroys the assoicated "build".
 func (m *Manager) Destroy(build BuildId) error {
 	return m.destroyImages(build)
 }
 
+// Runs the automated solver against the designated instance.
 func (m *Manager) CheckInstance(instance InstanceId) error {
 	return m.runSolver(instance)
 }
 
+// Obtains a list of challenges with minimal version information filled into
+// the metadata object.
 func (m *Manager) ListChallenges() []ChallengeId {
 	md, _ := m.listChallenges()
 	list := make([]ChallengeId, len(md), len(md))
