@@ -200,7 +200,7 @@ func challengeChecksum(h hash.Hash) filepath.WalkFunc {
 		}
 
 		// Ignore "hidden" files, READMEs, and problem configs
-		if challengeIgnore(info.Name()) {
+		if checksumIgnore(info.Name()) {
 
 			if info.IsDir() {
 				return filepath.SkipDir
@@ -235,11 +235,20 @@ func challengeChecksum(h hash.Hash) filepath.WalkFunc {
 	}
 }
 
-func challengeIgnore(name string) bool {
+func checksumIgnore(name string) bool {
 	return (name[0] == '.' && name != ".dockerignore") ||
 		name == "README" ||
 		name == "README.md" ||
 		name == "problem.json" ||
+		name == "problem.md" ||
+		name == "solver" ||
+		name == "cmgr.db"
+}
+
+func contextIgnore(name string) bool {
+	return (name[0] == '.' && name != ".dockerignore") ||
+		name == "README" ||
+		name == "README.md" ||
 		name == "problem.md" ||
 		name == "solver" ||
 		name == "cmgr.db"
@@ -277,7 +286,7 @@ func (m *Manager) createBuildContext(cm *ChallengeMetadata, dockerfile []byte) (
 		}
 
 		// Ignore "hidden" files, READMEs, and problem configs
-		if challengeIgnore(info.Name()) || challengeDir == path {
+		if contextIgnore(info.Name()) || challengeDir == path {
 
 			if info.IsDir() && challengeDir != path {
 				return filepath.SkipDir
