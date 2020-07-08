@@ -18,7 +18,7 @@ func main() {
 	}
 
 	log.SetFlags(0)
-	mgr := cmgr.NewManager(cmgr.DEBUG)
+	mgr := cmgr.NewManager(cmgr.DISABLED)
 
 	switch os.Args[1] {
 	case "list":
