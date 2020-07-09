@@ -22,8 +22,10 @@ tar xzvf ../cmgr.tar.gz
 ./cmgr update
 ```
 
-At this point, you could launch the REST server on port 42000 with `./cmgrd` or
-start interacting with it directly via the CLI with `./cmgr`.
+At this point, you could launch the REST server on port 42000 with `./cmgrd`
+or start interacting with it directly via the CLI with `./cmgr test --no-solve`
+which will launch an instance of each example challenge and print the associated
+port information.
 
 ## Configuration
 
@@ -35,6 +37,8 @@ currently uses the following variables:
 - *CMGR\_DIR*: directory containing all challenges (defaults to '.')
 
 - *CMGR\_ARTIFACT\_DIR*: directory for storing artifact bundles (defaults to '.')
+
+- *CMGR\_LOGGING*: logging verbosity for command clients (defaults to 'disabled' for `cmgr` and `warn` for `cmgrd`; valid options are `debug`, `info`, `warn`, `error`, and `disabled`)
 
 Additionally, we rely on the Docker SDK's ability to self-configure base off
 environment variables.  The documentation for those variables can be found at
