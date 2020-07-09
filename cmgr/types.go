@@ -46,7 +46,7 @@ type ChallengeMetadata struct {
 	Tags             []string          `json:"tags,omitempty"`
 	Attributes       map[string]string `json:"attributes,omitempty"`
 
-	SolveScript bool             `json:"has_solve_script,omitempty"`
+	SolveScript bool             `json:"solve_script,omitempty"`
 	Builds      []*BuildMetadata `json:"builds,omitempty"`
 }
 type ChallengeUpdates struct {

@@ -160,13 +160,9 @@ func (m *Manager) CheckInstance(instance InstanceId) error {
 
 // Obtains a list of challenges with minimal version information filled into
 // the metadata object.
-func (m *Manager) ListChallenges() []ChallengeId {
+func (m *Manager) ListChallenges() []*ChallengeMetadata {
 	md, _ := m.listChallenges()
-	list := make([]ChallengeId, len(md), len(md))
-	for i, challenge := range md {
-		list[i] = challenge.Id
-	}
-	return list
+	return md
 }
 
 func (m *Manager) GetChallengeMetadata(challenge ChallengeId) (*ChallengeMetadata, error) {

@@ -70,6 +70,13 @@ Relevant environment variables:
 `, os.Args[0])
 }
 
+type ChallengeListElement struct {
+	Id               cmgr.ChallengeId `json:"id"`
+	SourceChecksum   uint32           `json:"source_checksum"`
+	MetadataChecksum uint32           `json:"metadata_checksum"`
+	SolveScript      bool             `json:"solve_script"`
+}
+
 func (s state) listHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		w.WriteHeader(405)
@@ -77,7 +84,15 @@ func (s state) listHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	challenges := s.mgr.ListChallenges()
-	body, err := json.Marshal(challenges)
+
+	respList := make([]ChallengeListElement, len(challenges))
+	for i, challenge := range challenges {
+		respList[i].Id = challenge.Id
+		respList[i].SourceChecksum = challenge.SourceChecksum
+		respList[i].MetadataChecksum = challenge.MetadataChecksum
+		respList[i].SolveScript = challenge.SolveScript
+	}
+	body, err := json.Marshal(respList)
 	if err != nil {
 		w.WriteHeader(500)
 		w.Write([]byte(err.Error()))

@@ -458,15 +458,9 @@ func listCmd(mgr *cmgr.Manager, verbose bool) int {
 	for _, challenge := range challenges {
 		var line string
 		if verbose {
-			md, err := mgr.GetChallengeMetadata(challenge)
-			if err == nil {
-				line = fmt.Sprintf(`%s: "%s"`, challenge, md.Name)
-			} else {
-				line = fmt.Sprintf(`%s: (ERROR: %s)`, challenge, err)
-				exitCode = -1
-			}
+			line = fmt.Sprintf(`%s: "%s"`, challenge.Id, challenge.Name)
 		} else {
-			line = string(challenge)
+			line = string(challenge.Id)
 		}
 		fmt.Println(line)
 	}

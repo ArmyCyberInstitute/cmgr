@@ -31,7 +31,7 @@ paths:
           schema:
             type: "array"
             items:
-              type: string
+              $ref: "#/definitions/ChallengeListElement"
   /challenges/{challenge_id}:
     parameters:
       - name: "challenge_id"
@@ -164,6 +164,19 @@ paths:
         "200":
           description: "Indicates successfully stopped"
 definitions:
+  ChallengeListElement:
+    type: "object"
+    properties:
+      id:
+        type: string
+      source_checksum:
+        type: integer
+        format: int64
+      metadata_checksum:
+        type: integer
+        format: int64
+      solve_script:
+        type: boolean
   ChallengeMetadata:
     type: "object"
     properties:
