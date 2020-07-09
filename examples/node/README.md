@@ -1,13 +1,17 @@
 # `node` Challenge Type
 
 This challenge provides the basic framework for creating web-challenges that
-run as a PHP server.
+run as a node server.
 
 ## Usage
 
 In addition the the challenge description in `problem.json`, challenge authors
 need to provide the node application and supporting resources with the
-challenge directory as the root.
+challenge directory as the root.  In particular `package.json` and
+`package-lock.json` must both be present because the application is installed
+into the container using `npm ci --only=production` prior to running it.
+Additionally, the server entrypoint should use the value of `process.env.PORT`
+for the port to bind on rather than hard-coding a particular port.
 
 ## Automatic Templating
 
