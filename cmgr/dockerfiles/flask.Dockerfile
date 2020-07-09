@@ -7,7 +7,7 @@ RUN pip3 install flask
 RUN groupadd -r flask && useradd -r -d /app -g flask flask
 
 ENV FLASK_RUN_HOST=0.0.0.0
-ENV FLASK_RUN_PORT=8000
+ENV FLASK_RUN_PORT=5000
 
 # End of shared layers for all flask challenges
 
@@ -37,5 +37,5 @@ RUN sed -i -e "s|{{flag}}|$FLAG|g"                                           \
 WORKDIR /app
 CMD flask run
 
-EXPOSE 8000
-# PUBLISH 8000 AS http
+EXPOSE 5000
+# PUBLISH 5000 AS http

@@ -9,7 +9,7 @@ COPY --chown=app:app . /app
 WORKDIR /app
 USER app:app
 
-ENV PORT=8000
+ENV PORT=5000
 RUN npm ci --only=production
 
 # End of share layers for all builds of the same node challenge
@@ -29,5 +29,5 @@ RUN find /app \( -name *.js -o -name *.txt -o -name *.html \) \
 USER app:app
 CMD node server.js
 
-EXPOSE 8000
-# PUBLISH 8000 AS http
+EXPOSE 5000
+# PUBLISH 5000 AS http

@@ -212,7 +212,7 @@ func (m *Manager) createSolveContext(meta *BuildMetadata) io.Reader {
 		}
 
 		if meta.HasArtifacts {
-			sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%x", meta.Challenge, meta.Format, meta.Seed)))
+			sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", meta.Challenge, meta.Format, meta.Seed)))
 			sumStr := fmt.Sprintf("%x", sum)
 			artifactsPath := filepath.Join(m.artifactsDir, fmt.Sprintf("%s.tar.gz", sumStr))
 			artifactsFile, err := os.Open(artifactsPath)

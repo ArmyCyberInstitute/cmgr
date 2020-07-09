@@ -28,7 +28,7 @@ RUN find /app \( -name *.php -o -name *.txt -o -name *.html \) \
                         {} \;
 
 WORKDIR /app
-CMD php -S 0.0.0.0:8000
+CMD php -S 0.0.0.0:5000
 
-EXPOSE 8000
-# PUBLISH 8000 AS http
+EXPOSE 5000
+# PUBLISH 5000 AS http

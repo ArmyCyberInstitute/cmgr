@@ -1,30 +1,39 @@
 package cmgr
 
 func (m *Manager) getDockerfile(challengeType string) []byte {
-	if challengeType == "custom" {
-		return nil
-	}
+  if challengeType == "custom" {
+    return nil
+  }
 
-	return m.challengeDockerfiles[challengeType]
+  return m.challengeDockerfiles[challengeType]
 }
 
 func (m *Manager) initDockerfiles() {
-	m.challengeDockerfiles = make(map[string][]byte)
-	m.challengeDockerfiles["hacksport"] = []byte(hacksportDockerfile)
-	m.challengeDockerfiles["flask"] = []byte(flaskDockerfile)
-	m.challengeDockerfiles["node"] = []byte(nodeDockerfile)
-	m.challengeDockerfiles["php"] = []byte(phpDockerfile)
-	m.challengeDockerfiles["solver"] = []byte(solverDockerfile)
+  m.challengeDockerfiles = make(map[string][]byte)
+  m.challengeDockerfiles["hacksport"] = []byte(hacksportDockerfile)
+  m.challengeDockerfiles["flask"] = []byte(flaskDockerfile)
+  m.challengeDockerfiles["node"] = []byte(nodeDockerfile)
+  m.challengeDockerfiles["php"] = []byte(phpDockerfile)
+  m.challengeDockerfiles["solver"] = []byte(solverDockerfile)
 }
 
 const hacksportDockerfile = `
-FROM aci/hacksport
+FROM cmgr/hacksport
 
 COPY . /app
 
-ARG FORMAT
+ARG FLAG_FORMAT
 ARG FLAG
 ARG SEED
+
+RUN shell_manager config shared set -f deploy_secret  -v $(echo foo | md5sum | cut -d ' ' -f 1) \
+    && shell_manager install /app \
+    && shell_manager deploy all -c -i ${SEED} -f ${FLAG_FORMAT}
+
+CMD ["xinetd", "-dontfork"]
+
+EXPOSE 5000
+# PUBLISH 5000 AS challenge
 `
 
 const flaskDockerfile = `
@@ -37,7 +46,7 @@ RUN pip3 install flask
 RUN groupadd -r flask && useradd -r -d /app -g flask flask
 
 ENV FLASK_RUN_HOST=0.0.0.0
-ENV FLASK_RUN_PORT=8000
+ENV FLASK_RUN_PORT=5000
 
 # End of shared layers for all flask challenges
 
@@ -67,8 +76,8 @@ RUN sed -i -e "s|{{flag}}|$FLAG|g"                                           \
 WORKDIR /app
 CMD flask run
 
-EXPOSE 8000
-# PUBLISH 8000 AS http
+EXPOSE 5000
+# PUBLISH 5000 AS http
 `
 
 const phpDockerfile = `
@@ -102,10 +111,10 @@ RUN find /app \( -name *.php -o -name *.txt -o -name *.html \) \
                         {} \;
 
 WORKDIR /app
-CMD php -S 0.0.0.0:8000
+CMD php -S 0.0.0.0:5000
 
-EXPOSE 8000
-# PUBLISH 8000 AS http
+EXPOSE 5000
+# PUBLISH 5000 AS http
 `
 
 const nodeDockerfile = `
@@ -120,7 +129,7 @@ COPY --chown=app:app . /app
 WORKDIR /app
 USER app:app
 
-ENV PORT=8000
+ENV PORT=5000
 RUN npm ci --only=production
 
 # End of share layers for all builds of the same node challenge
@@ -140,8 +149,8 @@ RUN find /app \( -name *.js -o -name *.txt -o -name *.html \) \
 USER app:app
 CMD node server.js
 
-EXPOSE 8000
-# PUBLISH 8000 AS http
+EXPOSE 5000
+# PUBLISH 5000 AS http
 `
 
 const solverDockerfile = `
