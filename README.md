@@ -98,7 +98,8 @@ built and installed.  To get started, you can run:
 git clone https://github.com/ArmyCyberInstitute/cmgr
 cd cmgr
 go get -v -t -d ./...
-go build -v ./...
+mkdir bin
+go build -v -o bin ./...
 ```
 
 ## Acknowledgments
