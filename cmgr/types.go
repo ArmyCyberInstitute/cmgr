@@ -12,6 +12,7 @@ const (
 	DIR_ENV          string = "CMGR_DIR"
 	ARTIFACT_DIR_ENV string = "CMGR_ARTIFACT_DIR"
 	REGISTRY_ENV     string = "CMGR_REGISTRY"
+	LOGGING_ENV      string = "CMGR_LOGGING"
 )
 
 type Manager struct {
