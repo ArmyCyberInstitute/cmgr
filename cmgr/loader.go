@@ -194,6 +194,7 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 		}
 
 		metadata.ChallengeType = "hacksport"
+		metadata.Namespace = "hacksport"
 		metadata.Details = metadata.Description
 		metadata.Description = ""
 		metadata.SolveScript = false

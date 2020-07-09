@@ -17,8 +17,23 @@ func main() {
 		os.Exit(0)
 	}
 
+	var logLevel cmgr.LogLevel
+	log_env, _ := os.LookupEnv(cmgr.LOGGING_ENV)
+	switch log_env {
+	case "debug":
+		logLevel = cmgr.DEBUG
+	case "info":
+		logLevel = cmgr.INFO
+	case "warn":
+		logLevel = cmgr.WARN
+	case "error":
+		logLevel = cmgr.ERROR
+	default:
+		logLevel = cmgr.DISABLED
+	}
+
 	log.SetFlags(0)
-	mgr := cmgr.NewManager(cmgr.DISABLED)
+	mgr := cmgr.NewManager(logLevel)
 
 	switch os.Args[1] {
 	case "list":
