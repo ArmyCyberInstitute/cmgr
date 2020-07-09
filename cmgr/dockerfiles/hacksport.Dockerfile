@@ -1,4 +1,4 @@
-FROM cmgr/shellmanager
+FROM cmgr/hacksport
 
 COPY . /app
 
