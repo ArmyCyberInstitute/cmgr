@@ -18,7 +18,7 @@ func (m *Manager) initDockerfiles() {
 }
 
 const hacksportDockerfile = `
-FROM aci/shellmanager
+FROM cmgr/hacksport
 
 COPY . /app
 

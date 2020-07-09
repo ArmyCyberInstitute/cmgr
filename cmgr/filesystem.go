@@ -146,10 +146,11 @@ func (m *Manager) findChallenges(challengeMap *map[ChallengeId]*ChallengeMetadat
 	}
 }
 
-// Strips the name field down to only alphanumeric runes.
+// Strips the name field down to only alphanumeric runes with dashes.  Strips
+// leading and trailing dashes to comply with docker naming conventions.
 func sanitizeName(dirty string) string {
 	re := regexp.MustCompile(`[^a-zA-Z0-9]`)
-	return re.ReplaceAllLiteralString(strings.ToLower(dirty), "-")
+	return strings.Trim(re.ReplaceAllLiteralString(strings.ToLower(dirty), "-"), "-")
 }
 
 func (m *Manager) normalizeDirPath(dir string) (string, error) {

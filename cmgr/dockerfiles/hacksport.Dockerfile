@@ -1,4 +1,4 @@
-FROM aci/shellmanager
+FROM cmgr/shellmanager
 
 COPY . /app
 
