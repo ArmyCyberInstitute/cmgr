@@ -83,7 +83,14 @@ func (s state) listHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	challenges := s.mgr.ListChallenges()
+	query := r.URL.Query()
+	tags, ok := query["tags"]
+	var challenges []*cmgr.ChallengeMetadata
+	if !ok {
+		challenges = s.mgr.ListChallenges()
+	} else {
+		challenges = s.mgr.SearchChallenges(tags)
+	}
 
 	respList := make([]ChallengeListElement, len(challenges))
 	for i, challenge := range challenges {

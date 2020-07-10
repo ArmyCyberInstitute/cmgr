@@ -50,7 +50,24 @@ func main() {
 		}
 
 		verbose := len(os.Args) > 2 && os.Args[2] == "--verbose"
-		os.Exit(listCmd(mgr, verbose))
+		challenges := mgr.ListChallenges()
+		printChallenges(challenges, verbose)
+		os.Exit(0)
+	case "search":
+		verbose := false
+		tags := []string{}
+		if len(os.Args) > 2 {
+			verbose = os.Args[2] == "--verbose"
+			idx := 2
+			if verbose {
+				idx += 1
+			}
+			tags = os.Args[idx:]
+		}
+
+		challenges := mgr.SearchChallenges(tags)
+		printChallenges(challenges, verbose)
+		os.Exit(0)
 	case "info":
 		if len(os.Args) > 3 {
 			fmt.Println("error: too many arguments")
@@ -452,9 +469,7 @@ func main() {
 	}
 }
 
-func listCmd(mgr *cmgr.Manager, verbose bool) int {
-	challenges := mgr.ListChallenges()
-	exitCode := 0
+func printChallenges(challenges []*cmgr.ChallengeMetadata, verbose bool) {
 	for _, challenge := range challenges {
 		var line string
 		if verbose {
@@ -464,7 +479,6 @@ func listCmd(mgr *cmgr.Manager, verbose bool) int {
 		}
 		fmt.Println(line)
 	}
-	return exitCode
 }
 
 func printUsage() {
@@ -474,6 +488,10 @@ Usage: %s <command> [<args>]
 Available commands:
   list [--verbose]
       lists all of the challenges currently indexed
+
+  search [--verbose] [tag ...]
+      lists the challenges that match on all of the listed tags (alias of list
+      if no tags provided)
 
   info [<path>]
       provides information on all challenges underneath the provided path

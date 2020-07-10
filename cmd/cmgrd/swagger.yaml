@@ -20,6 +20,15 @@ schemes:
 paths:
   /challenges:
     get:
+      parameters:
+        - name: "tags"
+          in: "query"
+          description: "Seach for available challenges limiting to given tags"
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
       tags: [challenges]
       produces: ["application/json"]
       summary: "Lists all available challenges"

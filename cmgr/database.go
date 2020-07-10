@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
@@ -53,7 +54,29 @@ func (m *Manager) initDatabase() error {
 // Gets just the ID and checksum for all known challenges
 func (m *Manager) listChallenges() ([]*ChallengeMetadata, error) {
 	metadata := []*ChallengeMetadata{}
-	err := m.db.Select(&metadata, "SELECT id, path, sourcechecksum, metadatachecksum, solvescript FROM challenges ORDER BY id;")
+	err := m.db.Select(&metadata, "SELECT id, name, path, sourcechecksum, metadatachecksum, solvescript FROM challenges ORDER BY id;")
+	return metadata, err
+}
+
+func (m *Manager) searchChallenges(tags []string) ([]*ChallengeMetadata, error) {
+	metadata := []*ChallengeMetadata{}
+	var err error
+	if len(tags) == 0 {
+		return m.listChallenges()
+	}
+
+	interfaceTags := make([]interface{}, len(tags))
+	for i, tag := range tags {
+		interfaceTags[i] = strings.ReplaceAll(tag, "*", "%")
+	}
+	tagBaseQuery := "SELECT challenge FROM tags WHERE tag LIKE ?"
+	subQuery := "(" +
+		tagBaseQuery +
+		strings.Repeat(" INTERSECT "+tagBaseQuery, len(tags)-1) +
+		")"
+	query := fmt.Sprintf("SELECT id, name, path, sourcechecksum, metadatachecksum, solvescript FROM challenges WHERE id IN %s ORDER BY id;", subQuery)
+	err = m.db.Select(&metadata, query, interfaceTags...)
+
 	return metadata, err
 }
 

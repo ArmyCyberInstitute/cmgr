@@ -165,6 +165,15 @@ func (m *Manager) ListChallenges() []*ChallengeMetadata {
 	return md
 }
 
+// Obtains a list of challenges which match on all of the given tags.  If no
+// tags are passed, then it returns the same results as `ListChallenges`.
+// Wildcards are allowed as either '*' or '%' and the search is ASCII case
+// insensitive.
+func (m *Manager) SearchChallenges(tags []string) []*ChallengeMetadata {
+	md, _ := m.searchChallenges(tags)
+	return md
+}
+
 func (m *Manager) GetChallengeMetadata(challenge ChallengeId) (*ChallengeMetadata, error) {
 	return m.lookupChallengeMetadata(challenge)
 }
