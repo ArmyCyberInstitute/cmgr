@@ -3,7 +3,6 @@ package cmgr
 import (
 	"archive/tar"
 	"compress/gzip"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,10 +68,11 @@ func (m *Manager) runSolver(instance InstanceId) error {
 
 	hConfig := container.HostConfig{}
 
+	netname := iMeta.getNetworkName()
 	nConfig := network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
-			"cmgr-internal": {
-				NetworkID: iMeta.Network,
+			netname: {
+				NetworkID: netname,
 				Aliases:   []string{"solver"},
 			},
 		},
@@ -212,9 +212,7 @@ func (m *Manager) createSolveContext(meta *BuildMetadata) io.Reader {
 		}
 
 		if meta.HasArtifacts {
-			sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", meta.Challenge, meta.Format, meta.Seed)))
-			sumStr := fmt.Sprintf("%x", sum)
-			artifactsPath := filepath.Join(m.artifactsDir, fmt.Sprintf("%s.tar.gz", sumStr))
+			artifactsPath := filepath.Join(m.artifactsDir, meta.getArtifactsFilename())
 			artifactsFile, err := os.Open(artifactsPath)
 			if err != nil {
 				w.CloseWithError(err)

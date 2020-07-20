@@ -192,15 +192,15 @@ func main() {
 			seeds = append(seeds, int(seed))
 		}
 
-		ids, err := mgr.Build(challenge, seeds, format)
+		builds, err := mgr.Build(challenge, seeds, format)
 		if err != nil {
 			fmt.Printf("error: %s\n", err)
 			os.Exit(-1)
 		}
 
 		fmt.Println("Build IDs:")
-		for _, id := range ids {
-			fmt.Printf("    %d\n", id)
+		for _, build := range builds {
+			fmt.Printf("    %d\n", build.Id)
 		}
 		os.Exit(0)
 	case "start":
@@ -625,18 +625,18 @@ func getMetaByDir(m *cmgr.Manager, dir string) []*cmgr.ChallengeMetadata {
 func runTest(mgr *cmgr.Manager, cMeta *cmgr.ChallengeMetadata, solve, required bool) bool {
 
 	// Build
-	buildIds, err := mgr.Build(cMeta.Id, []int{42}, "flag{%s}")
+	builds, err := mgr.Build(cMeta.Id, []int{42}, "flag{%s}")
 	if err != nil {
 		fmt.Printf("error (%s): could not build: %s\n", cMeta.Id, err)
 		return false
 	}
-	build := buildIds[0]
+	build := builds[0]
 	if solve {
-		defer mgr.Destroy(build)
+		defer mgr.Destroy(build.Id)
 	}
 
 	// Start
-	instance, err := mgr.Start(build)
+	instance, err := mgr.Start(build.Id)
 	if err != nil {
 		fmt.Printf("error (%s): could not start instance: %s\n", cMeta.Id, err)
 		return false
@@ -656,12 +656,6 @@ func runTest(mgr *cmgr.Manager, cMeta *cmgr.ChallengeMetadata, solve, required b
 		fmt.Printf("error (%s): no solver found\n", cMeta.Id)
 		return false
 	} else if !solve {
-		bMeta, err := mgr.GetBuildMetadata(build)
-		if err != nil {
-			fmt.Printf("error (%s): could not get build metadata: %s\n", cMeta.Id, err)
-			return false
-		}
-
 		iMeta, err := mgr.GetInstanceMetadata(instance)
 		if err != nil {
 			fmt.Printf("error (%s): could not get instance metadata: %s\n", cMeta.Id, err)
@@ -669,22 +663,22 @@ func runTest(mgr *cmgr.Manager, cMeta *cmgr.ChallengeMetadata, solve, required b
 		}
 
 		// Interactive so print some useful information
-		fmt.Printf("%s|%d|%d\n", cMeta.Id, build, instance)
-		fmt.Printf("    flag: %s\n", bMeta.Flag)
+		fmt.Printf("%s|%d|%d\n", cMeta.Id, build.Id, instance)
+		fmt.Printf("    flag: %s\n", build.Flag)
 
-		if len(bMeta.LookupData) > 0 {
+		if len(build.LookupData) > 0 {
 			fmt.Println("    lookup data:")
-			for k, v := range bMeta.LookupData {
+			for k, v := range build.LookupData {
 				fmt.Printf("        %s: %s\b", k, v)
 			}
 		}
 
-		if bMeta.HasArtifacts {
+		if build.HasArtifacts {
 			artDir, isSet := os.LookupEnv(cmgr.ARTIFACT_DIR_ENV)
 			if !isSet {
 				artDir = "."
 			}
-			fmt.Printf("    artifacts file: %s.tar.gz\n", filepath.Join(artDir, bMeta.Images[0].DockerId))
+			fmt.Printf("    artifacts file: %s.tar.gz\n", filepath.Join(artDir, build.Images[0].DockerId))
 		}
 
 		if len(iMeta.Ports) > 0 {

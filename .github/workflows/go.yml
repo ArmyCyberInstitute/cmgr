@@ -5,8 +5,10 @@ on:
   pull_request:
     branches: [ master ]
 
-jobs:
+env:
+  CMGR_LOGGING: debug
 
+jobs:
   build:
     name: Build
     runs-on: ${{ matrix.os }}

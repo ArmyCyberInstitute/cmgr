@@ -43,26 +43,41 @@ func (m *Manager) initDocker() error {
 	return nil
 }
 
-func makeFlag(format, rand string) *string {
+func (b *BuildMetadata) makeFlag() *string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", b.Challenge, b.Format, b.Seed)))
+	sumStr := fmt.Sprintf("%x", sum)
+
 	flag := new(string)
-	if len(rand) > 8 {
-		rand = rand[:8]
+	if len(sumStr) > 8 {
+		sumStr = sumStr[:8]
 	}
-	*flag = fmt.Sprintf(format, rand)
+	*flag = fmt.Sprintf(b.Format, sumStr)
 	return flag
 }
 
-func (m *Manager) buildImages(challenge ChallengeId, seeds []int, format string) ([]BuildId, error) {
-	cMeta, err := m.lookupChallengeMetadata(challenge)
+func (b *BuildMetadata) getArtifactsFilename() string {
+	return fmt.Sprintf("%d.tar.gz", b.Id)
+}
+
+func (i *InstanceMetadata) getNetworkName() string {
+	return fmt.Sprintf("cmgr-%d", i.Id)
+}
+
+func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
+	if len(builds) == 0 {
+		return nil
+	}
+
+	cMeta, err := m.lookupChallengeMetadata(builds[0].Challenge)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	updates := m.DetectChanges(filepath.Dir(cMeta.Path))
 	if len(updates.Errors) > 0 {
 		err = fmt.Errorf("errors detected in directory for '%s' run 'update'", cMeta.Id)
 		m.log.error(err)
-		return nil, err
+		return err
 	}
 
 	modified := true
@@ -75,52 +90,58 @@ func (m *Manager) buildImages(challenge ChallengeId, seeds []int, format string)
 	if modified {
 		err = fmt.Errorf("'%s' has changed since last update", cMeta.Id)
 		m.log.error(err)
-		return nil, err
+		return err
 	}
 
 	buildCtxFile, err := m.createBuildContext(cMeta, m.getDockerfile(cMeta.ChallengeType))
 	if err != nil {
 		m.log.errorf("failed to create build context: %s", err)
-		return nil, err
+		return err
 	}
 	defer os.Remove(buildCtxFile)
 
-	builds := make([]*BuildMetadata, 0, len(seeds))
-	for _, seed := range seeds {
+	for _, build := range builds {
 		buildCtx, err := os.Open(buildCtxFile)
 		if err != nil {
-			m.log.errorf("failed to seek to beginning of file for %d: %s", seed, err)
-			return nil, err
+			m.log.errorf("failed to seek to beginning of file for %d: %s", build.Seed, err)
+			return err
 		}
 
-		build, err := m.generateBuild(cMeta, buildCtx, seed, format)
+		err = m.openBuild(build)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		builds = append(builds, build)
+
+		err = m.executeBuild(cMeta, build, buildCtx)
+		if err != nil {
+			m.removeBuildMetadata(build.Id)
+			return err
+		}
+
+		err = m.finalizeBuild(build)
+		if err != nil {
+			return err
+		}
 	}
 
-	return m.saveBuildMetadata(builds)
+	return nil
 }
 
-func (m *Manager) generateBuild(cMeta *ChallengeMetadata, buildCtx io.Reader, seed int, format string) (*BuildMetadata, error) {
-	seedStr := fmt.Sprintf("%d", seed)
+func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, buildCtx io.Reader) error {
+	seedStr := fmt.Sprintf("%d", bMeta.Seed)
 
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%s", cMeta.Id, format, seedStr)))
-	sumStr := fmt.Sprintf("%x", sum)
-
-	image := Image{DockerId: sumStr, Ports: []string{}}
+	image := Image{DockerId: fmt.Sprintf("%d", bMeta.Id), Ports: []string{}}
 	for _, port := range cMeta.PortMap {
 		image.Ports = append(image.Ports, fmt.Sprintf("%d/tcp", port))
 	}
 	images := []Image{image} // TODO(jrolli): Figure out how this expands to multi-image challenges
 
 	// Setup build options
-	imageName := fmt.Sprintf("%s:%x", cMeta.Id, sum)
+	imageName := fmt.Sprintf("%s:%d", cMeta.Id, bMeta.Id)
 	opts := types.ImageBuildOptions{BuildArgs: map[string]*string{
-		"FLAG_FORMAT": &format,
+		"FLAG_FORMAT": &bMeta.Format,
 		"SEED":        &seedStr,
-		"FLAG":        makeFlag(format, sumStr),
+		"FLAG":        bMeta.makeFlag(),
 	},
 		Tags: []string{imageName},
 	}
@@ -130,7 +151,7 @@ func (m *Manager) generateBuild(cMeta *ChallengeMetadata, buildCtx io.Reader, se
 	resp, err := m.cli.ImageBuild(m.ctx, buildCtx, opts)
 	if err != nil {
 		m.log.errorf("failed to build base image: %s", err)
-		return nil, err
+		return err
 	}
 	/*
 		TODO: Code to read response, necessary for catching build errors
@@ -144,7 +165,7 @@ func (m *Manager) generateBuild(cMeta *ChallengeMetadata, buildCtx io.Reader, se
 	resp.Body.Close()
 	if err != nil {
 		m.log.errorf("failed to read build response from docker: %s", err)
-		return nil, err
+		return err
 	}
 
 	cConfig := container.Config{Image: imageName}
@@ -154,7 +175,7 @@ func (m *Manager) generateBuild(cMeta *ChallengeMetadata, buildCtx io.Reader, se
 	respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, "")
 	if err != nil {
 		m.log.errorf("failed to create artifacts container: %s", err)
-		return nil, err
+		return err
 	}
 
 	cid := respCC.ID
@@ -166,7 +187,7 @@ func (m *Manager) generateBuild(cMeta *ChallengeMetadata, buildCtx io.Reader, se
 	metaFile, _, err := m.cli.CopyFromContainer(m.ctx, cid, "/challenge")
 	if err != nil {
 		m.log.errorf("could not find '/challenge' in container: %s", err)
-		return nil, err
+		return err
 	}
 	defer metaFile.Close()
 
@@ -181,14 +202,14 @@ func (m *Manager) generateBuild(cMeta *ChallengeMetadata, buildCtx io.Reader, se
 			data, err := ioutil.ReadAll(cTar)
 			if err != nil {
 				m.log.errorf("could not read metadata.json: %s", err)
-				return nil, err
+				return err
 			}
 
 			lookups = make(map[string]string)
 			err = json.Unmarshal(data, &lookups)
 			if err != nil {
 				m.log.errorf("could not decode build metadata JSON file: %s", err)
-				return nil, err
+				return err
 			}
 
 			var ok bool
@@ -196,24 +217,24 @@ func (m *Manager) generateBuild(cMeta *ChallengeMetadata, buildCtx io.Reader, se
 			if !ok {
 				err = errors.New("build metadata missing the flag")
 				m.log.error(err)
-				return nil, err
+				return err
 			}
 
 			delete(lookups, "flag")
 		} else if hdr.Name == "challenge/artifacts.tar.gz" {
-			artifactsFileName := fmt.Sprintf("%s.tar.gz", sumStr)
+			artifactsFileName := bMeta.getArtifactsFilename()
 			// Iterate through reading filenames and copying over the tarball
 			artifactsFile, err := os.Create(filepath.Join(m.artifactsDir, artifactsFileName))
 			if err != nil {
 				m.log.errorf("could not create cached artifacts archive: %s", err)
-				return nil, err
+				return err
 			}
 			defer artifactsFile.Close()
 
 			srcGz, err := gzip.NewReader(cTar)
 			if err != nil {
 				m.log.errorf("could not gzip read artifacts file: %s", err)
-				return nil, err
+				return err
 			}
 
 			dstGz := gzip.NewWriter(artifactsFile)
@@ -227,89 +248,82 @@ func (m *Manager) generateBuild(cMeta *ChallengeMetadata, buildCtx io.Reader, se
 				err = dstTar.WriteHeader(h)
 				if err != nil {
 					m.log.errorf("could not write header to artifacts file: %s", err)
-					return nil, err
+					return err
 				}
 
 				if h.Typeflag != tar.TypeDir {
 					_, err = io.Copy(dstTar, srcTar)
 					if err != nil {
 						m.log.errorf("could not write body to artifacts file: %s", err)
-						return nil, err
+						return err
 					}
 				}
 			}
 
 			if err != io.EOF {
 				m.log.errorf("error occurred during copy of artifacts: %s", err)
-				return nil, err
+				return err
 			}
 
 			err = dstTar.Close()
 			if err != nil {
 				m.log.errorf("error closing artifacts tar file: %s", err)
-				return nil, err
+				return err
 			}
 
 			err = srcGz.Close()
 			if err != nil {
 				m.log.errorf("error closing GZIP decoder: %s", err)
-				return nil, err
+				return err
 			}
 
 			err = dstGz.Close()
 			if err != nil {
 				m.log.errorf("error closing GZIP encoder: %s", err)
-				return nil, err
+				return err
 			}
 
 			err = artifactsFile.Close()
 			if err != nil {
 				m.log.errorf("error occurred when closing artifacts: %s", err)
-				return nil, err
+				return err
 			}
 		}
 	}
 
 	if err != io.EOF {
 		m.log.errorf("could not read metadata file: %s", err)
-		return nil, err
+		return err
 	}
 
 	if flag == "" {
 		err = errors.New("'flag' missing in metadata.json")
 		m.log.error(err)
-		return nil, err
+		return err
 	}
 
-	bMeta := BuildMetadata{
-		Flag:         flag,
-		Seed:         seed,
-		Format:       format,
-		LookupData:   lookups,
-		Images:       images,
-		HasArtifacts: len(files) > 0,
-		Challenge:    cMeta.Id,
-	}
+	bMeta.Flag = flag
+	bMeta.LookupData = lookups
+	bMeta.Images = images
+	bMeta.HasArtifacts = len(files) > 0
 
 	m.log.debugf("%v", bMeta)
 
-	return &bMeta, nil
+	return nil
 }
 
-func (m *Manager) startContainers(build BuildId) (InstanceId, error) {
-	// Get build metadata
-	bMeta, err := m.lookupBuildMetadata(build)
+func (m *Manager) startContainers(build *BuildMetadata) (InstanceId, error) {
+	iMeta := &InstanceMetadata{
+		Build:      build.Id,
+		Ports:      make(map[string]int),
+		Containers: []string{},
+	}
+	err := m.openInstance(iMeta)
 	if err != nil {
 		return 0, err
 	}
 
-	iMeta := InstanceMetadata{
-		Build:      bMeta.Id,
-		Ports:      make(map[string]int),
-		Containers: []string{},
-	}
-
-	revPortMap, err := m.getReversePortMap(bMeta.Challenge)
+	revPortMap, err := m.getReversePortMap(build.Challenge)
 	if err != nil {
 		return 0, err
 	}
@@ -318,15 +332,15 @@ func (m *Manager) startContainers(build BuildId) (InstanceId, error) {
 	netSpec := types.NetworkCreate{
 		Driver: "bridge",
 	}
-	respNC, err := m.cli.NetworkCreate(m.ctx, "cmgr-internal", netSpec)
+	netname := iMeta.getNetworkName()
+	_, err = m.cli.NetworkCreate(m.ctx, netname, netSpec)
 	if err != nil {
-		m.log.errorf("could not create challenge network: %s", err)
+		m.log.errorf("could not create challenge network (%s): %s", netname, err)
 		return 0, err
 	}
-	iMeta.Network = respNC.ID
 
 	// Call create in docker
-	for _, image := range bMeta.Images {
+	for _, image := range build.Images {
 		exposedPorts := nat.PortSet{}
 		publishedPorts := nat.PortMap{}
 		for _, portStr := range image.Ports {
@@ -336,7 +350,7 @@ func (m *Manager) startContainers(build BuildId) (InstanceId, error) {
 		}
 
 		cConfig := container.Config{
-			Image:        fmt.Sprintf("%s:%s", bMeta.Challenge, image.DockerId),
+			Image:        fmt.Sprintf("%s:%s", build.Challenge, image.DockerId),
 			Hostname:     "challenge",
 			ExposedPorts: exposedPorts,
 		}
@@ -347,8 +361,8 @@ func (m *Manager) startContainers(build BuildId) (InstanceId, error) {
 
 		nConfig := network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{
-				"cmgr-internal": {
-					NetworkID: iMeta.Network,
+				netname: {
+					NetworkID: netname,
 					Aliases:   []string{"challenge"},
 				},
 			},
@@ -390,8 +404,7 @@ func (m *Manager) startContainers(build BuildId) (InstanceId, error) {
 		}
 	}
 
-	// Store instance metadata
-	return m.saveInstanceMetadata(&iMeta)
+	return iMeta.Id, m.finalizeInstance(iMeta)
 }
 
 func (m *Manager) stopContainers(instance InstanceId) error {
@@ -416,7 +429,7 @@ func (m *Manager) stopContainers(instance InstanceId) error {
 		}
 	}
 
-	err = m.cli.NetworkRemove(m.ctx, iMeta.Network)
+	err = m.cli.NetworkRemove(m.ctx, iMeta.getNetworkName())
 	if err != nil {
 		m.log.errorf("failed to remove network: %s", err)
 		return err

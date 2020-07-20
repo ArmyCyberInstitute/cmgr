@@ -154,28 +154,16 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 			err = json.Unmarshal(data, &buildReq)
 		}
 
-		var buildIds []cmgr.BuildId
+		var builds []*cmgr.BuildMetadata
 		if err == nil {
 			if buildReq.FlagFormat == "" {
 				buildReq.FlagFormat = "flag{%s}"
 			}
-			buildIds, err = s.mgr.Build(challenge, buildReq.Seeds, buildReq.FlagFormat)
-		}
-
-		var buildMeta []*cmgr.BuildMetadata
-		if err == nil {
-			var bMeta *cmgr.BuildMetadata
-			for _, build := range buildIds {
-				bMeta, err = s.mgr.GetBuildMetadata(build)
-				if err != nil {
-					break
-				}
-				buildMeta = append(buildMeta, bMeta)
-			}
+			builds, err = s.mgr.Build(challenge, buildReq.Seeds, buildReq.FlagFormat)
 		}
 
 		if err == nil {
-			body, err = json.Marshal(buildMeta)
+			body, err = json.Marshal(builds)
 		}
 	default:
 		w.WriteHeader(405)

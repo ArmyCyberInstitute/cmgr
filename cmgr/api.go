@@ -1,8 +1,13 @@
 package cmgr
 
 import (
+	"errors"
 	"fmt"
+	"math/rand"
+	"time"
 )
+
+const manualSchemaPrefix = "manual-"
 
 // Creates a new instance of the challenge manager validating the appropriate
 // environment variables in the process.  A return value of `nil` indicates
@@ -10,6 +15,7 @@ import (
 func NewManager(logLevel LogLevel) *Manager {
 	mgr := new(Manager)
 	mgr.log = newLogger(logLevel)
+	mgr.rand = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	if err := mgr.setDirectories(); err != nil {
 		return nil
@@ -133,23 +139,74 @@ func (m *Manager) Update(fp string) *ChallengeUpdates {
 // a list of identifiers that can be used to reference the build in other API
 // functions.  This function may take a significant amount of time because it
 // will implicitly download base docker images and build the artifacts.
-func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) ([]BuildId, error) {
-	return m.buildImages(challenge, seeds, flagFormat)
+func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) ([]*BuildMetadata, error) {
+	schema := fmt.Sprintf("%s%x", manualSchemaPrefix, m.rand.Int63())
+	schemaVersion := uint32(0)
+	instanceCount := -1
+
+	builds := make([]*BuildMetadata, len(seeds))
+	for i := range builds {
+		builds[i] = &BuildMetadata{
+			Seed:          seeds[i],
+			Format:        flagFormat,
+			Challenge:     challenge,
+			Schema:        schema,
+			SchemaVersion: schemaVersion,
+			InstanceCount: instanceCount,
+		}
+	}
+	err := m.generateBuilds(builds)
+	return builds, err
 }
 
 // Creates a running "instance" of the given build and returns its identifier
 // on success otherwise an error.
 func (m *Manager) Start(build BuildId) (InstanceId, error) {
-	return m.startContainers(build)
+	// Get build metadata
+	bMeta, err := m.lookupBuildMetadata(build)
+	if err != nil {
+		return 0, err
+	}
+
+	if bMeta.InstanceCount != DYNAMIC_INSTANCES {
+		return 0, errors.New("locked build: change the schema definition to start more instances")
+	}
+
+	return m.startContainers(bMeta)
 }
 
 // Stops the running "instance".
 func (m *Manager) Stop(instance InstanceId) error {
+	// Get instance metadata
+	iMeta, err := m.lookupInstanceMetadata(instance)
+	if err != nil {
+		return err
+	}
+
+	// Get build metadata
+	bMeta, err := m.lookupBuildMetadata(iMeta.Build)
+	if err != nil {
+		return err
+	}
+
+	if bMeta.InstanceCount != DYNAMIC_INSTANCES {
+		return errors.New("locked build: change the schema definition to stop this instance")
+	}
 	return m.stopContainers(instance)
 }
 
 // Destroys the assoicated "build".
 func (m *Manager) Destroy(build BuildId) error {
+	// Get build metadata
+	bMeta, err := m.lookupBuildMetadata(build)
+	if err != nil {
+		return err
+	}
+
+	if bMeta.Schema[:len(manualSchemaPrefix)] != manualSchemaPrefix {
+		return errors.New("locked build: change the schema definition to destroy this build")
+	}
+
 	return m.destroyImages(build)
 }
 

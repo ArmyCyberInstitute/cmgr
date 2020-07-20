@@ -2,6 +2,7 @@ package cmgr
 
 import (
 	"context"
+	"math/rand"
 
 	"github.com/docker/docker/client"
 	"github.com/jmoiron/sqlx"
@@ -13,6 +14,9 @@ const (
 	ARTIFACT_DIR_ENV string = "CMGR_ARTIFACT_DIR"
 	REGISTRY_ENV     string = "CMGR_REGISTRY"
 	LOGGING_ENV      string = "CMGR_LOGGING"
+
+	DYNAMIC_INSTANCES int = -1
+	PENDING_REMOVAL   int = -2
 )
 
 type Manager struct {
@@ -24,6 +28,7 @@ type Manager struct {
 	db                   *sqlx.DB
 	dbPath               string
 	challengeDockerfiles map[string][]byte
+	rand                 *rand.Rand
 }
 
 type ChallengeId string
@@ -72,7 +77,10 @@ type BuildMetadata struct {
 	LastSolved   int                 `json:"last_solved"`
 	Challenge    ChallengeId         `json:"challenge_id"`
 	Instances    []*InstanceMetadata `json:"instances,omitempty"`
-	Tags         []string            `json:"tags"`
+
+	Schema        string `json:"schema"`
+	SchemaVersion uint32 `json:"schema_version"`
+	InstanceCount int    `json:"instance_count"`
 }
 
 type ImageId int64
@@ -90,5 +98,4 @@ type InstanceMetadata struct {
 	Containers []string       `json:"containers"`
 	LastSolved int            `json:"last_solved"`
 	Build      BuildId        `json:"build_id"`
-	Network    string         `json:"network"`
 }
