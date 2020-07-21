@@ -29,7 +29,7 @@ const openBuildQuery string = `
     	instancecount = excluded.instancecount;`
 
 func (m *Manager) openBuild(build *BuildMetadata) error {
-	res, err := m.db.NamedExec(openBuildQuery, build)
+	_, err := m.db.NamedExec(openBuildQuery, build)
 	m.log.debugf("Opening %v", build)
 
 	if err != nil {
@@ -37,28 +37,20 @@ func (m *Manager) openBuild(build *BuildMetadata) error {
 		return err
 	}
 
-	buildId, err := res.LastInsertId()
+	m.log.debug("Running select...")
+	rows, err := m.db.NamedQuery("SELECT id, flag, hasartifacts, lastsolved FROM builds WHERE schema=:schema AND format=:format AND challenge=:challenge AND seed=:seed;", build)
 	if err != nil {
-		m.log.errorf("failed to get build ID (%s): %s", build.Challenge, err)
-		return err
-	} else if buildId == 0 {
-		m.log.debug("Running select...")
-		rows, err := m.db.NamedQuery("SELECT id, flag, hasartifacts, lastsolved FROM builds WHERE schema=:schema AND format=:format AND challenge=:challenge AND seed=:seed;", build)
-		if err != nil {
-			m.log.errorf("failed to find build: %s", err)
-		} else if !rows.Next() {
-			m.log.error("found no rows when exactly one expected")
-		}
-		err = rows.Scan(&build.Id)
-		if err != nil {
-			m.log.errorf("failed to read build ID: %s", err)
-		}
-		defer rows.Close()
-		if rows.Next() {
-			m.log.error("found more rows than expected")
-		}
-	} else {
-		build.Id = BuildId(buildId)
+		m.log.errorf("failed to find build: %s", err)
+	} else if !rows.Next() {
+		m.log.error("found no rows when exactly one expected")
+	}
+	err = rows.Scan(&build.Id, &build.Flag, &build.HasArtifacts, &build.LastSolved)
+	if err != nil {
+		m.log.errorf("failed to read build ID: %s", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		m.log.error("found more rows than expected")
 	}
 
 	m.log.debugf("Build of %s has ID %d", build.Challenge, build.Id)
@@ -277,6 +269,12 @@ func (m *Manager) lockSchema(schema string) error {
 
 func (m *Manager) getSchemaBuilds(schema string) ([]BuildId, error) {
 	builds := []BuildId{}
-	err := m.db.Select(&builds, "SELECT id FROM builds WHERE schema = ? ORDER BY challenge;")
+	err := m.db.Select(&builds, "SELECT id FROM builds WHERE schema = ? ORDER BY challenge;", schema)
 	return builds, err
+}
+
+func (m *Manager) queryForSchemas() ([]string, error) {
+	schemas := []string{}
+	err := m.db.Select(&schemas, "SELECT DISTINCT schema FROM builds;")
+	return schemas, err
 }

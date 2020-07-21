@@ -16,7 +16,7 @@ const (
 
 func main() {
 	if len(os.Args) == 1 {
-		printUsage()
+		printUsage(os.Args[0])
 		os.Exit(NO_ERROR)
 	}
 
@@ -65,19 +65,29 @@ func main() {
 		exitCode = testChallenges(mgr, cmdArgs)
 	case "system-dump":
 		exitCode = dumpSystemState(mgr, cmdArgs)
+	case "list-schemas":
+		exitCode = listSchemas(mgr, cmdArgs)
+	case "add-schema":
+		exitCode = addSchema(mgr, cmdArgs)
+	case "update-schema":
+		exitCode = updateSchema(mgr, cmdArgs)
+	case "remove-schema":
+		exitCode = removeSchema(mgr, cmdArgs)
+	case "show-schema":
+		exitCode = showSchema(mgr, cmdArgs)
 	default:
 		fmt.Println("error: unrecognized command")
 		exitCode = USAGE_ERROR
 	}
 
 	if exitCode == USAGE_ERROR {
-		printUsage()
+		printUsage(os.Args[0])
 	}
 
 	os.Exit(exitCode)
 }
 
-func printUsage() {
+func printUsage(cmd string) {
 	fmt.Printf(`
 Usage: %s <command> [<args>]
 
@@ -115,6 +125,29 @@ Available commands:
       with a non-zero exit code and does nothing; reclaims disk space used by
       Docker images and artifact files
 
+  list-schemas
+      Lists all of the current schemas.
+
+  add-schema <schema file>
+      Processes the identified schema file (must end in '.json' or '.yaml' and
+      be formatted accordigly) and creates the requested builds and instances.
+      These resources are locked from "manual" modifications with the exception
+      of starting and stopping instances of a build with an 'instance_count' of
+      -1.  If there is already a schema with the same name, no resources are
+      modified.
+
+  update-schema <schema file>
+      Updates the schema with this name to match the new definition and will
+      make the minimal amount of changes to converge on the new definition.
+
+  remove-schema <schema name>
+      Removes the definition and associated resources for the schema with this
+      name.
+
+  show-schema <schema name>
+      Returns all of the associated challenge, build, and instance metadata for
+      the named schema in JSON format.
+
   reset [--verbose]
       stops all known instances and destroys all known builds
 
@@ -137,9 +170,13 @@ Relevant environment variables:
 
   CMGR_ARTIFACT_DIR - directory for storing artifact bundles (defaults to '.')
 
+  CMGR_LOGGING - controls the verbosity of the internal logging infrastructure
+      and should be one of the following: debug, info, warn, error, or disabled
+      (defaults to 'disabled')
+
   Note: The Docker client is configured via Docker's standard environment
       variables.  See https://docs.docker.com/engine/reference/commandline/cli/
       for specific details.
 
-`, os.Args[0])
+`, cmd)
 }

@@ -1,0 +1,9 @@
+name: yaml-example
+flag_format: example{%s}
+challenges:
+  cmgr/examples/flask-sqlite:
+    seeds: [ 1, 5, 101 ]
+    instance_count: 1
+  cmgr/examples/php-sqlite:
+    seeds: [ 19, 42, 15412 ]
+    instance_count: -1

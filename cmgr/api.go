@@ -229,12 +229,17 @@ func (m *Manager) SearchChallenges(tags []string) []*ChallengeMetadata {
 	return md
 }
 
+// Lists all schemas as currently defined in the database.
+func (m *Manager) ListSchemas() ([]string, error) {
+	return m.queryForSchemas()
+}
+
 // Uses the schema as a definition of builds and instances that should be
 // created/started.  Prevents management of those builds and instances from
 // other API calls unless explicitly allowed by the schema.  This call is
 // likely to be extremely time and resource intensive as it will start creating
 // all of the requested builds immediately and not return until complete.
-func (m *Manager) CreateSchema(schema Schema) []error {
+func (m *Manager) CreateSchema(schema *Schema) []error {
 	exists, err := m.schemaExists(schema.Name)
 	if err != nil {
 		return []error{err}
@@ -249,7 +254,7 @@ func (m *Manager) CreateSchema(schema Schema) []error {
 // new definition.  Certain updates are more expensive than others.  In
 // particular, updating the flag format will cause a complete rebuild of the
 // state.
-func (m *Manager) UpdateSchema(schema Schema) []error {
+func (m *Manager) UpdateSchema(schema *Schema) []error {
 	exists, err := m.schemaExists(schema.Name)
 	if err != nil {
 		return []error{err}
@@ -260,7 +265,7 @@ func (m *Manager) UpdateSchema(schema Schema) []error {
 	return m.convergeSchema(schema)
 }
 
-func (m *Manager) convergeSchema(schema Schema) []error {
+func (m *Manager) convergeSchema(schema *Schema) []error {
 	// Mark existing state as locked/outdated
 	err := m.lockSchema(schema.Name)
 	if err != nil {
@@ -306,7 +311,12 @@ func (m *Manager) convergeSchema(schema Schema) []error {
 
 		for _, build := range builds {
 			target := schema.Challenges[build.Challenge].InstanceCount
+			if target == DYNAMIC_INSTANCES || target == LOCKED {
+				continue
+			}
+
 			instances, err := m.getBuildInstances(build.Id)
+			m.log.debugf("converging %s/%d: %d found, need %d", build.Challenge, build.Id, len(instances), target)
 			for i := target; i < len(instances); i++ {
 				err = m.stopContainers(instances[i])
 				if err != nil {
@@ -315,6 +325,14 @@ func (m *Manager) convergeSchema(schema Schema) []error {
 			}
 
 			for i := len(instances); i < target; i++ {
+				if len(build.Images) == 0 {
+					// Lazy lookup for case where we resized
+					build, err = m.lookupBuildMetadata(build.Id)
+					if err != nil {
+						errs = append(errs, err)
+						break
+					}
+				}
 				_, err = m.startContainers(build)
 				if err != nil {
 					errs = append(errs, err)

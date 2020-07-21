@@ -100,11 +100,11 @@ type InstanceMetadata struct {
 }
 
 type Schema struct {
-	Name       string                             `json:"name"`
-	FlagFormat string                             `json:"flag_format"`
-	Challenges map[ChallengeId]BuildSpecification `json:"challenges"`
+	Name       string                             `json:"name" yaml:"name"`
+	FlagFormat string                             `json:"flag_format" yaml:"flag_format"`
+	Challenges map[ChallengeId]BuildSpecification `json:"challenges" yaml:"challenges"`
 }
 type BuildSpecification struct {
-	Seeds         []int `json:"seeds"`
-	InstanceCount int   `json:"instance_count"`
+	Seeds         []int `json:"seeds" yaml:"seeds"`
+	InstanceCount int   `json:"instance_count" yaml:"instance_count"`
 }

@@ -15,6 +15,8 @@ tags:
   description: "Management of challenges that have been templated with a concrete flag and associated artifacts."
 - name: "instances"
   description: "Management of challenge instances with which competitors can interact."
+- name: "schemas"
+  description: "Management of schemas which group build and instance resources into a single declarative unit."
 schemes:
 - "http"
 paths:
@@ -25,10 +27,9 @@ paths:
           in: "query"
           description: "Seach for available challenges limiting to given tags"
           required: false
-          schema:
-            type: array
-            items:
-              type: string
+          type: array
+          items:
+            type: string
       tags: [challenges]
       produces: ["application/json"]
       summary: "Lists all available challenges"
@@ -172,6 +173,93 @@ paths:
           description: "A database error occurred in `cmgr` (currently includes bad build identifiers, but may also indicate that there are live instances of the build)"
         "200":
           description: "Indicates successfully stopped"
+  /schemas:
+    get:
+      tags: [schemas]
+      produces: ["application/json"]
+      summary: "Gets the list of all current schemas"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad build identifiers)"
+        "200":
+          description: "The list of schemas"
+          schema:
+            type: array
+            items:
+              type: string
+    post:
+      tags: [schemas]
+      produces: ["application/json"]
+      summary: "Creates a schema with the given definition"
+      parameters:
+        - in: "body"
+          name: "body"
+          description: "templating information for `cmgr`"
+          required: true
+          schema:
+            $ref: "#/definitions/SchemaDefinition"
+      responses:
+        "400":
+          description: "Value for 'schema_name' did not match the name in the schema definition"
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad build identifiers)."
+        "200":
+          description: "Indicates schema created successfully"
+  /schemas/{schema_name}:
+    parameters:
+      - name: "schema_name"
+        in: "path"
+        description: "The identifier for the schema"
+        required: true
+        type: "string"
+    get:
+      tags: [schemas]
+      produces: ["application/json"]
+      summary: "Gets the current deployed state of the schema"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad build identifiers)"
+        "200":
+          description: "The metadata for all challenges, builds, and instances controlled or referenced by this schema"
+          schema:
+            $ref: "#/definitions/ChallengeMetadata"
+    post:
+      tags: [schemas]
+      produces: ["application/json"]
+      summary: "Updates the schema to match the given definition"
+      parameters:
+        - in: "body"
+          name: "body"
+          description: "templating information for `cmgr`"
+          required: true
+          schema:
+            $ref: "#/definitions/SchemaDefinition"
+      responses:
+        "400":
+          description: "Value for 'schema_name' did not match the name in the schema definition"
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr` (currently includes bad build identifiers)."
+        "200":
+          description: "Indicates schema updated successfully"
+    delete:
+      tags: [schemas]
+      produces: ["application/json"]
+      summary: "Deletes a schema and all of its associated builds and instances"
+      responses:
+        "404":
+          description: "Invalid path string"
+        "500":
+          description: "A database error occurred in `cmgr`"
+        "200":
+          description: "Indicates successfully removed"
 definitions:
   ChallengeListElement:
     type: "object"
@@ -238,6 +326,10 @@ definitions:
           type: string
       solve_script:
         type: boolean
+      builds:
+        type: array
+        items:
+          $ref: "#/definitions/BuildMetadata"
   BuildMetadata:
     type: object
     properties:
@@ -266,6 +358,10 @@ definitions:
         format: int64
       challenge:
         type: string
+      instances:
+        type: array
+        items:
+          $ref: "#/definitions/InstanceMetadata"
   Image:
     type: object
     properties:
@@ -313,3 +409,25 @@ definitions:
         items:
           type: integer
           format: int32
+  SchemaDefinition:
+    type: object
+    properties:
+      name:
+        type: string
+      flag_format:
+        type: string
+      challenges:
+        type: object
+        additionalProperties:
+          $ref: "#/definitions/SchemaElement"
+  SchemaElement:
+    type: object
+    properties:
+      seeds:
+        type: array
+        items:
+          type: integer
+          format: int32
+      instance_count:
+        type: integer
+        format: int32

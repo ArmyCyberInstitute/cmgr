@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -23,7 +24,7 @@ func main() {
 	var iface string
 	var port int
 	var help bool
-	flag.IntVar(&port, "port", 42000, "listening port for cmgrd")
+	flag.IntVar(&port, "port", 4200, "listening port for cmgrd")
 	flag.StringVar(&iface, "address", "", "listening address for cmgrd")
 	flag.BoolVar(&help, "help", false, "display usage information")
 	flag.Parse()
@@ -44,6 +45,8 @@ func main() {
 	http.HandleFunc("/challenges/", s.challengeHandler)
 	http.HandleFunc("/builds/", s.buildHandler)
 	http.HandleFunc("/instances/", s.instanceHandler)
+	http.HandleFunc("/schemas", s.schemaHandler)
+	http.HandleFunc("/schemas/", s.existingSchemaHandler)
 
 	connStr := fmt.Sprintf("%s:%d", iface, port)
 	log.Fatal(http.ListenAndServe(connStr, nil))
@@ -53,7 +56,7 @@ func printUsage() {
 	fmt.Printf(`
 Usage: %s [<options>]
   --address  the network address to listen on (default: 0.0.0.0)
-  --port     the port to listen on (default: 42000)
+  --port     the port to listen on (default: 4200)
   --help     display this message
 
 Relevant environment variables:
@@ -62,6 +65,10 @@ Relevant environment variables:
   CMGR_DIR - directory containing all challenges (defaults to '.')
 
   CMGR_ARTIFACT_DIR - directory for storing artifact bundles (defaults to '.')
+
+  CMGR_LOGGING - controls the verbosity of the internal logging infrastructure
+      and should be one of the following: debug, info, warn, error, or disabled
+      (defaults to 'info')
 
   Note: The Docker client is configured via Docker's standard environment
       variables.  See https://docs.docker.com/engine/reference/commandline/cli/
@@ -79,7 +86,7 @@ type ChallengeListElement struct {
 
 func (s state) listHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
-		w.WriteHeader(405)
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -101,7 +108,7 @@ func (s state) listHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := json.Marshal(respList)
 	if err != nil {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		return
 	}
@@ -118,7 +125,7 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.Split(r.URL.Path, "/")
 	pathLen := len(path)
 	if len(path) < 2 {
-		w.WriteHeader(404)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
@@ -130,7 +137,7 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if idx < 0 || chalStr == "" {
-		w.WriteHeader(404)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
@@ -166,12 +173,12 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 			body, err = json.Marshal(builds)
 		}
 	default:
-		w.WriteHeader(405)
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	if err != nil {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		body = []byte(err.Error())
 	}
 
@@ -188,13 +195,13 @@ func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(path) < 2 || path[pathLen-2] != "builds" {
-		w.WriteHeader(404)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
 	buildInt, err := strconv.Atoi(path[pathLen-1])
 	if err != nil {
-		w.WriteHeader(400)
+		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error()))
 	}
 
@@ -223,12 +230,12 @@ func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 	case "DELETE":
 		err = s.mgr.Destroy(build)
 	default:
-		w.WriteHeader(405)
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	if err != nil {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		body = []byte(err.Error())
 	}
 
@@ -239,13 +246,13 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.Split(r.URL.Path, "/")
 	pathLen := len(path)
 	if pathLen < 3 || path[pathLen-1] != "artifacts.tar.gz" || path[pathLen-3] != "builds" {
-		w.WriteHeader(404)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
 	buildInt, err := strconv.Atoi(path[pathLen-1])
 	if err != nil {
-		w.WriteHeader(400)
+		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error()))
 	}
 
@@ -258,7 +265,7 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		return
 	}
@@ -270,13 +277,13 @@ func (s state) instanceHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.Split(r.URL.Path, "/")
 	pathLen := len(path)
 	if len(path) < 2 || path[pathLen-2] != "instances" {
-		w.WriteHeader(404)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
 	instInt, err := strconv.Atoi(path[pathLen-1])
 	if err != nil {
-		w.WriteHeader(400)
+		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error()))
 	}
 
@@ -295,12 +302,106 @@ func (s state) instanceHandler(w http.ResponseWriter, r *http.Request) {
 	case "DELETE":
 		err = s.mgr.Stop(instance)
 	default:
-		w.WriteHeader(405)
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	if err != nil {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
+		body = []byte(err.Error())
+	}
+
+	w.Write(body)
+}
+
+func (s state) existingSchemaHandler(w http.ResponseWriter, r *http.Request) {
+	path := strings.Split(r.URL.Path, "/")
+	pathLen := len(path)
+	if len(path) < 2 || path[pathLen-2] != "schemas" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	schema := path[pathLen-1]
+
+	var body []byte
+	var err error
+	errorCode := http.StatusInternalServerError
+	switch r.Method {
+	case "GET":
+		var meta []*cmgr.ChallengeMetadata
+		meta, err = s.mgr.GetSchemaState(schema)
+		if err == nil {
+			body, err = json.Marshal(meta)
+		}
+	case "POST":
+		var data []byte
+		data, err = ioutil.ReadAll(r.Body)
+
+		var schemaDef *cmgr.Schema
+		if err == nil {
+			err = json.Unmarshal(data, &schemaDef)
+		}
+
+		if err == nil {
+			if schemaDef.Name != schema {
+				errorCode = http.StatusBadRequest // Bad Request
+				err = errors.New("mismatch between endpoint and schema name")
+			} else {
+				errs := s.mgr.UpdateSchema(schemaDef)
+				if len(errs) > 0 {
+					err = fmt.Errorf("%v", errs)
+				}
+			}
+		}
+	case "DELETE":
+		err = s.mgr.DeleteSchema(schema)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err != nil {
+		w.WriteHeader(errorCode)
+		body = []byte(err.Error())
+	}
+
+	w.Write(body)
+}
+
+func (s state) schemaHandler(w http.ResponseWriter, r *http.Request) {
+	var body []byte
+	var err error
+	errorCode := http.StatusInternalServerError
+	switch r.Method {
+	case "GET":
+		var schemaList []string
+		schemaList, err = s.mgr.ListSchemas()
+		if err == nil {
+			body, err = json.Marshal(schemaList)
+		}
+	case "POST":
+		var data []byte
+		data, err = ioutil.ReadAll(r.Body)
+
+		var schemaDef *cmgr.Schema
+		if err == nil {
+			err = json.Unmarshal(data, &schemaDef)
+		}
+
+		if err == nil {
+			errs := s.mgr.CreateSchema(schemaDef)
+			if len(errs) > 0 {
+				err = fmt.Errorf("%v", errs)
+			}
+		}
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err != nil {
+		w.WriteHeader(errorCode)
 		body = []byte(err.Error())
 	}
 
