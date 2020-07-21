@@ -6,7 +6,7 @@ import (
 )
 
 func isEmptyQueryError(err error) bool {
-	return err.Error() == "sql: no rows in result set"
+	return err != nil && err.Error() == "sql: no rows in result set"
 }
 
 func unknownChallengeIdError(id ChallengeId) error {

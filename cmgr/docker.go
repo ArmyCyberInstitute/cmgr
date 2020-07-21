@@ -12,6 +12,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 
 	"github.com/docker/docker/api/types"
@@ -138,6 +139,10 @@ func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
 	return nil
 }
 
+type dockerError struct {
+	Error string `json:"error"`
+}
+
 func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, buildCtx io.Reader) error {
 	seedStr := fmt.Sprintf("%d", bMeta.Seed)
 
@@ -164,18 +169,24 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 		m.log.errorf("failed to build base image: %s", err)
 		return err
 	}
-	/*
-		TODO: Code to read response, necessary for catching build errors
-		defer resp.Body.Close()
-		_, err = io.Copy(os.Stdout, resp.Body)
-		if err != nil {
-			log.Fatal(err, " :unable to read image build response")
-		}
-	*/
-	_, err = ioutil.ReadAll(resp.Body)
+
+	messages, err := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
 		m.log.errorf("failed to read build response from docker: %s", err)
+		return err
+	}
+
+	re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
+	errMsg := re.Find(messages)
+	if errMsg != nil {
+		var dMsg dockerError
+		err = json.Unmarshal(errMsg, &dMsg)
+		if err == nil {
+			errMsg = []byte(dMsg.Error)
+		}
+		err = fmt.Errorf("failed to build image: %s", errMsg)
+		m.log.error(err)
 		return err
 	}
 
