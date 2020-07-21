@@ -68,6 +68,14 @@ func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
 		return nil
 	}
 
+	buildsComplete := true
+	for _, build := range builds {
+		buildsComplete = buildsComplete && (build.Flag != "")
+	}
+	if buildsComplete {
+		return nil
+	}
+
 	cMeta, err := m.lookupChallengeMetadata(builds[0].Challenge)
 	if err != nil {
 		return err
@@ -101,6 +109,9 @@ func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
 	defer os.Remove(buildCtxFile)
 
 	for _, build := range builds {
+		if build.Flag != "" {
+			continue
+		}
 		buildCtx, err := os.Open(buildCtxFile)
 		if err != nil {
 			m.log.errorf("failed to seek to beginning of file for %d: %s", build.Seed, err)

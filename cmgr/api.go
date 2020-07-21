@@ -141,7 +141,6 @@ func (m *Manager) Update(fp string) *ChallengeUpdates {
 // will implicitly download base docker images and build the artifacts.
 func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) ([]*BuildMetadata, error) {
 	schema := fmt.Sprintf("%s%x", manualSchemaPrefix, m.rand.Int63())
-	schemaVersion := uint32(0)
 	instanceCount := -1
 
 	builds := make([]*BuildMetadata, len(seeds))
@@ -151,7 +150,6 @@ func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) (
 			Format:        flagFormat,
 			Challenge:     challenge,
 			Schema:        schema,
-			SchemaVersion: schemaVersion,
 			InstanceCount: instanceCount,
 		}
 	}
@@ -229,6 +227,191 @@ func (m *Manager) ListChallenges() []*ChallengeMetadata {
 func (m *Manager) SearchChallenges(tags []string) []*ChallengeMetadata {
 	md, _ := m.searchChallenges(tags)
 	return md
+}
+
+// Uses the schema as a definition of builds and instances that should be
+// created/started.  Prevents management of those builds and instances from
+// other API calls unless explicitly allowed by the schema.  This call is
+// likely to be extremely time and resource intensive as it will start creating
+// all of the requested builds immediately and not return until complete.
+func (m *Manager) CreateSchema(schema Schema) []error {
+	exists, err := m.schemaExists(schema.Name)
+	if err != nil {
+		return []error{err}
+	} else if exists {
+		return []error{fmt.Errorf("schema '%s' already exists", schema.Name)}
+	}
+
+	return m.convergeSchema(schema)
+}
+
+// Updates the definition of the schema internally and then converges to the
+// new definition.  Certain updates are more expensive than others.  In
+// particular, updating the flag format will cause a complete rebuild of the
+// state.
+func (m *Manager) UpdateSchema(schema Schema) []error {
+	exists, err := m.schemaExists(schema.Name)
+	if err != nil {
+		return []error{err}
+	} else if !exists {
+		return []error{fmt.Errorf("schema '%s' does not exist", schema.Name)}
+	}
+
+	return m.convergeSchema(schema)
+}
+
+func (m *Manager) convergeSchema(schema Schema) []error {
+	// Mark existing state as locked/outdated
+	err := m.lockSchema(schema.Name)
+	if err != nil {
+		return []error{err}
+	}
+
+	// Update builds to reflect request
+	state := make([][]*BuildMetadata, 0, len(schema.Challenges))
+	errs := []error{}
+	for challenge, spec := range schema.Challenges {
+		builds := make([]*BuildMetadata, len(spec.Seeds))
+		for i, seed := range spec.Seeds {
+			builds[i] = &BuildMetadata{
+				Seed:          seed,
+				Format:        schema.FlagFormat,
+				Challenge:     challenge,
+				Schema:        schema.Name,
+				InstanceCount: spec.InstanceCount,
+			}
+
+			err := m.openBuild(builds[i])
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		}
+		state = append(state, builds)
+	}
+
+	// Release obsolete builds
+	err = m.cleanupSchemaResources(schema.Name)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	// Create missing builds and converge instances
+	for _, builds := range state {
+		err := m.generateBuilds(builds)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
+		for _, build := range builds {
+			target := schema.Challenges[build.Challenge].InstanceCount
+			instances, err := m.getBuildInstances(build.Id)
+			for i := target; i < len(instances); i++ {
+				err = m.stopContainers(instances[i])
+				if err != nil {
+					errs = append(errs, err)
+				}
+			}
+
+			for i := len(instances); i < target; i++ {
+				_, err = m.startContainers(build)
+				if err != nil {
+					errs = append(errs, err)
+					break
+				}
+			}
+
+		}
+	}
+
+	return errs
+}
+
+// Tears down all instances and builds belonging to the schema.
+func (m *Manager) DeleteSchema(name string) error {
+	err := m.lockSchema(name)
+	if err != nil {
+		return err
+	}
+
+	return m.cleanupSchemaResources(name)
+}
+
+func (m *Manager) cleanupSchemaResources(name string) error {
+	instances, err := m.removedSchemaInstances(name)
+	for _, id := range instances {
+		err = m.stopContainers(id)
+		if err != nil {
+			return err
+		}
+	}
+
+	builds, err := m.removedSchemaBuilds(name)
+	for _, id := range builds {
+		err = m.destroyImages(id)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Returns the fully-nested metadata for the schema from challenges to the
+// associated builds which belong to the schema through to the instances
+// currently running (to include dynamic instances).
+func (m *Manager) GetSchemaState(name string) ([]*ChallengeMetadata, error) {
+	builds, err := m.getSchemaBuilds(name)
+	if err != nil {
+		return nil, err
+	}
+
+	challenges := []*ChallengeMetadata{}
+	var challenge *ChallengeMetadata
+
+	for _, buildId := range builds {
+		build, err := m.lookupBuildMetadata(buildId)
+		if err != nil {
+			return nil, err
+		}
+
+		iids, err := m.getBuildInstances(build.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		build.Instances = make([]*InstanceMetadata, len(iids))
+		for i, iid := range iids {
+			instance, err := m.lookupInstanceMetadata(iid)
+			if err != nil {
+				return nil, err
+			}
+
+			build.Instances[i] = instance
+		}
+
+		if challenge != nil && challenge.Id != build.Challenge {
+			challenges = append(challenges, challenge)
+			challenge = nil
+		}
+
+		if challenge == nil {
+			challenge, err = m.lookupChallengeMetadata(build.Challenge)
+			if err != nil {
+				return nil, err
+			}
+			challenge.Builds = []*BuildMetadata{}
+		}
+
+		challenge.Builds = append(challenge.Builds, build)
+	}
+
+	if challenge != nil {
+		challenges = append(challenges, challenge)
+	}
+
+	return challenges, nil
 }
 
 func (m *Manager) GetChallengeMetadata(challenge ChallengeId) (*ChallengeMetadata, error) {

@@ -13,7 +13,6 @@ const openBuildQuery string = `
         lastsolved,
         challenge,
         schema,
-        schemaversion,
         instancecount
     )
     VALUES (
@@ -24,11 +23,9 @@ const openBuildQuery string = `
         :lastsolved,
         :challenge,
         :schema,
-        :schemaversion,
         :instancecount
     ) ON CONFLICT (schema, format, challenge, seed) DO
     UPDATE SET
-    	schemaversion = excluded.schemaversion,
     	instancecount = excluded.instancecount;`
 
 func (m *Manager) openBuild(build *BuildMetadata) error {
@@ -46,7 +43,7 @@ func (m *Manager) openBuild(build *BuildMetadata) error {
 		return err
 	} else if buildId == 0 {
 		m.log.debug("Running select...")
-		rows, err := m.db.NamedQuery("SELECT id FROM builds WHERE schema=:schema AND format=:format AND challenge=:challenge AND seed=:seed;", build)
+		rows, err := m.db.NamedQuery("SELECT id, flag, hasartifacts, lastsolved FROM builds WHERE schema=:schema AND format=:format AND challenge=:challenge AND seed=:seed;", build)
 		if err != nil {
 			m.log.errorf("failed to find build: %s", err)
 		} else if !rows.Next() {
@@ -259,4 +256,27 @@ func (m *Manager) lookupBuildMetadata(build BuildId) (*BuildMetadata, error) {
 	}
 
 	return metadata, err
+}
+
+func (m *Manager) schemaExists(schema string) (bool, error) {
+	builds := []BuildId{}
+	err := m.db.Select(&builds, "SELECT id FROM builds WHERE schema = ? LIMIT 1;", schema)
+	return len(builds) > 0, err
+}
+
+func (m *Manager) removedSchemaBuilds(schema string) ([]BuildId, error) {
+	builds := []BuildId{}
+	err := m.db.Select(&builds, "SELECT id FROM builds WHERE schema = ? AND instancecount = ?;", schema, LOCKED)
+	return builds, err
+}
+
+func (m *Manager) lockSchema(schema string) error {
+	_, err := m.db.Exec("UPDATE builds SET instancecount = ? WHERE schema = ?;", LOCKED, schema)
+	return err
+}
+
+func (m *Manager) getSchemaBuilds(schema string) ([]BuildId, error) {
+	builds := []BuildId{}
+	err := m.db.Select(&builds, "SELECT id FROM builds WHERE schema = ? ORDER BY challenge;")
+	return builds, err
 }

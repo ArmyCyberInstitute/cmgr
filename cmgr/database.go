@@ -74,12 +74,13 @@ const schemaQuery string = `
 		lastsolved INTEGER,
 		challenge TEXT NOT NULL,
 		schema TEXT NOT NULL,
-		schemaversion INT NOT NULL,
 		instancecount INT NOT NULL,
 		UNIQUE(schema, format, challenge, seed),
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
 	);
+
+	CREATE INDEX IF NOT EXISTS schemaIndex on builds(schema);
 
 	CREATE TABLE IF NOT EXISTS images (
 		id INTEGER PRIMARY KEY,

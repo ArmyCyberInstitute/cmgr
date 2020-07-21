@@ -121,3 +121,26 @@ func (m *Manager) removeInstanceMetadata(instance InstanceId) error {
 
 	return err
 }
+
+const removedSchemaInstancesQuery = `
+	SELECT instances.id
+	FROM instances
+	JOIN builds ON instances.build = builds.id
+	WHERE builds.schema = ? AND instancecount = ?;`
+
+func (m *Manager) removedSchemaInstances(schema string) ([]InstanceId, error) {
+	instances := []InstanceId{}
+	err := m.db.Select(&instances, removedSchemaInstancesQuery, schema, LOCKED)
+	return instances, err
+}
+
+const buildInstancesQuery = `
+	SELECT instances.id
+	FROM instances
+	WHERE build = ?;`
+
+func (m *Manager) getBuildInstances(build BuildId) ([]InstanceId, error) {
+	instances := []InstanceId{}
+	err := m.db.Select(&instances, buildInstancesQuery, build)
+	return instances, err
+}

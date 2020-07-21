@@ -16,7 +16,7 @@ const (
 	LOGGING_ENV      string = "CMGR_LOGGING"
 
 	DYNAMIC_INSTANCES int = -1
-	PENDING_REMOVAL   int = -2
+	LOCKED            int = -2
 )
 
 type Manager struct {
@@ -79,7 +79,6 @@ type BuildMetadata struct {
 	Instances    []*InstanceMetadata `json:"instances,omitempty"`
 
 	Schema        string `json:"schema"`
-	SchemaVersion uint32 `json:"schema_version"`
 	InstanceCount int    `json:"instance_count"`
 }
 
@@ -98,4 +97,14 @@ type InstanceMetadata struct {
 	Containers []string       `json:"containers"`
 	LastSolved int            `json:"last_solved"`
 	Build      BuildId        `json:"build_id"`
+}
+
+type Schema struct {
+	Name       string                             `json:"name"`
+	FlagFormat string                             `json:"flag_format"`
+	Challenges map[ChallengeId]BuildSpecification `json:"challenges"`
+}
+type BuildSpecification struct {
+	Seeds         []int `json:"seeds"`
+	InstanceCount int   `json:"instance_count"`
 }
