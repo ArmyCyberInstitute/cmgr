@@ -55,9 +55,9 @@ paths:
       summary: "Gets the metadata for the challenge"
       responses:
         "404":
-          description: "Invalid path string"
+          description: "Invalid path string to include invalid challenge identifier"
         "500":
-          description: "A database error occurred in `cmgr` (currently includes bad challenge identifiers)"
+          description: "A database error occurred in `cmgr`"
         "200":
           description: "The metadata for the challenge"
           schema:
@@ -76,9 +76,9 @@ paths:
             $ref: "#/definitions/BuildChallengeRequest"
       responses:
         "404":
-          description: "Invalid path string"
+          description: "Invalid path string to include invalid challenge identifier"
         "500":
-          description: "A database error occurred in `cmgr` (currently includes bad challenge identifiers)"
+          description: "A database error occurred in `cmgr`"
         "200":
           description: "A list of the new build IDs in the same order as seeds were given"
           schema:
@@ -99,9 +99,9 @@ paths:
       summary: "Gets the metadata for the build"
       responses:
         "404":
-          description: "Invalid path string"
+          description: "Invalid path string to include invalid build identifier"
         "500":
-          description: "A database error occurred in `cmgr` (currently includes bad build identifiers)"
+          description: "A database error occurred in `cmgr`"
         "200":
           description: "The metadata for the build"
           schema:
@@ -112,9 +112,9 @@ paths:
       summary: "Starts an instance of the build"
       responses:
         "404":
-          description: "Invalid path string"
+          description: "Invalid path string to include invalid build identifier"
         "500":
-          description: "A database error occurred in `cmgr` (currently includes bad build identifiers)"
+          description: "A database error occurred in `cmgr`"
         "200":
           description: "The identifier of the new instance"
           schema:
@@ -126,9 +126,9 @@ paths:
       summary: "Destroys the build (releases resources)"
       responses:
         "404":
-          description: "Invalid path string"
+          description: "Invalid path string to include invalid challenge identifier"
         "500":
-          description: "A database error occurred in `cmgr` (currently includes bad build identifiers, but may also indicate that there are live instances of the build)"
+          description: "A database error occurred in `cmgr`"
         "200":
           description: "Indicates successfully deleted"
   /instances/{instance_id}:
@@ -144,9 +144,9 @@ paths:
       summary: "Gets the metadata for the instance"
       responses:
         "404":
-          description: "Invalid path string"
+          description: "Invalid path string to include invalid instance identifier"
         "500":
-          description: "A database error occurred in `cmgr` (currently includes bad build identifiers)"
+          description: "A database error occurred in `cmgr`"
         "200":
           description: "The metadata for the instance"
           schema:
@@ -157,9 +157,9 @@ paths:
       summary: "Runs the automated solver against the instance"
       responses:
         "404":
-          description: "Invalid path string"
+          description: "Invalid path string to include invalid instance identifier"
         "500":
-          description: "A database error occurred in `cmgr` (currently includes bad build identifiers).  Could also indicate that the solve failed or does not exist."
+          description: "A database error occurred in `cmgr`.  Could also indicate that the solve failed or does not exist."
         "200":
           description: "Indicates solve ran correctly"
     delete:
@@ -168,9 +168,9 @@ paths:
       summary: "Stops an instance"
       responses:
         "404":
-          description: "Invalid path string"
+          description: "Invalid path string to include invalid challenge identifier"
         "500":
-          description: "A database error occurred in `cmgr` (currently includes bad build identifiers, but may also indicate that there are live instances of the build)"
+          description: "A database error occurred in `cmgr` (may also indicate that there are live instances of the build)"
         "200":
           description: "Indicates successfully stopped"
   /schemas:

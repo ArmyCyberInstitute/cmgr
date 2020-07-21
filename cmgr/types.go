@@ -19,6 +19,11 @@ const (
 	LOCKED            int = -2
 )
 
+type UnknownIdentifierError struct {
+	Type string
+	Name string
+}
+
 type Manager struct {
 	cli                  *client.Client
 	ctx                  context.Context

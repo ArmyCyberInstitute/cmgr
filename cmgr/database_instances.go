@@ -66,6 +66,9 @@ func (m *Manager) lookupInstanceMetadata(instance InstanceId) (*InstanceMetadata
 	txn := m.db.MustBegin()
 
 	err := txn.Get(metadata, "SELECT * FROM instances WHERE id=?", instance)
+	if isEmptyQueryError(err) {
+		err = unknownInstanceIdError(instance)
+	}
 
 	ports := []struct {
 		Name string

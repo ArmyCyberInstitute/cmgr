@@ -144,11 +144,15 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 	challenge := cmgr.ChallengeId(chalStr[:len(chalStr)-1])
 
 	var err error
+	respCode := http.StatusInternalServerError
 	var body []byte
 	switch r.Method {
 	case "GET":
 		var meta *cmgr.ChallengeMetadata
 		meta, err = s.mgr.GetChallengeMetadata(challenge)
+		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+			respCode = http.StatusNotFound
+		}
 		if err == nil {
 			body, err = json.Marshal(meta)
 		}
@@ -167,6 +171,9 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 				buildReq.FlagFormat = "flag{%s}"
 			}
 			builds, err = s.mgr.Build(challenge, buildReq.Seeds, buildReq.FlagFormat)
+			if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+				respCode = http.StatusNotFound
+			}
 		}
 
 		if err == nil {
@@ -178,7 +185,7 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(respCode)
 		body = []byte(err.Error())
 	}
 
@@ -208,16 +215,23 @@ func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 	build := cmgr.BuildId(buildInt)
 
 	var body []byte
+	respCode := http.StatusInternalServerError
 	switch r.Method {
 	case "GET":
 		var meta *cmgr.BuildMetadata
 		meta, err = s.mgr.GetBuildMetadata(build)
+		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+			respCode = http.StatusNotFound
+		}
 		if err == nil {
 			body, err = json.Marshal(meta)
 		}
 	case "POST":
 		var instance cmgr.InstanceId
 		instance, err = s.mgr.Start(build)
+		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+			respCode = http.StatusNotFound
+		}
 
 		var iMeta *cmgr.InstanceMetadata
 		if err == nil {
@@ -229,13 +243,16 @@ func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	case "DELETE":
 		err = s.mgr.Destroy(build)
+		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+			respCode = http.StatusNotFound
+		}
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(respCode)
 		body = []byte(err.Error())
 	}
 
@@ -254,15 +271,18 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error()))
+		return
 	}
 
 	build := cmgr.BuildId(buildInt)
 	meta, err := s.mgr.GetBuildMetadata(build)
-
-	var f *os.File
-	if err == nil {
-		f, err = os.Open(fmt.Sprintf("%s.tar.gz", meta.Images[0].DockerId))
+	_, ok := err.(*cmgr.UnknownIdentifierError)
+	if ok || (err != nil && !meta.HasArtifacts) {
+		w.WriteHeader(http.StatusNotFound)
+		return
 	}
+
+	f, err := os.Open(fmt.Sprintf("%s.tar.gz", meta.Images[0].DockerId))
 
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -271,6 +291,7 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	io.Copy(w, f)
+	f.Close()
 }
 
 func (s state) instanceHandler(w http.ResponseWriter, r *http.Request) {
@@ -285,6 +306,7 @@ func (s state) instanceHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error()))
+		return
 	}
 
 	instance := cmgr.InstanceId(instInt)
@@ -306,8 +328,13 @@ func (s state) instanceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	respCode := http.StatusInternalServerError
+	if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+		respCode = http.StatusNotFound
+	}
+
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(respCode)
 		body = []byte(err.Error())
 	}
 

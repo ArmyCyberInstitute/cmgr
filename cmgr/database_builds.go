@@ -209,6 +209,9 @@ func (m *Manager) lookupBuildMetadata(build BuildId) (*BuildMetadata, error) {
 	txn := m.db.MustBegin()
 
 	err := txn.Get(metadata, "SELECT * FROM builds WHERE id=?", build)
+	if isEmptyQueryError(err) {
+		err = unknownBuildIdError(build)
+	}
 
 	lookups := []struct {
 		Key   string

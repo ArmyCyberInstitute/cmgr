@@ -41,6 +41,9 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 	txn := m.db.MustBegin()
 
 	err := txn.Get(metadata, "SELECT * FROM challenges WHERE id=?", challenge)
+	if isEmptyQueryError(err) {
+		err = unknownChallengeIdError(challenge)
+	}
 
 	if err == nil {
 		err = txn.Select(&metadata.Hints, "SELECT hint FROM hints WHERE challenge=? ORDER BY idx", challenge)
