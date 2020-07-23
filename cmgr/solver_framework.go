@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -118,7 +119,8 @@ func (m *Manager) runSolver(instance InstanceId) error {
 
 		flagStr := strings.TrimSpace(string(flag))
 		if flagStr == bMeta.Flag {
-			return nil
+			iMeta.LastSolved = time.Now().Unix()
+			return m.recordSolve(iMeta)
 		}
 
 		return fmt.Errorf("solve script returned incorrect flag: received '%s', expected '%s'", flagStr, bMeta.Flag)

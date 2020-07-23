@@ -161,8 +161,7 @@ FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update
-RUN apt-get -y install python3-pip python3-dev git libssl-dev libffi-dev build-essential
-RUN pip3 install pwntools
+RUN apt-get -y install python3-pip build-essential
 
 COPY Dockerfile packages.txt* ./
 RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi

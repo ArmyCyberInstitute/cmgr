@@ -79,7 +79,7 @@ type BuildMetadata struct {
 	Format       string              `json:"format"`
 	Images       []Image             `json:"images"`
 	HasArtifacts bool                `json:"has_artifacts"`
-	LastSolved   int                 `json:"last_solved"`
+	LastSolved   int64               `json:"last_solved"`
 	Challenge    ChallengeId         `json:"challenge_id"`
 	Instances    []*InstanceMetadata `json:"instances,omitempty"`
 
@@ -100,7 +100,7 @@ type InstanceMetadata struct {
 	Id         InstanceId     `json:"id"`
 	Ports      map[string]int `json:"ports,omitempty"`
 	Containers []string       `json:"containers"`
-	LastSolved int            `json:"last_solved"`
+	LastSolved int64          `json:"last_solved"`
 	Build      BuildId        `json:"build_id"`
 }
 

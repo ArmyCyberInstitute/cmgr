@@ -170,7 +170,26 @@ func (m *Manager) Start(build BuildId) (InstanceId, error) {
 		return 0, errors.New("locked build: change the schema definition to start more instances")
 	}
 
-	return m.startContainers(bMeta)
+	return m.newInstance(bMeta)
+}
+
+func (m *Manager) newInstance(build *BuildMetadata) (InstanceId, error) {
+	iMeta := &InstanceMetadata{
+		Build:      build.Id,
+		Ports:      make(map[string]int),
+		Containers: []string{},
+	}
+	err := m.openInstance(iMeta)
+	if err != nil {
+		return 0, err
+	}
+
+	err = m.startNetwork(iMeta)
+	if err != nil {
+		return 0, err
+	}
+
+	return iMeta.Id, m.startContainers(build, iMeta)
 }
 
 // Stops the running "instance".
@@ -190,7 +209,21 @@ func (m *Manager) Stop(instance InstanceId) error {
 	if bMeta.InstanceCount != DYNAMIC_INSTANCES {
 		return errors.New("locked build: change the schema definition to stop this instance")
 	}
-	return m.stopContainers(instance)
+	return m.stopInstance(iMeta)
+}
+
+func (m *Manager) stopInstance(instance *InstanceMetadata) error {
+	err := m.stopContainers(instance)
+	if err != nil {
+		return err
+	}
+
+	err = m.stopNetwork(instance)
+	if err != nil {
+		return err
+	}
+
+	return m.removeInstanceMetadata(instance.Id)
 }
 
 // Destroys the assoicated "build".
@@ -318,7 +351,13 @@ func (m *Manager) convergeSchema(schema *Schema) []error {
 			instances, err := m.getBuildInstances(build.Id)
 			m.log.debugf("converging %s/%d: %d found, need %d", build.Challenge, build.Id, len(instances), target)
 			for i := target; i < len(instances); i++ {
-				err = m.stopContainers(instances[i])
+				iMeta, err := m.lookupInstanceMetadata(instances[i])
+				if err != nil {
+					errs = append(errs, err)
+					continue
+				}
+
+				err = m.stopInstance(iMeta)
 				if err != nil {
 					errs = append(errs, err)
 				}
@@ -333,7 +372,7 @@ func (m *Manager) convergeSchema(schema *Schema) []error {
 						break
 					}
 				}
-				_, err = m.startContainers(build)
+				_, err = m.newInstance(build)
 				if err != nil {
 					errs = append(errs, err)
 					break
@@ -359,7 +398,12 @@ func (m *Manager) DeleteSchema(name string) error {
 func (m *Manager) cleanupSchemaResources(name string) error {
 	instances, err := m.removedSchemaInstances(name)
 	for _, id := range instances {
-		err = m.stopContainers(id)
+		iMeta, err := m.lookupInstanceMetadata(id)
+		if err != nil {
+			return err
+		}
+
+		err = m.stopInstance(iMeta)
 		if err != nil {
 			return err
 		}

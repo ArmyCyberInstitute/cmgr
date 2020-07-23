@@ -104,17 +104,20 @@ func (m *Manager) lookupInstanceMetadata(instance InstanceId) (*InstanceMetadata
 	return metadata, err
 }
 
-func (m *Manager) removeInstanceMetadata(instance InstanceId) error {
+func (m *Manager) removeContainersMetadata(instance *InstanceMetadata) error {
 	txn := m.db.MustBegin()
-	_, err := txn.Exec("DELETE FROM instances WHERE id=?", instance)
+	_, err := txn.Exec("DELETE FROM portAssignments WHERE instance=?;", instance.Id)
+	if err == nil {
+		_, err = txn.Exec("DELETE FROM containers WHERE instance=?", instance.Id)
+	}
 
 	if err == nil {
 		err = txn.Commit()
 		if err != nil {
-			m.log.errorf("failed to commit deletion of instance: %s", err)
+			m.log.errorf("failed to commit deletion of container metadata: %s", err)
 		}
 	} else {
-		m.log.errorf("failed to delete instance: %s", err)
+		m.log.errorf("failed to delete container metadata: %s", err)
 		closeErr := txn.Rollback()
 		if closeErr != nil {
 			m.log.errorf("rollback failed: %s", err)
@@ -122,6 +125,14 @@ func (m *Manager) removeInstanceMetadata(instance InstanceId) error {
 		}
 	}
 
+	instance.Containers = []string{}
+	instance.Ports = make(map[string]int)
+
+	return err
+}
+
+func (m *Manager) removeInstanceMetadata(instance InstanceId) error {
+	_, err := m.db.Exec("DELETE FROM instances WHERE id=?", instance)
 	return err
 }
 
@@ -146,4 +157,37 @@ func (m *Manager) getBuildInstances(build BuildId) ([]InstanceId, error) {
 	instances := []InstanceId{}
 	err := m.db.Select(&instances, buildInstancesQuery, build)
 	return instances, err
+}
+
+const recordInstanceSolveQuery = `
+	UPDATE instances
+	SET lastsolved = :lastsolved
+	WHERE id = :id AND lastsolved < :lastsolved;`
+
+const recordBuildSolveQuery = `
+	UPDATE builds
+	SET lastsolved = :lastsolved
+	WHERE id = :build AND lastsolved < :lastsolved;`
+
+func (m *Manager) recordSolve(instance *InstanceMetadata) error {
+	txn := m.db.MustBegin()
+	_, err := txn.NamedExec(recordInstanceSolveQuery, instance)
+	if err == nil {
+		_, err = txn.NamedExec(recordBuildSolveQuery, instance)
+	}
+
+	if err == nil {
+		err = txn.Commit()
+		if err != nil {
+			m.log.errorf("failed to commit deletion of container metadata: %s", err)
+		}
+	} else {
+		m.log.errorf("failed to delete container metadata: %s", err)
+		closeErr := txn.Rollback()
+		if closeErr != nil {
+			m.log.errorf("rollback failed: %s", err)
+			err = closeErr
+		}
+	}
+	return err
 }

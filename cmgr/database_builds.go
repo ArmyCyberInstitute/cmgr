@@ -61,7 +61,8 @@ const finalizeBuildQuery string = `
 	UPDATE builds
 	SET
 		flag = :flag,
-		hasartifacts = :hasartifacts
+		hasartifacts = :hasartifacts,
+		lastsolved = 0
 	WHERE id = :id;`
 
 func (m *Manager) finalizeBuild(build *BuildMetadata) error {
@@ -101,6 +102,16 @@ func (m *Manager) finalizeBuild(build *BuildMetadata) error {
 		return err
 	}
 
+	_, err = txn.Exec("DELETE FROM lookupData WHERE build=?;", build.Id)
+	if err != nil {
+		m.log.errorf("failed to delete old lookups for build (%d): %s", build.Id, err)
+		cerr := txn.Rollback()
+		if cerr != nil { // If rollback fails, we're in trouble.
+			m.log.error(cerr)
+			err = cerr
+		}
+		return err
+	}
 	for k, v := range build.LookupData {
 		_, err = txn.Exec("INSERT INTO lookupData(build, key, value) VALUES (?, ?, ?);",
 			build.Id,
@@ -118,6 +129,16 @@ func (m *Manager) finalizeBuild(build *BuildMetadata) error {
 		}
 	}
 
+	_, err = txn.Exec("DELETE FROM images WHERE build=?;", build.Id)
+	if err != nil {
+		m.log.errorf("failed to delete old images for build (%d): %s", build.Id, err)
+		cerr := txn.Rollback()
+		if cerr != nil { // If rollback fails, we're in trouble.
+			m.log.error(cerr)
+			err = cerr
+		}
+		return err
+	}
 	for _, image := range build.Images {
 		res, err := txn.Exec("INSERT INTO images(build, dockerid) VALUES (?, ?);",
 			build.Id,

@@ -118,6 +118,7 @@ func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
 			m.log.errorf("failed to seek to beginning of file for %d: %s", build.Seed, err)
 			return err
 		}
+		defer buildCtx.Close()
 
 		err = m.openBuild(build)
 		if err != nil {
@@ -154,12 +155,14 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 
 	// Setup build options
 	imageName := fmt.Sprintf("%s:%d", cMeta.Id, bMeta.Id)
-	opts := types.ImageBuildOptions{BuildArgs: map[string]*string{
-		"FLAG_FORMAT": &bMeta.Format,
-		"SEED":        &seedStr,
-		"FLAG":        bMeta.makeFlag(),
-	},
-		Tags: []string{imageName},
+	opts := types.ImageBuildOptions{
+		BuildArgs: map[string]*string{
+			"FLAG_FORMAT": &bMeta.Format,
+			"SEED":        &seedStr,
+			"FLAG":        bMeta.makeFlag(),
+		},
+		Remove: true,
+		Tags:   []string{imageName},
 	}
 
 	// Call build
@@ -334,34 +337,35 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 	return nil
 }
 
-func (m *Manager) startContainers(build *BuildMetadata) (InstanceId, error) {
-	iMeta := &InstanceMetadata{
-		Build:      build.Id,
-		Ports:      make(map[string]int),
-		Containers: []string{},
-	}
-	err := m.openInstance(iMeta)
-	if err != nil {
-		return 0, err
-	}
-
-	revPortMap, err := m.getReversePortMap(build.Challenge)
-	if err != nil {
-		return 0, err
-	}
-
-	// Create a bridge just for this container
+func (m *Manager) startNetwork(instance *InstanceMetadata) error {
 	netSpec := types.NetworkCreate{
 		Driver: "bridge",
 	}
-	netname := iMeta.getNetworkName()
-	_, err = m.cli.NetworkCreate(m.ctx, netname, netSpec)
+	netname := instance.getNetworkName()
+	_, err := m.cli.NetworkCreate(m.ctx, netname, netSpec)
 	if err != nil {
 		m.log.errorf("could not create challenge network (%s): %s", netname, err)
-		return 0, err
+	}
+	return err
+}
+
+func (m *Manager) stopNetwork(instance *InstanceMetadata) error {
+	err := m.cli.NetworkRemove(m.ctx, instance.getNetworkName())
+	if err != nil {
+		m.log.errorf("failed to remove network: %s", err)
+	}
+	return err
+}
+
+func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetadata) error {
+
+	revPortMap, err := m.getReversePortMap(build.Challenge)
+	if err != nil {
+		return err
 	}
 
 	// Call create in docker
+	netname := instance.getNetworkName()
 	for _, image := range build.Images {
 		exposedPorts := nat.PortSet{}
 		publishedPorts := nat.PortMap{}
@@ -393,23 +397,23 @@ func (m *Manager) startContainers(build *BuildMetadata) (InstanceId, error) {
 		respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, "")
 		if err != nil {
 			m.log.errorf("failed to create instance container: %s", err)
-			return 0, err
+			return err
 		}
 
 		cid := respCC.ID
-		iMeta.Containers = append(iMeta.Containers, cid)
+		instance.Containers = append(instance.Containers, cid)
 		m.log.infof("created new image: %s", cid)
 
 		err = m.cli.ContainerStart(m.ctx, cid, types.ContainerStartOptions{})
 		if err != nil {
 			m.log.errorf("failed to start container: %s", err)
-			return 0, err
+			return err
 		}
 
 		cInfo, err := m.cli.ContainerInspect(m.ctx, cid)
 		if err != nil {
 			m.log.errorf("failed to get container info: %s", err)
-			return 0, err
+			return err
 		}
 
 		for cPort, hPortInfo := range cInfo.NetworkSettings.Ports {
@@ -419,25 +423,19 @@ func (m *Manager) startContainers(build *BuildMetadata) (InstanceId, error) {
 
 			hPort, err := strconv.Atoi(string(hPortInfo[0].HostPort))
 			if err != nil {
-				return 0, err
+				return err
 			}
-			iMeta.Ports[revPortMap[string(cPort)]] = hPort
+			instance.Ports[revPortMap[string(cPort)]] = hPort
 			m.log.debugf("container port %s mapped to %s", cPort, hPortInfo[0].HostPort)
 		}
 	}
 
-	return iMeta.Id, m.finalizeInstance(iMeta)
+	return m.finalizeInstance(instance)
 }
 
-func (m *Manager) stopContainers(instance InstanceId) error {
-	m.log.debugf("stopping instance %d", instance)
-	iMeta, err := m.lookupInstanceMetadata(instance)
-	if err != nil {
-		return err
-	}
-
-	for _, cid := range iMeta.Containers {
-		err = m.cli.ContainerKill(m.ctx, cid, "SIGKILL")
+func (m *Manager) stopContainers(instance *InstanceMetadata) error {
+	for _, cid := range instance.Containers {
+		err := m.cli.ContainerKill(m.ctx, cid, "SIGKILL")
 		if err != nil {
 			m.log.errorf("failed to kill container: %s", err)
 			return err
@@ -451,13 +449,7 @@ func (m *Manager) stopContainers(instance InstanceId) error {
 		}
 	}
 
-	err = m.cli.NetworkRemove(m.ctx, iMeta.getNetworkName())
-	if err != nil {
-		m.log.errorf("failed to remove network: %s", err)
-		return err
-	}
-
-	return m.removeInstanceMetadata(instance)
+	return m.removeContainersMetadata(instance)
 }
 
 func (m *Manager) destroyImages(build BuildId) error {

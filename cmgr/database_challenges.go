@@ -1,7 +1,6 @@
 package cmgr
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -306,40 +305,79 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			}
 		}
 
-		if rebuild {
-			builds := []BuildId{}
-			err = txn.Select(&builds, "SELECT id FROM builds WHERE challenge=?;", metadata.Id)
-			if err != nil {
-				m.log.error(err)
-				errs = append(errs, err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				return errs
-			}
-
-			if len(builds) > 0 {
-				buildCtxFile, err := m.createBuildContext(metadata, m.getDockerfile(metadata.ChallengeType))
-				if err != nil {
-					m.log.errorf("failed to create build context: %s", err)
-					return append(errs, err)
-				}
-				buildCtx, err := os.Open(buildCtxFile)
-				if err != nil {
-					m.log.errorf("could not open build context: %s", err)
-					return append(errs, err)
-				}
-				defer buildCtx.Close()
-
-				return append(errs, errors.New("rebuild not implemented"))
-			}
-		}
-
 		if err := txn.Commit(); err != nil { // It's undocumented what this means...
 			m.log.error(err)
 			errs = append(errs, err)
+			continue // next challenge
+		}
+
+		if rebuild {
+			buildIds := []BuildId{}
+			err = m.db.Select(&buildIds, "SELECT id FROM builds WHERE challenge=?;", metadata.Id)
+			if err != nil {
+				m.log.error(err)
+				errs = append(errs, err)
+				continue
+			}
+
+			if len(buildIds) > 0 {
+				buildCtxFile, err := m.createBuildContext(metadata, m.getDockerfile(metadata.ChallengeType))
+				if err != nil {
+					m.log.errorf("failed to create build context: %s", err)
+					errs = append(errs, err)
+					continue
+				}
+				defer os.Remove(buildCtxFile)
+
+				for _, buildId := range buildIds {
+					build, err := m.lookupBuildMetadata(buildId)
+					if err != nil {
+						errs = append(errs, err)
+						continue
+					}
+
+					buildCtx, err := os.Open(buildCtxFile)
+					if err != nil {
+						m.log.errorf("could not open build context: %s", err)
+						errs = append(errs, err)
+						continue
+					}
+					defer buildCtx.Close()
+
+					// Resetting the flag signals to rebuild the Dockerfile
+					build.Flag = ""
+					err = m.executeBuild(metadata, build, buildCtx)
+					if err != nil {
+						errs = append(errs, err)
+						continue
+					}
+
+					// Update database
+					err = m.finalizeBuild(build)
+					if err != nil {
+						errs = append(errs, err)
+						continue
+					}
+					// Restart containers
+					instances, err := m.getBuildInstances(build.Id)
+					if err != nil {
+						errs = append(errs, err)
+						continue
+					}
+					for _, iid := range instances {
+						instance, err := m.lookupInstanceMetadata(iid)
+						if err == nil {
+							err = m.stopContainers(instance)
+						}
+						if err == nil {
+							err = m.startContainers(build, instance)
+						}
+						if err != nil {
+							errs = append(errs, err)
+						}
+					}
+				}
+			}
 		}
 	}
 	return errs
