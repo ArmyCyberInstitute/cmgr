@@ -31,8 +31,10 @@ func main() {
 		logLevel = cmgr.WARN
 	case "error":
 		logLevel = cmgr.ERROR
-	default:
+	case "disabled":
 		logLevel = cmgr.DISABLED
+	default:
+		logLevel = cmgr.WARN
 	}
 
 	log.SetFlags(0)
