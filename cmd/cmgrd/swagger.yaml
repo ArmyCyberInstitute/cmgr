@@ -115,7 +115,7 @@ paths:
           description: "Invalid path string to include invalid build identifier"
         "500":
           description: "A database error occurred in `cmgr`"
-        "200":
+        "201":
           description: "The identifier of the new instance"
           schema:
             type: integer
@@ -129,7 +129,7 @@ paths:
           description: "Invalid path string to include invalid challenge identifier"
         "500":
           description: "A database error occurred in `cmgr`"
-        "200":
+        "204":
           description: "Indicates successfully deleted"
   /instances/{instance_id}:
     parameters:
@@ -160,7 +160,7 @@ paths:
           description: "Invalid path string to include invalid instance identifier"
         "500":
           description: "A database error occurred in `cmgr`.  Could also indicate that the solve failed or does not exist."
-        "200":
+        "204":
           description: "Indicates solve ran correctly"
     delete:
       tags: [instances]
@@ -171,7 +171,7 @@ paths:
           description: "Invalid path string to include invalid challenge identifier"
         "500":
           description: "A database error occurred in `cmgr` (may also indicate that there are live instances of the build)"
-        "200":
+        "204":
           description: "Indicates successfully stopped"
   /schemas:
     get:
@@ -207,7 +207,7 @@ paths:
           description: "Invalid path string"
         "500":
           description: "A database error occurred in `cmgr` (currently includes bad build identifiers)."
-        "200":
+        "201":
           description: "Indicates schema created successfully"
   /schemas/{schema_name}:
     parameters:
@@ -247,7 +247,7 @@ paths:
           description: "Invalid path string"
         "500":
           description: "A database error occurred in `cmgr` (currently includes bad build identifiers)."
-        "200":
+        "204":
           description: "Indicates schema updated successfully"
     delete:
       tags: [schemas]
@@ -258,7 +258,7 @@ paths:
           description: "Invalid path string"
         "500":
           description: "A database error occurred in `cmgr`"
-        "200":
+        "204":
           description: "Indicates successfully removed"
 definitions:
   ChallengeListElement:

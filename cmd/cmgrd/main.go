@@ -144,15 +144,12 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 	challenge := cmgr.ChallengeId(chalStr[:len(chalStr)-1])
 
 	var err error
-	respCode := http.StatusInternalServerError
+	respCode := http.StatusOK
 	var body []byte
 	switch r.Method {
 	case "GET":
 		var meta *cmgr.ChallengeMetadata
 		meta, err = s.mgr.GetChallengeMetadata(challenge)
-		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-			respCode = http.StatusNotFound
-		}
 		if err == nil {
 			body, err = json.Marshal(meta)
 		}
@@ -171,9 +168,6 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 				buildReq.FlagFormat = "flag{%s}"
 			}
 			builds, err = s.mgr.Build(challenge, buildReq.Seeds, buildReq.FlagFormat)
-			if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-				respCode = http.StatusNotFound
-			}
 		}
 
 		if err == nil {
@@ -185,12 +179,15 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		w.WriteHeader(respCode)
+		respCode = http.StatusInternalServerError
+		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+			respCode = http.StatusNotFound
+		}
 		body = []byte(err.Error())
 	}
 
+	w.WriteHeader(respCode)
 	w.Write(body)
-	return
 }
 
 func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
@@ -215,23 +212,19 @@ func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 	build := cmgr.BuildId(buildInt)
 
 	var body []byte
-	respCode := http.StatusInternalServerError
+	var respCode int
 	switch r.Method {
 	case "GET":
 		var meta *cmgr.BuildMetadata
 		meta, err = s.mgr.GetBuildMetadata(build)
-		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-			respCode = http.StatusNotFound
-		}
+		respCode = http.StatusOK
 		if err == nil {
 			body, err = json.Marshal(meta)
 		}
 	case "POST":
 		var instance cmgr.InstanceId
 		instance, err = s.mgr.Start(build)
-		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-			respCode = http.StatusNotFound
-		}
+		respCode = http.StatusCreated
 
 		var iMeta *cmgr.InstanceMetadata
 		if err == nil {
@@ -243,19 +236,21 @@ func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	case "DELETE":
 		err = s.mgr.Destroy(build)
-		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-			respCode = http.StatusNotFound
-		}
+		respCode = http.StatusNoContent
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	if err != nil {
-		w.WriteHeader(respCode)
+		respCode = http.StatusInternalServerError
+		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+			respCode = http.StatusNotFound
+		}
 		body = []byte(err.Error())
 	}
 
+	w.WriteHeader(respCode)
 	w.Write(body)
 }
 
@@ -312,32 +307,34 @@ func (s state) instanceHandler(w http.ResponseWriter, r *http.Request) {
 	instance := cmgr.InstanceId(instInt)
 
 	var body []byte
+	var respCode int
 	switch r.Method {
 	case "GET":
 		var meta *cmgr.InstanceMetadata
 		meta, err = s.mgr.GetInstanceMetadata(instance)
+		respCode = http.StatusOK
 		if err == nil {
 			body, err = json.Marshal(meta)
 		}
 	case "POST":
 		err = s.mgr.CheckInstance(instance)
+		respCode = http.StatusNoContent
 	case "DELETE":
 		err = s.mgr.Stop(instance)
+		respCode = http.StatusNoContent
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-
-	respCode := http.StatusInternalServerError
-	if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-		respCode = http.StatusNotFound
-	}
-
 	if err != nil {
-		w.WriteHeader(respCode)
+		respCode = http.StatusInternalServerError
+		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+			respCode = http.StatusNotFound
+		}
 		body = []byte(err.Error())
 	}
 
+	w.WriteHeader(respCode)
 	w.Write(body)
 }
 
@@ -353,7 +350,7 @@ func (s state) existingSchemaHandler(w http.ResponseWriter, r *http.Request) {
 
 	var body []byte
 	var err error
-	errorCode := http.StatusInternalServerError
+	respCode := http.StatusOK
 	switch r.Method {
 	case "GET":
 		var meta []*cmgr.ChallengeMetadata
@@ -364,6 +361,7 @@ func (s state) existingSchemaHandler(w http.ResponseWriter, r *http.Request) {
 	case "POST":
 		var data []byte
 		data, err = ioutil.ReadAll(r.Body)
+		respCode = http.StatusNoContent
 
 		var schemaDef *cmgr.Schema
 		if err == nil {
@@ -372,7 +370,7 @@ func (s state) existingSchemaHandler(w http.ResponseWriter, r *http.Request) {
 
 		if err == nil {
 			if schemaDef.Name != schema {
-				errorCode = http.StatusBadRequest // Bad Request
+				respCode = http.StatusBadRequest // Bad Request
 				err = errors.New("mismatch between endpoint and schema name")
 			} else {
 				errs := s.mgr.UpdateSchema(schemaDef)
@@ -383,23 +381,28 @@ func (s state) existingSchemaHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	case "DELETE":
 		err = s.mgr.DeleteSchema(schema)
+		respCode = http.StatusNoContent
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	if err != nil {
-		w.WriteHeader(errorCode)
+		respCode = http.StatusInternalServerError
+		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+			respCode = http.StatusNotFound
+		}
 		body = []byte(err.Error())
 	}
 
+	w.WriteHeader(respCode)
 	w.Write(body)
 }
 
 func (s state) schemaHandler(w http.ResponseWriter, r *http.Request) {
 	var body []byte
 	var err error
-	errorCode := http.StatusInternalServerError
+	respCode := http.StatusOK
 	switch r.Method {
 	case "GET":
 		var schemaList []string
@@ -420,6 +423,8 @@ func (s state) schemaHandler(w http.ResponseWriter, r *http.Request) {
 			errs := s.mgr.CreateSchema(schemaDef)
 			if len(errs) > 0 {
 				err = fmt.Errorf("%v", errs)
+			} else {
+				respCode = http.StatusCreated
 			}
 		}
 	default:
@@ -428,9 +433,13 @@ func (s state) schemaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		w.WriteHeader(errorCode)
+		respCode = http.StatusInternalServerError
+		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
+			respCode = http.StatusNotFound
+		}
 		body = []byte(err.Error())
 	}
 
+	w.WriteHeader(respCode)
 	w.Write(body)
 }
