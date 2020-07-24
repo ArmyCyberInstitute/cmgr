@@ -156,14 +156,20 @@ Available commands:
       stops all known instances and destroys all known builds
 
   test [--no-solve|--require-solve] [<path>]
-      shortcut for calling 'update' on the given path followed by build,
+      Shortcut for calling 'update' on the given path followed by build,
       start, check, stop, destroy for each challenge in the directory;
       'no-solve' will skip the last three steps and leave an instance of each
       challenge running while 'require-solve' will treat the absence of a
       solve script as an error.
 
+  playtest <challenge>
+  	  Creates a build and instance of the challenge and then starts a simple
+  	  http front-end scoped to only that instance.  The port used by the server
+  	  as well as the seed and flag format can all be customized through
+  	  environment variables (PORT, SEED, and FLAG_FORMAT).
+
   system-dump [--summary|--json] [<challenge> ...]
-      lists the challenges along with their builds and instances; only counts
+      Lists the challenges along with their builds and instances; only counts
       are given for 'summary' and all metadata is given in JSON format for
       'json'; all challenges are listed if no challenge IDs are provided
 
