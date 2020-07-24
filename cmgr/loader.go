@@ -74,20 +74,113 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		m.log.error(lastErr)
 	}
 
+	// Validate (& lift) Hints
+	onePort := len(md.PortMap) == 1
+	// Insert port elision into the string
+	var portName string
+	refPort := make(map[string]bool)
+	for k := range md.PortMap {
+		// Only executes once because of above check
+		portName = k
+		refPort[k] = false
+	}
+
+	normalizeAndCheckTemplated := func(s string) (string, error) {
+		var r string
+		m.log.debug(md.PortMap)
+		m.log.debug(s)
+		if onePort {
+
+			r = `{{url_for("$1", "$1")}}`
+			s = shortUrlForRe.ReplaceAllString(s, r)
+
+			r = fmt.Sprintf(`{{http_base("%s")}}`, portName)
+			s = shortHttpBaseRe.ReplaceAllString(s, r)
+
+			r = fmt.Sprintf(`{{port("%s")}}`, portName)
+			s = shortPortRe.ReplaceAllString(s, r)
+
+			r = fmt.Sprintf(`{{server("%s")}}`, portName)
+			s = shortServerRe.ReplaceAllString(s, r)
+
+			r = fmt.Sprintf(`{{link("%s", "${1}")}}`, portName)
+			s = shortLinkRe.ReplaceAllString(s, r)
+
+			r = fmt.Sprintf(`{{link_as("%s", "${1}", "${2}")}}`, portName)
+			s = shortLinkAsRe.ReplaceAllString(s, r)
+		}
+		m.log.debug(s)
+
+		r = `<a href='{{url("${1}")}}'>${2}</a>`
+		s = urlForRe.ReplaceAllString(s, r)
+
+		r = `<a href='{{http_base("${1}")}}:{{port("${1}")}}/${2}' target='_blank'>${2}</a>`
+		s = linkRe.ReplaceAllString(s, r)
+
+		r = `<a href='{{http_base("${1}")}}:{{port("${1}")}}/${2}' target='_blank'>${3}</a>`
+		s = linkAsRe.ReplaceAllString(s, r)
+
+		var err error
+		templates := templateRe.FindAllString(s, -1)
+		for _, tmpl := range templates {
+			if urlRe.MatchString(tmpl) || lookupRe.MatchString(tmpl) {
+				continue
+			}
+
+			isPortRef := false
+			res := httpBaseRe.FindStringSubmatch(tmpl)
+			if res == nil {
+				res = portRe.FindStringSubmatch(tmpl)
+				if res != nil {
+					isPortRef = true
+				}
+			}
+			if res == nil {
+				res = serverRe.FindStringSubmatch(tmpl)
+			}
+
+			if res == nil || len(res) < 2 || len(md.PortMap) == 0 {
+				err = fmt.Errorf("unrecognized template string of '%s': %s", tmpl, md.Path)
+				m.log.error(err)
+				continue
+			}
+
+			if _, ok := md.PortMap[res[1]]; !ok {
+				err = fmt.Errorf("unrecognized port in template '%s': %s", tmpl, md.Path)
+				m.log.error(err)
+				continue
+			}
+
+			if isPortRef {
+				refPort[res[1]] = true
+			}
+		}
+
+		return s, err
+	}
+
 	// Validate (& lift) Details
-	res, err := m.normalizeAndCheckTemplated(md, md.Details)
+	res, err := normalizeAndCheckTemplated(md.Details)
 	if err != nil {
 		lastErr = err
 	}
 	md.Details = res
 
-	// Validate (& lift) Hints
 	for i, hint := range md.Hints {
-		res, err = m.normalizeAndCheckTemplated(md, hint)
+		res, err = normalizeAndCheckTemplated(hint)
+
 		if err != nil {
 			lastErr = err
 		}
+
 		md.Hints[i] = res
+	}
+
+	for port, used := range refPort {
+		if !used {
+			lastErr = fmt.Errorf("port '%s' published but not referenced: %s", port, md.Path)
+			m.log.error(lastErr)
+		}
 	}
 
 	return lastErr
@@ -153,81 +246,6 @@ var linkAsRe *regexp.Regexp = regexp.MustCompile(linkAsRePattern)
 const shortLinkAsRePattern string = `\{\{\s*link_as\(["'](` + urlPathPattern + `)["'],\s*["'](` + displayTextPattern + `)["']\s*\)\}\}`
 
 var shortLinkAsRe *regexp.Regexp = regexp.MustCompile(shortLinkAsRePattern)
-
-func (m *Manager) normalizeAndCheckTemplated(md *ChallengeMetadata, s string) (string, error) {
-	onePort := len(md.PortMap) == 1
-	// Insert port elision into the string
-	var portName string
-	// refPort := make(map[string]bool)
-	for k := range md.PortMap {
-		// Only executes once because of above check
-		portName = k
-		// refPort[k] = false
-	}
-	var r string
-	m.log.debug(md.PortMap)
-	m.log.debug(s)
-	if onePort {
-
-		r = `{{url_for("$1", "$1")}}`
-		s = shortUrlForRe.ReplaceAllString(s, r)
-
-		r = fmt.Sprintf(`{{http_base("%s")}}`, portName)
-		s = shortHttpBaseRe.ReplaceAllString(s, r)
-
-		r = fmt.Sprintf(`{{port("%s")}}`, portName)
-		s = shortPortRe.ReplaceAllString(s, r)
-
-		r = fmt.Sprintf(`{{server("%s")}}`, portName)
-		s = shortServerRe.ReplaceAllString(s, r)
-
-		r = fmt.Sprintf(`{{link("%s", "${1}")}}`, portName)
-		s = shortLinkRe.ReplaceAllString(s, r)
-
-		r = fmt.Sprintf(`{{link_as("%s", "${1}", "${2}")}}`, portName)
-		s = shortLinkAsRe.ReplaceAllString(s, r)
-	}
-	m.log.debug(s)
-
-	r = `<a href='{{url("${1}")}}'>${2}</a>`
-	s = urlForRe.ReplaceAllString(s, r)
-
-	r = `<a href='{{http_base("${1}")}}:{{port("${1}")}}/${2}' target='_blank'>${2}</a>`
-	s = linkRe.ReplaceAllString(s, r)
-
-	r = `<a href='{{http_base("${1}")}}:{{port("${1}")}}/${2}' target='_blank'>${3}</a>`
-	s = linkAsRe.ReplaceAllString(s, r)
-
-	var err error
-	templates := templateRe.FindAllString(s, -1)
-	for _, tmpl := range templates {
-		if urlRe.MatchString(tmpl) || lookupRe.MatchString(tmpl) {
-			continue
-		}
-
-		res := httpBaseRe.FindStringSubmatch(tmpl)
-		if res == nil {
-			res = portRe.FindStringSubmatch(tmpl)
-		}
-		if res == nil {
-			res = serverRe.FindStringSubmatch(tmpl)
-		}
-
-		if res == nil || len(res) < 2 || len(md.PortMap) == 0 {
-			err = fmt.Errorf("unrecognized template string of '%s': %s", tmpl, md.Path)
-			m.log.error(err)
-			continue
-		}
-
-		if _, ok := md.PortMap[res[1]]; !ok {
-			err = fmt.Errorf("unrecognized port in template '%s': %s", tmpl, md.Path)
-			m.log.error(err)
-			continue
-		}
-	}
-
-	return s, err
-}
 
 // Validates the challenge metadata for compliance with expectations
 func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
