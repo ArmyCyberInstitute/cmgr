@@ -382,7 +382,8 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		}
 
 		hConfig := container.HostConfig{
-			PortBindings: publishedPorts,
+			PortBindings:  publishedPorts,
+			RestartPolicy: container.RestartPolicy{Name: "always"},
 		}
 
 		nConfig := network.NetworkingConfig{
@@ -434,22 +435,21 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 }
 
 func (m *Manager) stopContainers(instance *InstanceMetadata) error {
+	var err error
 	for _, cid := range instance.Containers {
-		err := m.cli.ContainerKill(m.ctx, cid, "SIGKILL")
-		if err != nil {
-			m.log.errorf("failed to kill container: %s", err)
-			return err
-		}
-
 		opts := types.ContainerRemoveOptions{RemoveVolumes: true, Force: true}
 		err = m.cli.ContainerRemove(m.ctx, cid, opts)
 		if err != nil {
 			m.log.errorf("failed to remove container: %s", err)
-			return err
 		}
 	}
 
-	return m.removeContainersMetadata(instance)
+	mdErr := m.removeContainersMetadata(instance)
+	if mdErr != nil {
+		err = mdErr
+	}
+
+	return err
 }
 
 func (m *Manager) destroyImages(build BuildId) error {
