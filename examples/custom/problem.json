@@ -4,8 +4,8 @@
   "challenge_type": "custom",
   "category": "Cryptography",
   "points": 50,
-  "description": "We found a new website. Try to see if you can login!",
-  "details": "The website running at {{link('/')}}.",
+  "description": "We found a file that appears to be encrypted.",
+  "details": "The file is {{url_for('secret.enc', 'here')}}, and someone told us the decryption instructions can be obtained with <code>nc {{server}} {{port}}</code>",
     "tags" : [
         "crypto",
         "custom",

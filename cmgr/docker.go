@@ -332,9 +332,20 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 	bMeta.Images = images
 	bMeta.HasArtifacts = len(files) > 0
 
+	err = m.validateBuild(cMeta, bMeta, files)
+	if err != nil {
+		os.Remove(bMeta.getArtifactsFilename())
+
+		iro := types.ImageRemoveOptions{Force: false, PruneChildren: true}
+		for _, image := range bMeta.Images {
+			imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, image.DockerId)
+			m.cli.ImageRemove(m.ctx, imageName, iro)
+		}
+	}
+
 	m.log.debugf("%v", bMeta)
 
-	return nil
+	return err
 }
 
 func (m *Manager) startNetwork(instance *InstanceMetadata) error {
@@ -464,16 +475,16 @@ func (m *Manager) destroyImages(build BuildId) error {
 		return err
 	}
 
+	if bMeta.HasArtifacts {
+		err := os.Remove(filepath.Join(m.artifactsDir, bMeta.getArtifactsFilename()))
+		if err != nil {
+			m.log.errorf("failed to remove artifacts file: %s", err)
+			return err
+		}
+	}
+
 	iro := types.ImageRemoveOptions{Force: false, PruneChildren: true}
 	for _, image := range bMeta.Images {
-		if bMeta.HasArtifacts {
-			artifactsFileName := fmt.Sprintf("%s.tar.gz", image.DockerId)
-			err := os.Remove(filepath.Join(m.artifactsDir, artifactsFileName))
-			if err != nil {
-				m.log.errorf("failed to remove artifacts file: %s", err)
-				return err
-			}
-		}
 
 		imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, image.DockerId)
 		_, err := m.cli.ImageRemove(m.ctx, imageName, iro)

@@ -77,6 +77,8 @@ func main() {
 		exitCode = removeSchema(mgr, cmdArgs)
 	case "show-schema":
 		exitCode = showSchema(mgr, cmdArgs)
+	case "playtest":
+		exitCode = playtestChallenge(mgr, cmdArgs)
 	default:
 		fmt.Println("error: unrecognized command")
 		exitCode = USAGE_ERROR

@@ -51,6 +51,67 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 
 var templateRe *regexp.Regexp = regexp.MustCompile(`\{\{[^}]*\}\}`)
 
+const filenamePattern string = "[a-zA-Z0-9_.-]+"
+const displayTextPattern string = `[^<>'"]+`
+const urlPathPattern string = `[a-zA-Z0-9_%/=?+&#!.,-]+`
+
+// {{url("file")}}
+const urlRePattern string = `\{\{\s*url\(["'](` + filenamePattern + `)["']\)\s*\}\}`
+
+var urlRe *regexp.Regexp = regexp.MustCompile(urlRePattern)
+
+// {{url_for("file", "display text")}}
+const urlForRePattern string = `\{\{\s*url_for\(["'](` + filenamePattern + `)["'],\s*["'](` + displayTextPattern + `)["']\)\s*\}\}`
+
+var urlForRe *regexp.Regexp = regexp.MustCompile(urlForRePattern)
+
+// This exists entirely for backwards compatability with hacksport
+// {{url_for("file")}}
+const shortUrlForRePattern string = `\{\{\s*url_for\(["'](` + filenamePattern + `)["']\)\s*\}\}`
+
+var shortUrlForRe *regexp.Regexp = regexp.MustCompile(shortUrlForRePattern)
+
+// {{http_base("port_name")}}
+var httpBaseRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*http_base\(["'](\w+)["']\)\s*\}\}`)
+
+// {{http_base}}
+var shortHttpBaseRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*http_base\s*\}\}`)
+
+// {{port("port_name")}}
+var portRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*port\(["'](\w+)["']\)\s*\}\}`)
+
+// {{port}}
+var shortPortRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*port\s*\}\}`)
+
+// {{server("port_name")}}
+var serverRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*server\(["'](\w+)["']\)\s*\}\}`)
+
+// {{server}}
+var shortServerRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*server\s*\}\}`)
+
+// {{lookup("key")}}
+var lookupRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*lookup\(["'](\w+)["']\)\s*\}\}`)
+
+// {{link("port_name", "/url/in/challenge")}}
+const linkRePattern string = `\{\{\s*link\(["'](\w+)["'],\s*["'](` + urlPathPattern + `)["']\)\s*\}\}`
+
+var linkRe *regexp.Regexp = regexp.MustCompile(linkRePattern)
+
+// {{link("/url/in/challenge")}}
+const shortLinkRePattern string = `\{\{\s*link\(["'](` + urlPathPattern + `)["']\)\s*\}\}`
+
+var shortLinkRe *regexp.Regexp = regexp.MustCompile(shortLinkRePattern)
+
+// {{link_as("port_name", "/url/in/challenge", "display text")}}
+const linkAsRePattern string = `\{\{\s*link_as\(["'](\w+)["'],\s*["'](` + urlPathPattern + `)["'],\s*["'](` + displayTextPattern + `)["']\s*\)\}\}`
+
+var linkAsRe *regexp.Regexp = regexp.MustCompile(linkAsRePattern)
+
+// {{link_as("/url/in/challenge", "display text")}}
+const shortLinkAsRePattern string = `\{\{\s*link_as\(["'](` + urlPathPattern + `)["'],\s*["'](` + displayTextPattern + `)["']\s*\)\}\}`
+
+var shortLinkAsRe *regexp.Regexp = regexp.MustCompile(shortLinkAsRePattern)
+
 func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	var lastErr error
 	// Require a challenge name
@@ -87,8 +148,6 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 
 	normalizeAndCheckTemplated := func(s string) (string, error) {
 		var r string
-		m.log.debug(md.PortMap)
-		m.log.debug(s)
 		if onePort {
 
 			r = `{{url_for("$1", "$1")}}`
@@ -109,7 +168,6 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			r = fmt.Sprintf(`{{link_as("%s", "${1}", "${2}")}}`, portName)
 			s = shortLinkAsRe.ReplaceAllString(s, r)
 		}
-		m.log.debug(s)
 
 		r = `<a href='{{url("${1}")}}'>${2}</a>`
 		s = urlForRe.ReplaceAllString(s, r)
@@ -186,66 +244,71 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	return lastErr
 }
 
-const filenamePattern string = "[a-zA-Z0-9_.-]+"
-const displayTextPattern string = `[^<>'"]+`
-const urlPathPattern string = `[a-zA-Z0-9_%/=?+&#!.,-]+`
+func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, files []string) error {
+	refFile := make(map[string]bool)
+	refLookup := make(map[string]bool)
+	for _, k := range files {
+		refFile[k] = false
+	}
 
-// {{url("file")}}
-const urlRePattern string = `\{\{\s*url\(["'](` + filenamePattern + `)["']\)\s*\}\}`
+	for k := range md.LookupData {
+		refLookup[k] = false
+	}
 
-var urlRe *regexp.Regexp = regexp.MustCompile(urlRePattern)
+	checkTemplated := func(s string) error {
+		var err error
+		fileRefs := urlRe.FindAllStringSubmatch(s, -1)
+		for _, ref := range fileRefs {
+			_, ok := refFile[ref[1]]
+			if !ok {
+				err = fmt.Errorf("unknown artifact '%s' referenced: %s/%d", ref[1], md.Challenge, md.Id)
+				m.log.error(err)
+			} else {
+				refFile[ref[1]] = true
+			}
+		}
 
-// {{url_for("file", "display text")}}
-const urlForRePattern string = `\{\{\s*url_for\(["'](` + filenamePattern + `)["'],\s*["'](` + displayTextPattern + `)["']\)\s*\}\}`
+		lookupRefs := urlRe.FindAllStringSubmatch(s, -1)
+		for _, ref := range lookupRefs {
+			_, ok := refFile[ref[1]]
+			if !ok {
+				err = fmt.Errorf("unknown lookup key of '%s' referenced: %s/%d", ref[1], md.Challenge, md.Id)
+				m.log.error(err)
+			} else {
+				refFile[ref[1]] = true
+			}
+		}
 
-var urlForRe *regexp.Regexp = regexp.MustCompile(urlForRePattern)
+		return err
+	}
 
-// This exists entirely for backwards compatability with hacksport
-// {{url_for("file")}}
-const shortUrlForRePattern string = `\{\{\s*url_for\(["'](` + filenamePattern + `)["']\)\s*\}\}`
+	// Validate (& lift) Details
+	err := checkTemplated(cMeta.Details)
 
-var shortUrlForRe *regexp.Regexp = regexp.MustCompile(shortUrlForRePattern)
+	for _, hint := range cMeta.Hints {
+		tmpErr := checkTemplated(hint)
 
-// {{http_base("port_name")}}
-var httpBaseRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*http_base\(["'](\w+)["']\)\s*\}\}`)
+		if tmpErr != nil {
+			err = err
+		}
+	}
 
-// {{http_base}}
-var shortHttpBaseRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*http_base\s*\}\}`)
+	for f, used := range refFile {
+		if !used {
+			err = fmt.Errorf("artifact file '%s' published but not referenced: %s/%d", f, md.Challenge, md.Id)
+			m.log.error(err)
+		}
+	}
 
-// {{port("port_name")}}
-var portRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*port\(["'](\w+)["']\)\s*\}\}`)
+	for key, used := range refLookup {
+		if !used {
+			err = fmt.Errorf("lookup value '%s' published but not referenced: %s/%d", key, md.Challenge, md.Id)
+			m.log.error(err)
+		}
+	}
 
-// {{port}}
-var shortPortRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*port\s*\}\}`)
-
-// {{server("port_name")}}
-var serverRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*server\(["'](\w+)["']\)\s*\}\}`)
-
-// {{server}}
-var shortServerRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*server\s*\}\}`)
-
-// {{lookup("key")}}
-var lookupRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*lookup\(["'](\w+)["']\)\s*\}\}`)
-
-// {{link("port_name", "/url/in/challenge")}}
-const linkRePattern string = `\{\{\s*link\(["'](\w+)["'],\s*["'](` + urlPathPattern + `)["']\)\s*\}\}`
-
-var linkRe *regexp.Regexp = regexp.MustCompile(linkRePattern)
-
-// {{link("/url/in/challenge")}}
-const shortLinkRePattern string = `\{\{\s*link\(["'](` + urlPathPattern + `)["']\)\s*\}\}`
-
-var shortLinkRe *regexp.Regexp = regexp.MustCompile(shortLinkRePattern)
-
-// {{link_as("port_name", "/url/in/challenge", "display text")}}
-const linkAsRePattern string = `\{\{\s*link_as\(["'](\w+)["'],\s*["'](` + urlPathPattern + `)["'],\s*["'](` + displayTextPattern + `)["']\s*\)\}\}`
-
-var linkAsRe *regexp.Regexp = regexp.MustCompile(linkAsRePattern)
-
-// {{link_as("/url/in/challenge", "display text")}}
-const shortLinkAsRePattern string = `\{\{\s*link_as\(["'](` + urlPathPattern + `)["'],\s*["'](` + displayTextPattern + `)["']\s*\)\}\}`
-
-var shortLinkAsRe *regexp.Regexp = regexp.MustCompile(shortLinkAsRePattern)
+	return err
+}
 
 // Validates the challenge metadata for compliance with expectations
 func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
