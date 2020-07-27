@@ -2,7 +2,6 @@ package cmgr
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"hash/crc32"
 	"io/ioutil"
@@ -21,7 +20,7 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 	if info.Name() == "problem.json" {
 		md, err = m.loadJsonChallenge(path, info)
 	} else if info.Name() == "problem.md" {
-		err = errors.New("'problem.md' not supported yet")
+		md, err = m.loadMarkdownChallenge(path, info)
 	}
 
 	if err != nil || md == nil {
