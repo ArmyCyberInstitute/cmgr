@@ -2,4 +2,3 @@ break _exit
 run
 print (char *)&flag
 quit
-

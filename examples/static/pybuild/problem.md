@@ -13,7 +13,7 @@ Reverse engineering can definitely be intimidating so we have a simple program w
 
 ## Details
 
-You can find the program {{url_for("re101", "here")}}. If you don't know where to start, check out the hints where we'll walk you through two different ways to solve this problem."
+You can find the program {{url_for("re101", "here")}}. If you don't know where to start, check out the hints where we'll walk you through two different ways to solve this problem.
 
 ## Hints
 
