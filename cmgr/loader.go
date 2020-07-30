@@ -234,7 +234,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	}
 
 	for port, used := range refPort {
-		if !used {
+		if !used && md.ChallengeType != "hacksport" {
 			lastErr = fmt.Errorf("port '%s' published but not referenced: %s", port, md.Path)
 			m.log.error(lastErr)
 		}
@@ -249,10 +249,12 @@ func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, fil
 	for _, k := range files {
 		refFile[k] = false
 	}
+	m.log.debugf("files: %#v", refFile)
 
 	for k := range md.LookupData {
 		refLookup[k] = false
 	}
+	m.log.debugf("lookups: %#v", refLookup)
 
 	checkTemplated := func(s string) error {
 		var err error
@@ -260,18 +262,18 @@ func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, fil
 		for _, ref := range fileRefs {
 			_, ok := refFile[ref[1]]
 			if !ok {
-				err = fmt.Errorf("unknown artifact '%s' referenced: %s/%d", ref[1], md.Challenge, md.Id)
+				err = fmt.Errorf("unknown artifact '%s' referenced with '%s': %s/%d", ref[1], ref[0], md.Challenge, md.Id)
 				m.log.error(err)
 			} else {
 				refFile[ref[1]] = true
 			}
 		}
 
-		lookupRefs := urlRe.FindAllStringSubmatch(s, -1)
+		lookupRefs := lookupRe.FindAllStringSubmatch(s, -1)
 		for _, ref := range lookupRefs {
 			_, ok := refFile[ref[1]]
 			if !ok {
-				err = fmt.Errorf("unknown lookup key of '%s' referenced: %s/%d", ref[1], md.Challenge, md.Id)
+				err = fmt.Errorf("unknown lookup key of '%s' referenced with '%s': %s/%d", ref[1], ref[0], md.Challenge, md.Id)
 				m.log.error(err)
 			} else {
 				refFile[ref[1]] = true
