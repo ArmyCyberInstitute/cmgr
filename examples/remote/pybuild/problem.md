@@ -19,11 +19,11 @@ You can connect to the service with `nc {{server}} {{port}}`.
 
 ## Hints
 
-- "There are two parts to the hidden message...
+- There are two parts to the hidden message...
 
-- "A disassembler will help you make sense of the obfuscation
+- A disassembler will help you make sense of the obfuscation
 
-- "A XOR B = C ::: A = C XOR B
+- A XOR B = C ::: A = C XOR B
 
 ## Solution Overview
 
