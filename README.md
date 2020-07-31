@@ -10,8 +10,12 @@ or training platform.
 ## Quickstart
 
 Assuming you already have Docker installed, the following code snippet will
-download example challenges and the **cmgr** binaries and initialize a
-database file that tracks those challenges.
+download example challenges and the **cmgr** binaries, initialize a
+database file that tracks the metadata for those challenges, and then run the
+test suite to ensure a working system.  The test suite can take several minutes
+to run and is not required to start working.  However, running the suite can
+identify permissions and other errors and is highly recommended for the first
+time you use `cmgr` on a system.
 
 ```sh
 wget https://github.com/ArmyCyberInstitute/cmgr/releases/latest/download/examples.tar.gz
@@ -20,12 +24,16 @@ tar xzvf examples.tar.gz
 cd examples
 tar xzvf ../cmgr.tar.gz
 ./cmgr update
+./cmgr test --require-solve
 ```
 
-At this point, you could launch the REST server on port 42000 with `./cmgrd`
-or start interacting with it directly via the CLI with `./cmgr test --no-solve`
-which will launch an instance of each example challenge and print the associated
-port information.
+At this point, you can start checking out problems by finding the challenge ID
+of one you would like to play and running `./cmgr playtest <challenge>`.  This
+will build and start the challenge and run a minimal webserver (`localhost:4200`
+by default) that you can use to view and interact with the content.  You could
+also launch the REST server on port 4200 with `./cmgrd` or launch all of the
+examples from the CLI with `./cmgr test --no-solve` which will launch an
+instance of each example challenge and print the associated port information.
 
 ## Configuration
 
@@ -92,7 +100,7 @@ core functionality of the project is implemented in a single Go library under
 the `cmgr` directory.  You can view the API documentation on
 [go.dev](https://pkg.go.dev/github.com/ArmyCyberInstitute/cmgr/cmgr).
 Additionally, the _SQLite3_ database is intended to function as a read-only
-API and its schema can be found [here](cmgr/databases.go).
+API and its schema can be found [here](cmgr/database.go).
 
 In order to work on the back-end, you will need to have _Go_ installed and
 _cgo_ enabled for at least the initial build where the _sqlite3_ driver is
@@ -104,6 +112,7 @@ cd cmgr
 go get -v -t -d ./...
 mkdir bin
 go build -v -o bin ./...
+go test -v ./...
 ```
 
 ## Acknowledgments
