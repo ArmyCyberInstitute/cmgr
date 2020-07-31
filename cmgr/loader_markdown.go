@@ -154,11 +154,11 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 	m.log.debugf("processing markdown: section='%s' start=%d end=%d", section, startIdx, endIdx)
 	switch strings.ToLower(section) {
 	case "description":
-		text, tmpErr := parseMarkdown(strings.Join(lines[startIdx:endIdx], "\n"))
+		text, tmpErr := m.parseMarkdown(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Description = text
 		err = tmpErr
 	case "details":
-		text, tmpErr := parseMarkdown(strings.Join(lines[startIdx:endIdx], "\n"))
+		text, tmpErr := m.parseMarkdown(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Details = text
 		err = tmpErr
 	case "hints":
@@ -214,7 +214,7 @@ func (m *Manager) parseHints(lines []string) ([]string, error) {
 	for _, rawLine := range lines {
 		if len(rawLine) > 0 && rawLine[0] == '-' {
 			if len(hintLines) > 0 {
-				hint, tmpErr := parseMarkdown(strings.Join(hintLines, "\n"))
+				hint, tmpErr := m.parseMarkdown(strings.Join(hintLines, "\n"))
 				if tmpErr != nil {
 					err = tmpErr
 				}
@@ -229,7 +229,7 @@ func (m *Manager) parseHints(lines []string) ([]string, error) {
 		}
 	}
 	if len(hintLines) > 0 {
-		hint, tmpErr := parseMarkdown(strings.Join(hintLines, "\n"))
+		hint, tmpErr := m.parseMarkdown(strings.Join(hintLines, "\n"))
 		if tmpErr != nil {
 			err = tmpErr
 		}
@@ -241,7 +241,7 @@ func (m *Manager) parseHints(lines []string) ([]string, error) {
 	return hints, err
 }
 
-func parseMarkdown(text string) (string, error) {
+func (m *Manager) parseMarkdown(text string) (string, error) {
 	var buff bytes.Buffer
 	err := goldmark.Convert([]byte(text), &buff)
 	if err != nil {
@@ -251,8 +251,10 @@ func parseMarkdown(text string) (string, error) {
 	data, err := ioutil.ReadAll(&buff)
 	section := strings.TrimSpace(string(data))
 	templates := templateRe.FindAllStringIndex(section, -1)
-	for _, pair := range templates {
+	for i := range templates {
+		pair := templates[len(templates)-(i+1)]
 		start, stop := pair[0], pair[1]
+		m.log.debugf("found template in range [%d, %d] (len(string) = %d", start, stop, len(section))
 		section = section[:start] +
 			strings.ReplaceAll(section[start:stop], "&quot;", `"`) +
 			section[stop:]

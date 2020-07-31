@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ArmyCyberInstitute/cmgr/cmgr"
 )
@@ -32,7 +33,7 @@ func playtestChallenge(mgr *cmgr.Manager, args []string) int {
 
 	seedStr, ok := os.LookupEnv("SEED")
 	if !ok {
-		seedStr = "42"
+		seedStr = fmt.Sprintf("%d", time.Now().Nanosecond())
 	}
 
 	flagFormat, ok := os.LookupEnv("FLAG_FORMAT")

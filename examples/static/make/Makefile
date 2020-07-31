@@ -10,7 +10,8 @@ lockbox: lockbox.c
 	gcc -Wall -Werror -D"FLAG_PREFIX=\"$(FLAG_PREFIX)\"" -o $@ $^ -lcrypto
 
 metadata.json:
-	echo "{\"flag\":\"$(FLAG_PREFIX){c0de_has_mil_grade_crypto}\"}" > metadata.json
+	@echo "Creating the metadata file..."
+	@echo "{\"flag\":\"$(FLAG_PREFIX){c0de_has_mil_grade_crypto}\"}" > metadata.json
 
 clean:
 	rm -f main lockbox

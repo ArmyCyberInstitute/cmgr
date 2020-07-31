@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -50,10 +51,23 @@ func (m *Manager) runSolver(instance InstanceId) error {
 		return err
 	}
 
-	_, err = ioutil.ReadAll(resp.Body)
+	messages, err := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
 		m.log.errorf("failed to read build response from docker: %s", err)
+		return err
+	}
+
+	re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
+	errMsg := re.Find(messages)
+	if errMsg != nil {
+		var dMsg dockerError
+		err = json.Unmarshal(errMsg, &dMsg)
+		if err == nil {
+			errMsg = []byte(dMsg.Error)
+		}
+		err = fmt.Errorf("failed to build image: %s", errMsg)
+		m.log.error(err)
 		return err
 	}
 
@@ -65,6 +79,7 @@ func (m *Manager) runSolver(instance InstanceId) error {
 	cConfig := container.Config{
 		Image:    imageName,
 		Hostname: "solve",
+		Tty:      true,
 	}
 
 	hConfig := container.HostConfig{}
@@ -105,6 +120,24 @@ func (m *Manager) runSolver(instance InstanceId) error {
 	flagFileTar, _, err := m.cli.CopyFromContainer(m.ctx, cid, "/solve/flag")
 	if err != nil {
 		m.log.errorf("could not find flag file: %s", err)
+		clo := types.ContainerLogsOptions{
+			ShowStdout: true,
+			ShowStderr: true,
+		}
+		logs, lerr := m.cli.ContainerLogs(m.ctx, cid, clo)
+		if lerr != nil {
+			m.log.errorf("could not access error logs: %s", lerr)
+			err = lerr
+		} else {
+			s, lerr := ioutil.ReadAll(logs)
+			if lerr != nil {
+				m.log.errorf("could not read logs: %s", lerr)
+				err = lerr
+			} else {
+				m.log.errorf("logs from failed container: %s", s)
+			}
+		}
+
 		return err
 	}
 	defer flagFileTar.Close()

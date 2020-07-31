@@ -145,10 +145,12 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		refPort[k] = false
 	}
 
+	m.log.debugf("onePort=%t", onePort)
+
 	normalizeAndCheckTemplated := func(s string) (string, error) {
 		var r string
+		var err error
 		if onePort {
-
 			r = `{{url_for("$1", "$1")}}`
 			s = shortUrlForRe.ReplaceAllString(s, r)
 
@@ -166,6 +168,44 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 
 			r = fmt.Sprintf(`{{link_as("%s", "${1}", "${2}")}}`, portName)
 			s = shortLinkAsRe.ReplaceAllString(s, r)
+		} else {
+			base_msg := fmt.Sprintf("cannot use '%%s' in challenge type '%s' which exposes %d ports", md.ChallengeType, len(md.PortMap))
+
+			matches := shortUrlForRe.FindAllString(s, -1)
+			for _, match := range matches {
+				err = fmt.Errorf(base_msg, match)
+				m.log.error(err)
+			}
+
+			matches = shortHttpBaseRe.FindAllString(s, -1)
+			for _, match := range matches {
+				err = fmt.Errorf(base_msg, match)
+				m.log.error(err)
+			}
+
+			matches = shortPortRe.FindAllString(s, -1)
+			for _, match := range matches {
+				err = fmt.Errorf(base_msg, match)
+				m.log.error(err)
+			}
+
+			matches = shortServerRe.FindAllString(s, -1)
+			for _, match := range matches {
+				err = fmt.Errorf(base_msg, match)
+				m.log.error(err)
+			}
+
+			matches = shortLinkRe.FindAllString(s, -1)
+			for _, match := range matches {
+				err = fmt.Errorf(base_msg, match)
+				m.log.error(err)
+			}
+
+			matches = shortLinkAsRe.FindAllString(s, -1)
+			for _, match := range matches {
+				err = fmt.Errorf(base_msg, match)
+				m.log.error(err)
+			}
 		}
 
 		r = `<a href='{{url("${1}")}}'>${2}</a>`
@@ -177,7 +217,6 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		r = `<a href='{{http_base("${1}")}}:{{port("${1}")}}/${2}' target='_blank'>${3}</a>`
 		s = linkAsRe.ReplaceAllString(s, r)
 
-		var err error
 		templates := templateRe.FindAllString(s, -1)
 		for _, tmpl := range templates {
 			if urlRe.MatchString(tmpl) || lookupRe.MatchString(tmpl) {
