@@ -304,7 +304,7 @@ func (m *Manager) createBuildContext(cm *ChallengeMetadata, dockerfile []byte) (
 		}
 
 		archivePath := path[len(challengeDir)+1:]
-		hdr.Name = archivePath
+		hdr.Name = strings.ReplaceAll(archivePath, `\`, `/`)
 
 		err = newCtx.WriteHeader(hdr)
 		if err != nil {

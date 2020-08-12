@@ -200,7 +200,7 @@ func (m *Manager) createSolveContext(meta *BuildMetadata) io.Reader {
 			}
 
 			archivePath := path[len(solveDir)+1:]
-			hdr.Name = archivePath
+			hdr.Name = strings.ReplaceAll(archivePath, `\`, `/`)
 
 			err = ctx.WriteHeader(hdr)
 			if err != nil {
