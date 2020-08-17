@@ -23,7 +23,7 @@ import (
 )
 
 func (m *Manager) initDocker() error {
-	cli, err := client.NewEnvClient()
+	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		m.log.errorf("could not create docker client: %s", err)
 		return err

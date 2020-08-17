@@ -110,10 +110,12 @@ func (m *Manager) runSolver(instance InstanceId) error {
 		return err
 	}
 
-	_, err = m.cli.ContainerWait(m.ctx, cid)
-	if err != nil {
+	okChan, eChan := m.cli.ContainerWait(m.ctx, cid, container.WaitConditionNotRunning)
+	select {
+	case err := <-eChan:
 		m.log.errorf("failed to wait on solve container: %s", err)
 		return err
+	case _ = <-okChan:
 	}
 
 	// Copy out the flag & compare
