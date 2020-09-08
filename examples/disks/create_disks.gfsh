@@ -1,0 +1,21 @@
+#!/usr/bin/guestfish -f
+
+# Create the base block devices.  8 MiB was smallest successful size
+sparse disk0.img 8M
+sparse disk1.img 8M
+sparse disk2.img 8M
+
+# 'Attach' the disks and enter the virtual environment
+run
+
+# Create and mount the RAID5 system
+md-create challenge '/dev/sda /dev/sdb /dev/sdc' level:raid5
+mke2fs /dev/md127 fstype:ext4
+mount /dev/md127 /
+
+# Copy in a large amount of noise and then the flag.  This ensures two things
+# the RAID "chunk" with the flag in plaintext is on 'disk1.img' and also that
+# the sibling chunk is random data (rather than 0s).  This means the flag
+# does not appear in plaintext in the parity chunk which prevents strings,
+# binwalk, and scalpel from working out of the box if we only give disks 0 & 2.
+copy-in a.ignore flag /

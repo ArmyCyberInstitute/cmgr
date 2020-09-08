@@ -1,0 +1,2 @@
+libguestfs-tools
+linux-image-virtual

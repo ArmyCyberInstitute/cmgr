@@ -1,0 +1,6 @@
+#!/usr/bin/guestfish -f
+add disk0.img
+add disk2.img
+run
+mount /dev/md127 /
+copy-out /flag .
