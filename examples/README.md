@@ -30,7 +30,7 @@ This is by far the most flexible of the challenge types, but also the one with t
 
 The Dockerfile is responsible for using these inputs to build the templated challenge and format the image appropriately for _cmgr_ to retrieve the artifacts and build metadata.  In particular, any artifacts competitors should see **must** be in a GZIP-ed tar archive located at `/challenge/artifacts.tar.gz`.  Additionally, there **must** be a `/challenge/metadata.json` file that has a field for the flag (named `flag`) as well as any other lookup values the challenge references in its details and hints.  Finally, if the Dockerfile expects any ports to be exposed directly to end-users, then there must be a comment line of the form `# PUBLISH <port number> AS <port name>` in the Dockerfile.
 
-You can find an example [here](custom/).
+You can find an example [here](custom/).  The ["multi"](multi/) challenge example demonstrates the full range of customization you can leverage by demonstrating multi-container challenges and custom per-build lookup values.
 
 ### flask
 

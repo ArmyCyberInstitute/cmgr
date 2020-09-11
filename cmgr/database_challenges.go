@@ -52,17 +52,22 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 		err = txn.Select(&metadata.Tags, "SELECT tag FROM tags WHERE challenge=?", challenge)
 	}
 
+	if err == nil {
+		err = txn.Select(&metadata.Hosts, "SELECT name, target FROM hosts WHERE challenge=?", challenge)
+	}
+
 	ports := []struct {
 		Name string
+		Host string
 		Port int
 	}{}
 	if err == nil {
-		err = txn.Select(&ports, "SELECT name, port FROM portNames WHERE challenge=?", challenge)
+		err = txn.Select(&ports, "SELECT name, host, port FROM portNames WHERE challenge=?", challenge)
 	}
 
-	metadata.PortMap = make(map[string]int)
+	metadata.PortMap = make(map[string]PortInfo)
 	for _, port := range ports {
-		metadata.PortMap[port.Name] = port.Port
+		metadata.PortMap[port.Name] = PortInfo{port.Host, port.Port}
 	}
 
 	if err == nil {
@@ -112,8 +117,11 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 					m.log.error(err)
 					return append(errs, err)
 				}
-				continue
+				break
 			}
+		}
+		if err != nil {
+			continue
 		}
 
 		for _, tag := range metadata.Tags {
@@ -128,8 +136,11 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 					m.log.error(err)
 					return append(errs, err)
 				}
-				continue
+				break
 			}
+		}
+		if err != nil {
+			continue
 		}
 
 		for k, v := range metadata.Attributes {
@@ -145,15 +156,20 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 					m.log.error(err)
 					return append(errs, err)
 				}
-				continue
+				break
 			}
 		}
+		if err != nil {
+			continue
+		}
 
-		for k, v := range metadata.PortMap {
-			_, err = txn.Exec("INSERT INTO portNames(challenge, name, port) VALUES (?, ?, ?);",
+		for i, host := range metadata.Hosts {
+			m.log.debugf("%s: %v", metadata.Id, host)
+			_, err = txn.Exec("INSERT INTO hosts(challenge, name, idx, target) VALUES (?, ?, ?, ?);",
 				metadata.Id,
-				k,
-				v)
+				host.Name,
+				i,
+				host.Target)
 
 			if err != nil {
 				m.log.error(err)
@@ -162,8 +178,33 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 					m.log.error(err)
 					return append(errs, err)
 				}
-				continue
+				break
 			}
+		}
+		if err != nil {
+			continue
+		}
+
+		for k, v := range metadata.PortMap {
+			m.log.debugf("%s: %v", metadata.Id, v)
+			_, err = txn.Exec("INSERT INTO portNames(challenge, name, host, port) VALUES (?, ?, ?, ?);",
+				metadata.Id,
+				k,
+				v.Host,
+				v.Port)
+
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				break
+			}
+		}
+		if err != nil {
+			continue
 		}
 
 		if err := txn.Commit(); err != nil { // It's undocumented what this means...
@@ -215,8 +256,11 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 					m.log.error(err)
 					return append(errs, err)
 				}
-				continue
+				break
 			}
+		}
+		if err != nil {
+			continue
 		}
 
 		_, err = txn.Exec("DELETE FROM tags WHERE challenge = ?;", metadata.Id)
@@ -243,8 +287,11 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 					m.log.error(err)
 					return append(errs, err)
 				}
-				continue
+				break
 			}
+		}
+		if err != nil {
+			continue
 		}
 
 		_, err = txn.Exec("DELETE FROM attributes WHERE challenge = ?;", metadata.Id)
@@ -272,8 +319,44 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 					m.log.error(err)
 					return append(errs, err)
 				}
-				continue
+				break
 			}
+		}
+		if err != nil {
+			continue
+		}
+
+		_, err = txn.Exec("DELETE FROM hosts WHERE challenge = ?;", metadata.Id)
+
+		if err != nil {
+			m.log.error(err)
+			err = txn.Rollback()
+			if err != nil { // If rollback fails, we're in trouble.
+				m.log.error(err)
+				return append(errs, err)
+			}
+			continue
+		}
+
+		for i, host := range metadata.Hosts {
+			_, err = txn.Exec("INSERT INTO hosts(challenge, name, idx, target) VALUES (?, ?, ?, ?);",
+				metadata.Id,
+				host.Name,
+				i,
+				host.Target)
+
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				break
+			}
+		}
+		if err != nil {
+			continue
 		}
 
 		_, err = txn.Exec("DELETE FROM portNames WHERE challenge = ?;", metadata.Id)
@@ -287,12 +370,13 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			}
 			continue
 		}
-		for k, v := range metadata.PortMap {
 
-			_, err = txn.Exec("INSERT INTO portNames(challenge, name, port) VALUES (?, ?, ?);",
+		for k, v := range metadata.PortMap {
+			_, err = txn.Exec("INSERT INTO portNames(challenge, name, host, port) VALUES (?, ?, ?, ?);",
 				metadata.Id,
 				k,
-				v)
+				v.Host,
+				v.Port)
 
 			if err != nil {
 				m.log.error(err)
@@ -301,8 +385,11 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 					m.log.error(err)
 					return append(errs, err)
 				}
-				continue
+				break
 			}
+		}
+		if err != nil {
+			continue
 		}
 
 		if err := txn.Commit(); err != nil { // It's undocumented what this means...
@@ -336,17 +423,9 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 						continue
 					}
 
-					buildCtx, err := os.Open(buildCtxFile)
-					if err != nil {
-						m.log.errorf("could not open build context: %s", err)
-						errs = append(errs, err)
-						continue
-					}
-					defer buildCtx.Close()
-
 					// Resetting the flag signals to rebuild the Dockerfile
 					build.Flag = ""
-					err = m.executeBuild(metadata, build, buildCtx)
+					err = m.executeBuild(metadata, build, buildCtxFile)
 					if err != nil {
 						errs = append(errs, err)
 						continue

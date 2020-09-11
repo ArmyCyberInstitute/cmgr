@@ -322,7 +322,7 @@ func runTest(mgr *cmgr.Manager, cMeta *cmgr.ChallengeMetadata, solve, required b
 			if !isSet {
 				artDir = "."
 			}
-			fmt.Printf("    artifacts file: %s.tar.gz\n", filepath.Join(artDir, build.Images[0].DockerId))
+			fmt.Printf("    artifacts file: %s.tar.gz\n", filepath.Join(artDir, string(build.Id)))
 		}
 
 		if len(iMeta.Ports) > 0 {

@@ -277,7 +277,7 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := os.Open(fmt.Sprintf("%s.tar.gz", meta.Images[0].DockerId))
+	f, err := os.Open(fmt.Sprintf("%d.tar.gz", build))
 
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)

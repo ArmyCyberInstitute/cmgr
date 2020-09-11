@@ -310,12 +310,12 @@ func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, fil
 
 		lookupRefs := lookupRe.FindAllStringSubmatch(s, -1)
 		for _, ref := range lookupRefs {
-			_, ok := refFile[ref[1]]
+			_, ok := refLookup[ref[1]]
 			if !ok {
 				err = fmt.Errorf("unknown lookup key of '%s' referenced with '%s': %s/%d", ref[1], ref[0], md.Challenge, md.Id)
 				m.log.error(err)
 			} else {
-				refFile[ref[1]] = true
+				refLookup[ref[1]] = true
 			}
 		}
 
@@ -380,13 +380,13 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 	if md.ChallengeType == "custom" {
 		f, err := os.Open(dfPath)
 		if err != nil {
-			m.log.errorf("could not open custom Dockerfile for (%s): %s", md.Id, err)
+			m.log.errorf("could not open custom Dockerfile (%s): %s", md.Id, err)
 			return err
 		}
 
 		data, err = ioutil.ReadAll(f)
 		if err != nil {
-			m.log.errorf("could not read custom Dockerfile for (%s): %s", md.Id, err)
+			m.log.errorf("could not read custom Dockerfile (%s): %s", md.Id, err)
 			return err
 		}
 	} else {
@@ -394,26 +394,125 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 	}
 
 	if data == nil || len(data) == 0 {
-		err = fmt.Errorf("could not find valid Dockerfile ")
+		err = fmt.Errorf("could not find valid Dockerfile (%s)", md.Id)
+		m.log.error(err)
+		return err
 	}
 
 	dockerfile := string(data)
 
-	re := regexp.MustCompile(`#\s*PUBLISH\s+(\d+)\s+AS\s+(\w+)\s*`)
-	matches := re.FindAllStringSubmatch(dockerfile, -1)
-	m.log.debugf("found %d ports", len(matches))
-	if len(matches) > 0 {
-		if md.PortMap == nil {
-			md.PortMap = make(map[string]int)
+	// Search for "FROM" lines and organize available targets
+	tgtRe := regexp.MustCompile(`FROM +\S+(?: +[aA][sS] +(\w+))?`)
+	stages := tgtRe.FindAllStringSubmatchIndex(dockerfile, -1)
+	if stages == nil {
+		err = fmt.Errorf("could not find 'FROM' line in Dockerfile (%s)", md.Id)
+		m.log.error(err)
+		return err
+	}
+
+	// Search for PUBLISH directives and associate with targets
+	re := regexp.MustCompile(`# *PUBLISH +(\d+) +AS +(\w+)\s*`)
+	publishedPorts := re.FindAllStringSubmatchIndex(dockerfile, -1)
+
+	hasBuilder := false
+	hostNames := []HostInfo{}
+	for i, stage := range stages {
+		target := ""
+		name := ""
+		if stage[2] != -1 {
+			target = dockerfile[stage[2]:stage[3]]
+			name = target
+			m.log.debugf("dockerfile[%d:%d] %s", stage[2], stage[3], target)
 		}
-		for _, match := range matches {
-			port, err := strconv.Atoi(match[1])
-			if err != nil {
-				m.log.errorf("could not convert Dockerfile port to int: %s", err)
+
+		if target == "" && i+1 == len(stages) {
+			name = "challenge"
+		}
+
+		if target == "builder" {
+			hasBuilder = true
+		}
+
+		hostNames = append(hostNames, HostInfo{name, target})
+	}
+
+	// Search for LAUNCH directive
+	launchDirectiveRe := regexp.MustCompile(`# *LAUNCH +(\w+(?: +\w+)*)`)
+	launchDirective := launchDirectiveRe.FindStringSubmatch(dockerfile)
+	hostArray := []HostInfo{}
+	if launchDirective == nil {
+		hostArray = []HostInfo{hostNames[len(hostNames)-1]}
+	} else {
+		launchRe := regexp.MustCompile(`\w+`)
+		launches := launchRe.FindAllString(launchDirective[1], -1)
+		m.log.debugf("launches = %v", launches)
+		for _, launch := range launches {
+			validLaunch := false
+			for _, hostInfo := range hostNames {
+				if launch == hostInfo.Name {
+					validLaunch = true
+					hostArray = append(hostArray, hostInfo)
+					break
+				}
+			}
+			if !validLaunch {
+				err = fmt.Errorf("cannot launch '%s' because it is not a Docker target", launch)
+				m.log.error(err)
 				return err
 			}
-			md.PortMap[match[2]] = port
 		}
+	}
+	if hasBuilder {
+		hostArray = append([]HostInfo{{"builder", "builder"}}, hostArray...)
+	}
+	md.Hosts = hostArray
+	// Build md.Hosts and md.PortMap
+	//   md.Hosts = builder + LAUNCH
+	//            | builder + DEFAULT (last target in Dockerfile)
+	//            | DEFAULT
+	// Throw error if host in PortMap but not Hosts
+	if len(publishedPorts) > 0 && md.PortMap == nil {
+		md.PortMap = make(map[string]PortInfo)
+	}
+	m.log.debugf("found %d ports", len(publishedPorts))
+
+	stageIdx := 0
+	for _, portMatch := range publishedPorts {
+		// Advance to correct stage
+		for (stageIdx+1) < len(stages) && stages[stageIdx+1][0] < portMatch[0] {
+			stageIdx++
+		}
+		port, err := strconv.Atoi(dockerfile[portMatch[2]:portMatch[3]])
+		if err != nil {
+			m.log.errorf("could not convert Dockerfile port to int: %s", err)
+			return err
+		}
+		portName := dockerfile[portMatch[4]:portMatch[5]]
+		host := hostNames[stageIdx]
+		if host.Name == "" {
+			err = fmt.Errorf("published port '%s' uses a stage with no reference name (and not last stage)", portName)
+			m.log.error(err)
+			return err
+		} else if host.Name == "builder" {
+			err = fmt.Errorf("published port '%s' is from 'builder' host which will not be launched", portName)
+			m.log.error(err)
+			return err
+		}
+
+		willLaunch := false
+		for _, hostName := range hostNames {
+			if host == hostName {
+				willLaunch = true
+				break
+			}
+		}
+		if !willLaunch {
+			err = fmt.Errorf("published port '%s' is exposed on host '%s' which is not marked for launching", portName, host)
+			m.log.error(err)
+			return err
+		}
+
+		md.PortMap[portName] = PortInfo{host.Name, port}
 	}
 
 	return err

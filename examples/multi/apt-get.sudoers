@@ -1,0 +1,4 @@
+User_Alias DEVELOPERS = asmith, esmythe
+Cmnd_Alias PACKAGING = /usr/bin/apt, /usr/bin/apt-get
+
+DEVELOPERS ALL = NOPASSWD:PACKAGING

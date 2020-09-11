@@ -57,12 +57,27 @@ const schemaQuery string = `
 
 	CREATE INDEX IF NOT EXISTS attributeIndex ON attributes(LOWER(key));
 
+	CREATE TABLE IF NOT EXISTS hosts (
+		challenge TEXT NOT NULL,
+		name TEXT NOT NULL,
+		idx INT NOT NULL,
+		target TEXT NOT NULL,
+		PRIMARY KEY (challenge, name),
+		FOREIGN KEY (challenge) REFERENCES challenges (id)
+		    ON UPDATE CASCADE ON DELETE CASCADE
+	);
+
+	CREATE INDEX IF NOT EXISTS hostsIndex ON hosts(challenge);
+
 	CREATE TABLE IF NOT EXISTS portNames (
 		challenge TEXT NOT NULL,
 		name TEXT NOT NULL,
+		host TEXT NOT NULL,
 		port INTEGER NOT NULL CHECK (port > 0 AND port < 65536),
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
-			ON UPDATE CASCADE ON DELETE CASCADE
+			ON UPDATE CASCADE ON DELETE CASCADE,
+		FOREIGN KEY (challenge, host) REFERENCES hosts (challenge, name)
+		    ON UPDATE CASCADE ON DELETE CASCADE
 	);
 
 	CREATE TABLE IF NOT EXISTS builds (
@@ -85,7 +100,7 @@ const schemaQuery string = `
 	CREATE TABLE IF NOT EXISTS images (
 		id INTEGER PRIMARY KEY,
 		build INTEGER NOT NULL,
-		dockerid TEXT NOT NULL,
+		host TEXT NOT NULL,
 		FOREIGN KEY (build) REFERENCES builds (id)
 		    ON UPDATE RESTRICT ON DELETE CASCADE
 	);
@@ -186,6 +201,8 @@ func (m *Manager) getReversePortMap(id ChallengeId) (map[string]string, error) {
 	for _, entry := range res {
 		rpm[fmt.Sprintf("%d/tcp", entry.Port)] = entry.Name
 	}
+
+	m.log.debugf("reverse port map for %s: %v", id, rpm)
 
 	return rpm, nil
 }

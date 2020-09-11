@@ -1,0 +1,3 @@
+Host home
+    HostName randomDnsName
+    User alice

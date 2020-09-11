@@ -113,19 +113,13 @@ func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
 		if build.Flag != "" {
 			continue
 		}
-		buildCtx, err := os.Open(buildCtxFile)
-		if err != nil {
-			m.log.errorf("failed to seek to beginning of file for %d: %s", build.Seed, err)
-			return err
-		}
-		defer buildCtx.Close()
 
 		err = m.openBuild(build)
 		if err != nil {
 			return err
 		}
 
-		err = m.executeBuild(cMeta, build, buildCtx)
+		err = m.executeBuild(cMeta, build, buildCtxFile)
 		if err != nil {
 			m.removeBuildMetadata(build.Id)
 			return err
@@ -144,56 +138,86 @@ type dockerError struct {
 	Error string `json:"error"`
 }
 
-func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, buildCtx io.Reader) error {
+func (bMeta *BuildMetadata) dockerId(image Image) string {
+	return fmt.Sprintf("%d-%s", bMeta.Id, image.Host)
+}
+
+func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, buildCtxFile string) error {
+
 	seedStr := fmt.Sprintf("%d", bMeta.Seed)
 
-	image := Image{DockerId: fmt.Sprintf("%d", bMeta.Id), Ports: []string{}}
-	for _, port := range cMeta.PortMap {
-		image.Ports = append(image.Ports, fmt.Sprintf("%d/tcp", port))
-	}
-	images := []Image{image} // TODO(jrolli): Figure out how this expands to multi-image challenges
+	images := []Image{}
+	var buildImage string
+	for _, host := range cMeta.Hosts {
+		image := Image{Host: host.Name, Ports: []string{}}
+		imageName := fmt.Sprintf("%s:%s", cMeta.Id, bMeta.dockerId(image))
 
-	// Setup build options
-	imageName := fmt.Sprintf("%s:%d", cMeta.Id, bMeta.Id)
-	opts := types.ImageBuildOptions{
-		BuildArgs: map[string]*string{
-			"FLAG_FORMAT": &bMeta.Format,
-			"SEED":        &seedStr,
-			"FLAG":        bMeta.makeFlag(),
-		},
-		Remove: true,
-		Tags:   []string{imageName},
-	}
-
-	// Call build
-	m.log.debugf("creating image %s", imageName)
-	resp, err := m.cli.ImageBuild(m.ctx, buildCtx, opts)
-	if err != nil {
-		m.log.errorf("failed to build base image: %s", err)
-		return err
-	}
-
-	messages, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		m.log.errorf("failed to read build response from docker: %s", err)
-		return err
-	}
-
-	re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
-	errMsg := re.Find(messages)
-	if errMsg != nil {
-		var dMsg dockerError
-		err = json.Unmarshal(errMsg, &dMsg)
-		if err == nil {
-			errMsg = []byte(dMsg.Error)
+		if host.Name == "builder" || (host.Name == "challenge" && buildImage == "") {
+			buildImage = imageName
 		}
-		err = fmt.Errorf("failed to build image: %s", errMsg)
+
+		for _, portInfo := range cMeta.PortMap {
+			if portInfo.Host == image.Host {
+				image.Ports = append(image.Ports, fmt.Sprintf("%d/tcp", portInfo.Port))
+			}
+		}
+
+		// Setup build options
+		opts := types.ImageBuildOptions{
+			BuildArgs: map[string]*string{
+				"FLAG_FORMAT": &bMeta.Format,
+				"SEED":        &seedStr,
+				"FLAG":        bMeta.makeFlag(),
+			},
+			Remove: true,
+			Tags:   []string{imageName},
+			Target: host.Target,
+		}
+
+		// Call build
+		buildCtx, err := os.Open(buildCtxFile)
+		if err != nil {
+			m.log.errorf("failed to seek to beginning of file for %s/%d: %s", cMeta.Id, bMeta.Id, err)
+			return err
+		}
+		defer buildCtx.Close()
+
+		m.log.debugf("creating image %s", imageName)
+		resp, err := m.cli.ImageBuild(m.ctx, buildCtx, opts)
+		if err != nil {
+			m.log.errorf("failed to build base image: %s", err)
+			return err
+		}
+
+		messages, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			m.log.errorf("failed to read build response from docker: %s", err)
+			return err
+		}
+
+		re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
+		errMsg := re.Find(messages)
+		if errMsg != nil {
+			var dMsg dockerError
+			err = json.Unmarshal(errMsg, &dMsg)
+			if err == nil {
+				errMsg = []byte(dMsg.Error)
+			}
+			err = fmt.Errorf("failed to build image: %s", errMsg)
+			m.log.error(err)
+			return err
+		}
+		images = append(images, image)
+	}
+
+	if buildImage == "" {
+		err := fmt.Errorf("aborting because no build image identified %s/%d", cMeta.Id, bMeta.Id)
 		m.log.error(err)
 		return err
 	}
 
-	cConfig := container.Config{Image: imageName}
+	cConfig := container.Config{Image: buildImage}
 	hConfig := container.HostConfig{}
 	nConfig := network.NetworkingConfig{}
 
@@ -338,7 +362,7 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 
 		iro := types.ImageRemoveOptions{Force: false, PruneChildren: true}
 		for _, image := range bMeta.Images {
-			imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, image.DockerId)
+			imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, bMeta.dockerId(image))
 			m.cli.ImageRemove(m.ctx, imageName, iro)
 		}
 	}
@@ -378,6 +402,9 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 	// Call create in docker
 	netname := instance.getNetworkName()
 	for _, image := range build.Images {
+		if image.Host == "builder" {
+			continue
+		}
 		exposedPorts := nat.PortSet{}
 		publishedPorts := nat.PortMap{}
 		for _, portStr := range image.Ports {
@@ -387,8 +414,8 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		}
 
 		cConfig := container.Config{
-			Image:        fmt.Sprintf("%s:%s", build.Challenge, image.DockerId),
-			Hostname:     "challenge",
+			Image:        fmt.Sprintf("%s:%s", build.Challenge, build.dockerId(image)),
+			Hostname:     image.Host,
 			ExposedPorts: exposedPorts,
 		}
 
@@ -401,7 +428,7 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			EndpointsConfig: map[string]*network.EndpointSettings{
 				netname: {
 					NetworkID: netname,
-					Aliases:   []string{"challenge"},
+					Aliases:   []string{image.Host},
 				},
 			},
 		}
@@ -486,7 +513,7 @@ func (m *Manager) destroyImages(build BuildId) error {
 	iro := types.ImageRemoveOptions{Force: false, PruneChildren: true}
 	for _, image := range bMeta.Images {
 
-		imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, image.DockerId)
+		imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, bMeta.dockerId(image))
 		_, err := m.cli.ImageRemove(m.ctx, imageName, iro)
 		if err != nil {
 			m.log.errorf("failed to remove image: %s", err)
