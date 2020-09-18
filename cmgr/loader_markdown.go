@@ -61,14 +61,14 @@ func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*Challen
 
 	lines := strings.Split(string(data), "\n")
 	idx := 0
-	line := strings.TrimSpace(lines[idx])
+	var line string
 
 	// Find the name line
 	nameRe := regexp.MustCompile(`^#\s*(.+)`)
 	for idx < len(lines) {
+		line = strings.TrimSpace(lines[idx])
 		match := nameRe.FindStringSubmatch(line)
 		idx++
-		line = strings.TrimSpace(lines[idx])
 		if match != nil {
 			md.Name = match[1]
 			break
