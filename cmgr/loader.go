@@ -527,6 +527,7 @@ type hacksportAttrs struct {
 	Event        string `json:"event"`
 	Organization string `json:"organization"`
 	Version      string `json:"version"`
+	Score        int    `json:"score"`
 }
 
 // Loads the JSON information using the built-in encoding format.  This works
@@ -574,6 +575,8 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 		metadata.Details = metadata.Description
 		metadata.Description = ""
 		metadata.SolveScript = false
+
+		metadata.Points = attrs.Score
 
 		metadata.Attributes = make(map[string]string)
 		if attrs.Author != "" {
