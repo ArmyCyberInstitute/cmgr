@@ -14,6 +14,7 @@ const (
 	ARTIFACT_DIR_ENV string = "CMGR_ARTIFACT_DIR"
 	REGISTRY_ENV     string = "CMGR_REGISTRY"
 	LOGGING_ENV      string = "CMGR_LOGGING"
+	IFACE_ENV        string = "CMGR_INTERFACE"
 
 	DYNAMIC_INSTANCES int = -1
 	LOCKED            int = -2
@@ -34,6 +35,7 @@ type Manager struct {
 	dbPath               string
 	challengeDockerfiles map[string][]byte
 	rand                 *rand.Rand
+	challengeInterface   string
 }
 
 type PortInfo struct {

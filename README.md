@@ -48,6 +48,8 @@ currently uses the following variables:
 
 - *CMGR\_LOGGING*: logging verbosity for command clients (defaults to 'disabled' for `cmgr` and `warn` for `cmgrd`; valid options are `debug`, `info`, `warn`, `error`, and `disabled`)
 
+- *CMGR_IFACE*: the host interface/address to which published challenge ports should be bound
+
 Additionally, we rely on the Docker SDK's ability to self-configure base off
 environment variables.  The documentation for those variables can be found at
 [https://docs.docker.com/engine/reference/commandline/cli/](https://docs.docker.com/engine/reference/commandline/cli/).

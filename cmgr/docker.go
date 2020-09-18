@@ -41,6 +41,12 @@ func (m *Manager) initDocker() error {
 	m.log.infof("connected to docker (API v%s)", ping.APIVersion)
 	m.initDockerfiles()
 
+	chalInterface, isSet := os.LookupEnv(IFACE_ENV)
+	if !isSet {
+		chalInterface = "0.0.0.0"
+	}
+	m.challengeInterface = chalInterface
+
 	return nil
 }
 
@@ -410,7 +416,7 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		for _, portStr := range image.Ports {
 			port := nat.Port(portStr)
 			exposedPorts[port] = struct{}{}
-			publishedPorts[port] = []nat.PortBinding{{HostIP: "0.0.0.0"}}
+			publishedPorts[port] = []nat.PortBinding{{HostIP: m.challengeInterface}}
 		}
 
 		cConfig := container.Config{
