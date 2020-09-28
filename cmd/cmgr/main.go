@@ -39,6 +39,9 @@ func main() {
 
 	log.SetFlags(0)
 	mgr := cmgr.NewManager(logLevel)
+	if mgr == nil {
+		os.Exit(RUNTIME_ERROR)
+	}
 	cmdArgs := os.Args[2:]
 
 	var exitCode int
