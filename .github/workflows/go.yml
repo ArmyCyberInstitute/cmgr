@@ -18,8 +18,6 @@ jobs:
         os:
           - ubuntu-latest
           - ubuntu-20.04
-          - macos-latest
-          # - windows-latest
     steps:
 
     - name: Set up Go 1.x
@@ -27,10 +25,6 @@ jobs:
       with:
         go-version: ^1.13
       id: go
-
-    - name: Install docker (macOS)
-      if: ${{ startsWith(matrix.os, 'macos') }}
-      run: brew cask install docker
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v2
