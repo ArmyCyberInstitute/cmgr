@@ -147,3 +147,5 @@ if hasattr(b, "remove"):\n\
 ' | python3
 
 RUN chmod +x start.sh
+
+CMD tail -f /dev/null

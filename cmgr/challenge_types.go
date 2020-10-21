@@ -209,6 +209,8 @@ ARG SEED
 RUN make main
 RUN make artifacts.tar.gz && mv artifacts.tar.gz /challenge || true
 RUN make metadata.json && mv metadata.json /challenge
+
+CMD tail -f /dev/null
 `
 
 const remoteMakeDockerfile = `
@@ -438,6 +440,8 @@ if hasattr(b, "remove"):\n\
 ' | python3
 
 RUN chmod +x start.sh
+
+CMD tail -f /dev/null
 `
 
 const servicePybuildDockerfile = `

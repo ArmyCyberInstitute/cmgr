@@ -21,3 +21,5 @@ ARG SEED
 RUN make main
 RUN make artifacts.tar.gz && mv artifacts.tar.gz /challenge || true
 RUN make metadata.json && mv metadata.json /challenge
+
+CMD tail -f /dev/null
