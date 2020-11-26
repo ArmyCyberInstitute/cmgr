@@ -50,8 +50,9 @@ const flaskDockerfile = `
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install python3-pip build-essential
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-pip
 RUN pip3 install flask
 RUN groupadd -r flask && useradd -r -d /app -g flask flask
 
@@ -61,7 +62,7 @@ ENV FLASK_RUN_PORT=5000
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY Dockerfile requirements.txt* ./
 RUN if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi
@@ -94,14 +95,14 @@ const phpDockerfile = `
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install php
+RUN apt-get update && apt-get install -y \
+    php
 RUN groupadd -r php && useradd -r -d /app -g php php
 
 # End of shared layers for all php challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY --chown=php:php . /app
 
@@ -135,7 +136,7 @@ RUN groupadd -r app && useradd -r -d /app -g app app
 # End of shared layers for all node challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY --chown=app:app . /app
 
@@ -170,11 +171,12 @@ const solverDockerfile = `
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install python3-pip build-essential
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-pip
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY Dockerfile requirements.txt* ./
 RUN if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi
@@ -189,13 +191,13 @@ const staticMakeDockerfile = `
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install build-essential
+RUN apt-get update && apt-get install -y \
+    build-essential
 RUN install -d -m 0700 /challenge
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY . /app
 WORKDIR /app
@@ -217,16 +219,16 @@ const remoteMakeDockerfile = `
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install build-essential
-RUN apt-get -y install socat
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    socat
 
 RUN groupadd -r app && useradd -r -d /app -g app app
 RUN install -d -m 0700 /challenge
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY . /app
 WORKDIR /app
@@ -255,8 +257,8 @@ const serviceMakeDockerfile = `
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install build-essential
+RUN apt-get update && apt-get install -y \
+    build-essential
 
 RUN groupadd -r app && useradd -r -d /app -g app app
 RUN install -d -m 0700 /challenge
@@ -265,7 +267,7 @@ ENV PORT=5000
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY . /app
 WORKDIR /app
@@ -294,15 +296,16 @@ const staticPybuildDockerfile = `
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install python3-pip build-essential
-RUN apt-get -y install gcc-multilib
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc-multilib \
+    python3-pip
 RUN pip3 install ninja2
 RUN install -d -m 0700 /challenge
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY Dockerfile requirements.txt* ./
 RUN if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi
@@ -448,9 +451,10 @@ const servicePybuildDockerfile = `
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install python3-pip build-essential
-RUN apt-get -y install gcc-multilib
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc-multilib \
+    python3-pip
 RUN pip3 install ninja2
 
 RUN groupadd -r app && useradd -r -d /app -g app app
@@ -460,7 +464,7 @@ ENV PORT=5000
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY Dockerfile requirements.txt* ./
 RUN if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi
@@ -611,10 +615,11 @@ const remotePybuildDockerfile = `
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install python3-pip build-essential
-RUN apt-get -y install gcc-multilib
-RUN apt-get -y install socat
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc-multilib \
+    python3-pip \
+    socat
 RUN pip3 install ninja2
 
 RUN groupadd -r app && useradd -r -d /app -g app app
@@ -622,7 +627,7 @@ RUN install -d -m 0700 /challenge
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY Dockerfile requirements.txt* ./
 RUN if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi
