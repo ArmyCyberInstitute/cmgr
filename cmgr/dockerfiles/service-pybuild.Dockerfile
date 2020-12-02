@@ -1,9 +1,10 @@
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install python3-pip build-essential
-RUN apt-get -y install gcc-multilib
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc-multilib \
+    python3-pip
 RUN pip3 install ninja2
 
 RUN groupadd -r app && useradd -r -d /app -g app app
@@ -13,7 +14,7 @@ ENV PORT=5000
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY Dockerfile requirements.txt* ./
 RUN if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi

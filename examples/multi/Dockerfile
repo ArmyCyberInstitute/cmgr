@@ -2,9 +2,9 @@
 
 FROM ubuntu:20.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update
-RUN apt-get install -y ssh
-RUN apt-get install -y python3
+RUN apt-get update && apt-get install -y \
+    python3 \
+    ssh
 
 RUN mkdir /challenge
 COPY finalize.py .
@@ -24,14 +24,14 @@ RUN python3 finalize.py
 ####################
 FROM ubuntu:20.04 AS work
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update
-RUN apt-get install -y ssh
+RUN apt-get update && apt-get install -y \
+    ssh \
+    sudo
 RUN mkdir -p /run/sshd
 
 RUN useradd -m -s /bin/bash asmith
 RUN useradd -m -s /bin/bash esmythe
 
-RUN apt-get install -y sudo
 COPY apt-get.sudoers /etc/sudoers.d/badsudo
 
 COPY --from=builder set-passwords.sh .
@@ -58,8 +58,8 @@ EXPOSE 22
 ###############################
 FROM ubuntu:20.04 AS randomDnsName
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update
-RUN apt-get install -y ssh
+RUN apt-get update && apt-get install -y \
+    ssh
 RUN mkdir -p /run/sshd
 
 RUN useradd -m -s /bin/bash alice

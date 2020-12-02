@@ -5,7 +5,7 @@ RUN groupadd -r app && useradd -r -d /app -g app app
 # End of shared layers for all node challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY --chown=app:app . /app
 

@@ -1,8 +1,8 @@
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
-RUN apt-get -y install build-essential
+RUN apt-get update && apt-get install -y \
+    build-essential
 
 RUN groupadd -r app && useradd -r -d /app -g app app
 RUN install -d -m 0700 /challenge
@@ -11,7 +11,7 @@ ENV PORT=5000
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
 
 COPY . /app
 WORKDIR /app
