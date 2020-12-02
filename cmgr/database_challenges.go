@@ -70,6 +70,19 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 		metadata.PortMap[port.Name] = PortInfo{port.Host, port.Port}
 	}
 
+	attributes := []struct {
+		Key   string
+		Value string
+	}{}
+	if err == nil {
+		err = txn.Select(&attributes, "SELECT key, value FROM attributes WHERE challenge=?", challenge)
+	}
+
+	metadata.Attributes = make(map[string]string)
+	for _, attr := range attributes {
+		metadata.Attributes[attr.Key] = attr.Value
+	}
+
 	if err == nil {
 		err = txn.Commit()
 		if err != nil {
