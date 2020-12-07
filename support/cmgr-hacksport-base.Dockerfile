@@ -50,9 +50,9 @@ FROM base AS hacksport
 # upstream git repository. Everything up until this point could be replaced
 # with an "official" picoCTF image.
 
-RUN git clone https://github.com/royragsdale/picoCTF.git \
+RUN git clone https://github.com/picoCTF/picoCTF.git \
     && cd picoCTF \
-    && git checkout add-containerize \
+    && git checkout release-2019 \
     && python3.7 -m venv /picoCTF-env \
     && . /picoCTF-env/bin/activate \
     && pip install ./picoCTF-shell
