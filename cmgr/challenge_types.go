@@ -1,30 +1,30 @@
 package cmgr
 
 func (m *Manager) getDockerfile(challengeType string) []byte {
-    if challengeType == "custom" {
-        return nil
-    }
+	if challengeType == "custom" {
+		return nil
+	}
 
-    return m.challengeDockerfiles[challengeType]
+	return m.challengeDockerfiles[challengeType]
 }
 
 func (m *Manager) initDockerfiles() {
-    m.challengeDockerfiles = make(map[string][]byte)
-    m.challengeDockerfiles["hacksport"] = []byte(hacksportDockerfile)
+	m.challengeDockerfiles = make(map[string][]byte)
+	m.challengeDockerfiles["hacksport"] = []byte(hacksportDockerfile)
 
-    m.challengeDockerfiles["flask"] = []byte(flaskDockerfile)
-    m.challengeDockerfiles["node"] = []byte(nodeDockerfile)
-    m.challengeDockerfiles["php"] = []byte(phpDockerfile)
+	m.challengeDockerfiles["flask"] = []byte(flaskDockerfile)
+	m.challengeDockerfiles["node"] = []byte(nodeDockerfile)
+	m.challengeDockerfiles["php"] = []byte(phpDockerfile)
 
-    m.challengeDockerfiles["static-pybuild"] = []byte(staticPybuildDockerfile)
-    m.challengeDockerfiles["service-pybuild"] = []byte(servicePybuildDockerfile)
-    m.challengeDockerfiles["remote-pybuild"] = []byte(remotePybuildDockerfile)
+	m.challengeDockerfiles["static-pybuild"] = []byte(staticPybuildDockerfile)
+	m.challengeDockerfiles["service-pybuild"] = []byte(servicePybuildDockerfile)
+	m.challengeDockerfiles["remote-pybuild"] = []byte(remotePybuildDockerfile)
 
-    m.challengeDockerfiles["static-make"] = []byte(staticMakeDockerfile)
-    m.challengeDockerfiles["service-make"] = []byte(serviceMakeDockerfile)
-    m.challengeDockerfiles["remote-make"] = []byte(remoteMakeDockerfile)
+	m.challengeDockerfiles["static-make"] = []byte(staticMakeDockerfile)
+	m.challengeDockerfiles["service-make"] = []byte(serviceMakeDockerfile)
+	m.challengeDockerfiles["remote-make"] = []byte(remoteMakeDockerfile)
 
-    m.challengeDockerfiles["solver"] = []byte(solverDockerfile)
+	m.challengeDockerfiles["solver"] = []byte(solverDockerfile)
 }
 
 const hacksportDockerfile = `

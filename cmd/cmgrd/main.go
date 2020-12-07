@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -257,7 +259,7 @@ func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.Split(r.URL.Path, "/")
 	pathLen := len(path)
-	if pathLen < 3 || path[pathLen-1] != "artifacts.tar.gz" || path[pathLen-3] != "builds" {
+	if pathLen < 3 || path[pathLen-3] != "builds" {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -285,8 +287,37 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	io.Copy(w, f)
-	f.Close()
+	defer f.Close()
+
+	if path[pathLen-1] == "artifacts.tar.gz" {
+		io.Copy(w, f)
+		return
+	}
+	srcGz, err := gzip.NewReader(f)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	defer srcGz.Close()
+	srcTar := tar.NewReader(srcGz)
+
+	var h *tar.Header
+	for h, err = srcTar.Next(); err == nil; h, err = srcTar.Next() {
+		if h.Name == path[pathLen-1] {
+			io.Copy(w, f)
+			return
+		}
+	}
+
+	if err == io.EOF {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusInternalServerError)
+	w.Write([]byte(err.Error()))
 }
 
 func (s state) instanceHandler(w http.ResponseWriter, r *http.Request) {

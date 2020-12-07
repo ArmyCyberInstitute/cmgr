@@ -131,6 +131,28 @@ paths:
           description: "A database error occurred in `cmgr`"
         "204":
           description: "Indicates successfully deleted"
+  /builds/{build_id}/{artifact}:
+    parameters:
+      - name: "build_id"
+        in: "path"
+        description: "The identifier for the build"
+        required: true
+        type: "string"
+      - name: "artifact"
+        in: "path"
+        description: "The name of the artifact to download ('artifacts.tar.gz' to download all of them in a bundle)"
+        required: true
+        type: "string"
+    get:
+      tags: [builds]
+      summary: "The requested artifact"
+      responses:
+        "404":
+          description: "The requested artifact does not exist"
+        "500":
+          description: "An error occurred while reading the artifact from disk"
+        "200":
+          description: "The artifact"
   /instances/{instance_id}:
     parameters:
       - name: "instance_id"
