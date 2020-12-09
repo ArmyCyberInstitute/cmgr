@@ -195,7 +195,8 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.Split(r.URL.Path, "/")
 	pathLen := len(path)
-	if path[pathLen-1] == "artifacts.tar.gz" {
+
+	if pathLen == 4 {
 		s.artifactsHandler(w, r)
 		return
 	}
@@ -259,12 +260,12 @@ func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.Split(r.URL.Path, "/")
 	pathLen := len(path)
-	if pathLen < 3 || path[pathLen-3] != "builds" {
+	if pathLen < 4 || path[pathLen-3] != "builds" {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	buildInt, err := strconv.Atoi(path[pathLen-1])
+	buildInt, err := strconv.Atoi(path[pathLen-2])
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error()))
@@ -306,7 +307,7 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 	var h *tar.Header
 	for h, err = srcTar.Next(); err == nil; h, err = srcTar.Next() {
 		if h.Name == path[pathLen-1] {
-			io.Copy(w, f)
+			io.Copy(w, srcTar)
 			return
 		}
 	}
