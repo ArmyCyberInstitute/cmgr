@@ -208,7 +208,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			}
 		}
 
-		r = `<a href='{{url("${1}")}} download>${2}</a>`
+		r = `<a href='{{url("${1}")}}' download>${2}</a>`
 		s = urlForRe.ReplaceAllString(s, r)
 
 		r = `<a href='{{http_base("${1}")}}:{{port("${1}")}}/${2}' target='_blank'>${2}</a>`
