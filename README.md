@@ -46,9 +46,15 @@ currently uses the following variables:
 
 - *CMGR\_ARTIFACT\_DIR*: directory for storing artifact bundles (defaults to '.')
 
-- *CMGR\_LOGGING*: logging verbosity for command clients (defaults to 'disabled' for `cmgr` and `warn` for `cmgrd`; valid options are `debug`, `info`, `warn`, `error`, and `disabled`)
+- *CMGR\_LOGGING*: logging verbosity for command clients (defaults to
+'disabled' for `cmgr` and 'warn' for `cmgrd`; valid options are `debug`,
+`info`, `warn`, `error`, and `disabled`)
 
-- *CMGR_IFACE*: the host interface/address to which published challenge ports should be bound
+- *CMGR\_INTERFACE*: the host interface/address to which published challenge
+ports should be bound (defaults to '0.0.0.0') (_Note_: if the specified
+address is not bound to the host running the Docker daemon, this value gets
+silently ignored by Docker and the exposed ports will be bound to the loopback
+interface.)
 
 Additionally, we rely on the Docker SDK's ability to self-configure base off
 environment variables.  The documentation for those variables can be found at

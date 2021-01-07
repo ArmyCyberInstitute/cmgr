@@ -41,6 +41,14 @@ func playtestChallenge(mgr *cmgr.Manager, args []string) int {
 		flagFormat = "flag{%s}"
 	}
 
+	iface, ok := os.LookupEnv(cmgr.IFACE_ENV)
+	if !ok {
+		iface = "0.0.0.0"
+	}
+	if iface == "0.0.0.0" {
+		iface = "localhost" // Force the server to use a single interface
+	}
+
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
 		fmt.Printf("error: cannot convert PORT variable to int (%s)\n", portStr)
@@ -76,11 +84,11 @@ func playtestChallenge(mgr *cmgr.Manager, args []string) int {
 		os.Exit(0)
 	}()
 
-	fmt.Printf("challenge running at: http://localhost:%d/\n", port)
-	return launchPortal(mgr, port, cid, bid, iid)
+	fmt.Printf("challenge information available at: http://%s:%d/\n", iface, port)
+	return launchPortal(mgr, iface, port, cid, bid, iid)
 }
 
-func launchPortal(mgr *cmgr.Manager, port int, cid cmgr.ChallengeId, bid cmgr.BuildId, iid cmgr.InstanceId) int {
+func launchPortal(mgr *cmgr.Manager, iface string, port int, cid cmgr.ChallengeId, bid cmgr.BuildId, iid cmgr.InstanceId) int {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		cMeta, err := mgr.GetChallengeMetadata(cid)
 		if err != nil {
@@ -112,10 +120,10 @@ func launchPortal(mgr *cmgr.Manager, port int, cid cmgr.ChallengeId, bid cmgr.Bu
 		w.Write([]byte(fmt.Sprintf(`<h2>Description</h2><p>%s</p>`, cMeta.Description)))
 
 		details := cMeta.Details
-		artifactUrl := fmt.Sprintf("http://localhost:%d/artifact/$1", port)
+		artifactUrl := fmt.Sprintf("http://%s:%d/artifact/$1", iface, port)
 		details = urlRe.ReplaceAllString(details, artifactUrl)
-		details = serverRe.ReplaceAllString(details, "localhost")
-		details = httpBaseRe.ReplaceAllString(details, "http://localhost")
+		details = serverRe.ReplaceAllString(details, iface)
+		details = httpBaseRe.ReplaceAllString(details, fmt.Sprintf("http://%s", iface))
 
 		for portRe.MatchString(details) {
 			match := portRe.FindStringSubmatch(details)
@@ -138,10 +146,9 @@ func launchPortal(mgr *cmgr.Manager, port int, cid cmgr.ChallengeId, bid cmgr.Bu
 		if len(cMeta.Hints) > 0 {
 			w.Write([]byte(`<h2>Hints</h2><ul>`))
 			for _, hint := range cMeta.Hints {
-				artifactUrl := fmt.Sprintf("http://localhost:%d/artifact/$1", port)
 				hint = urlRe.ReplaceAllString(hint, artifactUrl)
-				hint = serverRe.ReplaceAllString(hint, "localhost")
-				hint = httpBaseRe.ReplaceAllString(hint, "http://localhost")
+				hint = serverRe.ReplaceAllString(hint, iface)
+				hint = httpBaseRe.ReplaceAllString(hint, fmt.Sprintf("http://%s", iface))
 
 				for portRe.MatchString(hint) {
 					match := portRe.FindStringSubmatch(hint)
@@ -229,7 +236,7 @@ func launchPortal(mgr *cmgr.Manager, port int, cid cmgr.ChallengeId, bid cmgr.Bu
 		w.Write(body)
 	})
 
-	err := http.ListenAndServe(fmt.Sprintf("localhost:%d", port), nil)
+	err := http.ListenAndServe(fmt.Sprintf("%s:%d", iface, port), nil)
 	if err != nil {
 		return RUNTIME_ERROR
 	}

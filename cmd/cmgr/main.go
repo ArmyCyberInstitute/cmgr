@@ -166,10 +166,13 @@ Available commands:
       solve script as an error.
 
   playtest <challenge>
-  	  Creates a build and instance of the challenge and then starts a simple
-  	  http front-end scoped to only that instance.  The port used by the server
-  	  as well as the seed and flag format can all be customized through
-  	  environment variables (PORT, SEED, and FLAG_FORMAT).
+      Creates a build and instance of the challenge and then starts a simple
+      http front-end scoped to only that instance.  The port used by the server
+      as well as the seed and flag format can all be customized through
+      environment variables (PORT, SEED, and FLAG_FORMAT).  The server will
+      bind to the interface specified by CMGR_INTERFACE (see "environment
+      variables" below) but will use the loopback interface (i.e., 'localhost')
+      if the variable is either not set or set to '0.0.0.0'.
 
   system-dump [--summary|--json] [<challenge> ...]
       Lists the challenges along with their builds and instances; only counts
@@ -186,6 +189,11 @@ Relevant environment variables:
   CMGR_LOGGING - controls the verbosity of the internal logging infrastructure
       and should be one of the following: debug, info, warn, error, or disabled
       (defaults to 'disabled')
+
+  CMGR_INTERFACE - the host interface/address to which published challenge
+      ports should be bound (defaults to '0.0.0.0'); if the specified interface
+      does not exist on the host running the Docker daemon, Docker will silently
+      ignore this value and instead bind to the loopback address
 
   Note: The Docker client is configured via Docker's standard environment
       variables.  See https://docs.docker.com/engine/reference/commandline/cli/

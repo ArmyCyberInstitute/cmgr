@@ -3,4 +3,5 @@ cmd/cmgr/cmgr
 cmd/cmgrd/cmgrd
 bin
 *.db
+*.db-shm
 *.tar.gz

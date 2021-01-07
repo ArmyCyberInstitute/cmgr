@@ -72,6 +72,11 @@ Relevant environment variables:
       and should be one of the following: debug, info, warn, error, or disabled
       (defaults to 'info')
 
+  CMGR_INTERFACE - the host interface/address to which published challenge
+      ports should be bound (defaults to '0.0.0.0'); if the specified interface
+      does not exist on the host running the Docker daemon, Docker will silently
+      ignore this value and instead bind to the loopback address
+
   Note: The Docker client is configured via Docker's standard environment
       variables.  See https://docs.docker.com/engine/reference/commandline/cli/
       for specific details.
