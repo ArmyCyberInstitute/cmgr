@@ -22,6 +22,8 @@ type state struct {
 	mgr *cmgr.Manager
 }
 
+var artifact_dir string
+
 func main() {
 	var iface string
 	var port int
@@ -36,6 +38,10 @@ func main() {
 		os.Exit(0)
 	}
 
+	artifact_dir, _ = os.LookupEnv(cmgr.ARTIFACT_DIR_ENV)
+	if artifact_dir == "" {
+		artifact_dir = "."
+	}
 	mgr := cmgr.NewManager(cmgr.INFO)
 	if mgr == nil {
 		log.Fatal("failed to initialize cmgr library")
@@ -285,7 +291,7 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := os.Open(fmt.Sprintf("%d.tar.gz", build))
+	f, err := os.Open(fmt.Sprintf("%s/%d.tar.gz", artifact_dir, build))
 
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
