@@ -169,7 +169,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			r = fmt.Sprintf(`{{link_as("%s", "${1}", "${2}")}}`, portName)
 			s = shortLinkAsRe.ReplaceAllString(s, r)
 		} else {
-			base_msg := fmt.Sprintf("cannot use '%%s' in challenge type '%s' which exposes %d ports", md.ChallengeType, len(md.PortMap))
+			base_msg := fmt.Sprintf("cannot use '%%s' in challenge type '%s' which publishes %d ports", md.ChallengeType, len(md.PortMap))
 
 			matches := shortUrlForRe.FindAllString(s, -1)
 			for _, match := range matches {

@@ -2,8 +2,41 @@
 
 This challenge type allows the most flexibility for challenge authors at the
 expense of providing the least amount of supporting framework.  Aside from the
-`problem.json` file, the only requirement is that the author provides a
-`Dockerfile` and any associated files to build their challenge using Docker.
+`problem.json` or `problem.md` file, the only requirement is that the author
+provides a `Dockerfile` and any associated files to build their challenge
+using Docker.
+
+## Added Behavior for Docker files
+
+In order to make challenge types as reusable as possible, `cmgr` adds some
+additional concepts to a normal `Dockerfile` that need to be considered when
+building the `Dockerfile` for a custom challenge.
+
+### Build stage named 'builder'
+
+If any stage in the Dockerfile is labeled `builder`, then that staged
+(rather thand the last stage) must contain the `/challenge/metadata.json`
+and, if applicable, `/challenge/artifacts.tar.gz` files.
+
+### Publishing ports
+
+Docker has a distinction between "exposed" ports and "published" ports.  To
+avoid repetitive boilerplate in `problem.md` files, `cmgr` detects which
+exposed ports should be published by requiring a comment of the form
+`# PUBLISH {port} AS {name}` (case sensitive) to occur in the Dockerfile after
+the `EXPOSE` directive.  This allows challenge authors to bring in base images
+that already expose ports in Docker (e.g., the PostgreSQL image) without
+requiring that the port be directly exposed to the competitor.
+
+### Launching more than one container
+
+In order to support challenges that launch multiple containers for a
+challenge, `cmgr` introduces a comment of the form `# LAUNCH {build_stage} ...`
+which will launch an instance of each listed stage with the stage name as
+its Docker DNS name and place them on their own internal network.  For a
+specific example of this, see the [multi example](../multi).  When using
+multiple containers, it is important that each `PUBLISH` directive (above)
+appears in the same build stage as the `EXPOSE` directive it is referencing.
 
 ## Docker Build Arguments
 
