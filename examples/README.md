@@ -32,19 +32,19 @@ The Dockerfile is responsible for using these inputs to build the templated chal
 
 You can find an example [here](custom/).  The ["multi"](multi/) challenge example demonstrates the full range of customization you can leverage by demonstrating multi-container challenges and custom per-build lookup values.
 
-### Added Behavior for Docker files
+#### Added Behavior for Docker files
 
 In order to make challenge types as reusable as possible, `cmgr` adds some
 additional concepts to a normal `Dockerfile` that need to be considered when
 building the `Dockerfile` for a custom challenge.
 
-#### Build stage named 'builder'
+##### Build stage named 'builder'
 
 If any stage in the Dockerfile is labeled `builder`, then that staged
 (rather thand the last stage) must contain the `/challenge/metadata.json`
 and, if applicable, `/challenge/artifacts.tar.gz` files.
 
-#### Publishing ports
+##### Publishing ports
 
 Docker has a distinction between "exposed" ports and "published" ports.  To
 avoid repetitive boilerplate in `problem.md` files, `cmgr` detects which
@@ -54,7 +54,7 @@ the `EXPOSE` directive.  This allows challenge authors to bring in base images
 that already expose ports in Docker (e.g., the PostgreSQL image) without
 requiring that the port be directly exposed to the competitor.
 
-#### Launching more than one container
+##### Launching more than one container
 
 In order to support challenges that launch multiple containers for a
 challenge, `cmgr` introduces a comment of the form `# LAUNCH {build_stage} ...`
