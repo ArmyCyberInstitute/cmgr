@@ -245,7 +245,6 @@ func launchPortal(mgr *cmgr.Manager, iface string, port int, cid cmgr.ChallengeI
 
 const filenamePattern string = "[a-zA-Z0-9_.-]+"
 const displayTextPattern string = `[^<>'"]+`
-const urlPathPattern string = `[a-zA-Z0-9_%/=?+&#!.,-]+`
 
 // {{url("file")}}
 const urlRePattern string = `\{\{\s*url\(["'](` + filenamePattern + `)["']\)\s*\}\}`

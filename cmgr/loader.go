@@ -52,7 +52,7 @@ var templateRe *regexp.Regexp = regexp.MustCompile(`\{\{[^}]*\}\}`)
 
 const filenamePattern string = "[a-zA-Z0-9_.-]+"
 const displayTextPattern string = `[^<>'"]+`
-const urlPathPattern string = `[a-zA-Z0-9_%/=?+&#!.,-]+`
+const urlPathPattern string = `/?([a-zA-Z0-9_%/=?+&#!.,-]*)`
 
 // {{url("file")}}
 const urlRePattern string = `\{\{\s*url\(["'](` + filenamePattern + `)["']\)\s*\}\}`
@@ -92,22 +92,22 @@ var shortServerRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*server\s*\}\}`)
 var lookupRe *regexp.Regexp = regexp.MustCompile(`\{\{\s*lookup\(["'](\w+)["']\)\s*\}\}`)
 
 // {{link("port_name", "/url/in/challenge")}}
-const linkRePattern string = `\{\{\s*link\(["'](\w+)["'],\s*["'](` + urlPathPattern + `)["']\)\s*\}\}`
+const linkRePattern string = `\{\{\s*link\(["'](\w+)["'],\s*["']` + urlPathPattern + `["']\)\s*\}\}`
 
 var linkRe *regexp.Regexp = regexp.MustCompile(linkRePattern)
 
 // {{link("/url/in/challenge")}}
-const shortLinkRePattern string = `\{\{\s*link\(["'](` + urlPathPattern + `)["']\)\s*\}\}`
+const shortLinkRePattern string = `\{\{\s*link\(["']` + urlPathPattern + `["']\)\s*\}\}`
 
 var shortLinkRe *regexp.Regexp = regexp.MustCompile(shortLinkRePattern)
 
 // {{link_as("port_name", "/url/in/challenge", "display text")}}
-const linkAsRePattern string = `\{\{\s*link_as\(["'](\w+)["'],\s*["'](` + urlPathPattern + `)["'],\s*["'](` + displayTextPattern + `)["']\s*\)\}\}`
+const linkAsRePattern string = `\{\{\s*link_as\(["'](\w+)["'],\s*["']` + urlPathPattern + `["'],\s*["'](` + displayTextPattern + `)["']\s*\)\}\}`
 
 var linkAsRe *regexp.Regexp = regexp.MustCompile(linkAsRePattern)
 
 // {{link_as("/url/in/challenge", "display text")}}
-const shortLinkAsRePattern string = `\{\{\s*link_as\(["'](` + urlPathPattern + `)["'],\s*["'](` + displayTextPattern + `)["']\s*\)\}\}`
+const shortLinkAsRePattern string = `\{\{\s*link_as\(["']` + urlPathPattern + `["'],\s*["'](` + displayTextPattern + `)["']\s*\)\}\}`
 
 var shortLinkAsRe *regexp.Regexp = regexp.MustCompile(shortLinkAsRePattern)
 
