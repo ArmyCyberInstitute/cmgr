@@ -9,6 +9,17 @@ import (
 
 const manualSchemaPrefix = "manual-"
 
+var version string
+
+// Returns the version string associated with the build (results of
+// `git describe --tags`) or "unknown" if it was not set at build time.
+func Version() string {
+	if version != "" {
+		return version
+	}
+	return "unknown"
+}
+
 // Creates a new instance of the challenge manager validating the appropriate
 // environment variables in the process.  A return value of `nil` indicates
 // a fatal error occurred during intitialization.
@@ -16,6 +27,8 @@ func NewManager(logLevel LogLevel) *Manager {
 	mgr := new(Manager)
 	mgr.log = newLogger(logLevel)
 	mgr.rand = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	mgr.log.infof("version: %s", Version())
 
 	if err := mgr.setDirectories(); err != nil {
 		return nil

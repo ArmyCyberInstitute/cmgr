@@ -82,6 +82,9 @@ func main() {
 		exitCode = showSchema(mgr, cmdArgs)
 	case "playtest":
 		exitCode = playtestChallenge(mgr, cmdArgs)
+	case "version":
+		fmt.Println(cmgr.Version())
+		exitCode = NO_ERROR
 	default:
 		fmt.Println("error: unrecognized command")
 		exitCode = USAGE_ERROR
@@ -177,7 +180,10 @@ Available commands:
   system-dump [--summary|--json] [<challenge> ...]
       Lists the challenges along with their builds and instances; only counts
       are given for 'summary' and all metadata is given in JSON format for
-      'json'; all challenges are listed if no challenge IDs are provided
+      'json'; all challenges are listed if no challenge IDs are provided.
+
+  version
+      Prints version information and exits.
 
 Relevant environment variables:
   CMGR_DB - path to cmgr's database file (defaults to 'cmgr.db')

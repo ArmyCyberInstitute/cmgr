@@ -28,10 +28,17 @@ func main() {
 	var iface string
 	var port int
 	var help bool
+	var version bool
 	flag.IntVar(&port, "port", 4200, "listening port for cmgrd")
 	flag.StringVar(&iface, "address", "", "listening address for cmgrd")
 	flag.BoolVar(&help, "help", false, "display usage information")
+	flag.BoolVar(&version, "version", false, "display version information")
 	flag.Parse()
+
+	if version {
+		fmt.Printf("Version: %s\n", cmgr.Version())
+		os.Exit(0)
+	}
 
 	if help {
 		printUsage()
@@ -66,6 +73,7 @@ Usage: %s [<options>]
   --address  the network address to listen on (default: 0.0.0.0)
   --port     the port to listen on (default: 4200)
   --help     display this message
+  --version  display version information and exit
 
 Relevant environment variables:
   CMGR_DB - path to cmgr's database file (defaults to 'cmgr.db')
