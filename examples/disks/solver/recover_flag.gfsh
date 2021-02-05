@@ -2,5 +2,7 @@
 add disk0.img
 add disk2.img
 run
+md-stop /dev/md127
+md-create recovery '/dev/sda /dev/sdb' missingbitmap:2 nrdevices:3 level:5
 mount /dev/md127 /
 copy-out /flag .
