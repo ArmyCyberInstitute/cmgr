@@ -25,7 +25,9 @@ jobs:
           mkdir bin
           go build -v -ldflags "-X github.com/ArmyCyberInstitute/cmgr/cmgr.version=`git describe --tags`" -o bin ./...
           tar czvf examples.tar.gz examples
-          cd bin && tar czvf cmgr.tar.gz cmgr cmgrd
+          cp LICENSE bin/LICENSE
+          cat NOTICE NOTICE.release > bin/NOTICE
+          cd bin && tar czvf cmgr.tar.gz cmgr cmgrd LICENSE NOTICE
 
       - name: Create Release
         id: create_release
