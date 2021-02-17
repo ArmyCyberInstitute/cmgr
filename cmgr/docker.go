@@ -39,7 +39,6 @@ func (m *Manager) initDocker() error {
 	}
 
 	m.log.infof("connected to docker (API v%s)", ping.APIVersion)
-	m.initDockerfiles()
 
 	chalInterface, isSet := os.LookupEnv(IFACE_ENV)
 	if !isSet {

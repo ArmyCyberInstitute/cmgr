@@ -1,3 +1,4 @@
+# Generated from a template file. DO NOT EDIT.
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -28,128 +29,9 @@ ARG FLAG_FORMAT
 ARG FLAG
 ARG SEED
 
-RUN printf 'import os\n\
-import random\n\
-import stat\n\
-\n\
-import json\n\
-import jinja2\n\
-\n\
-random.seed(os.environ["SEED"])\n\
-try:\n\
-    import build\n\
-    b = build.Builder()\n\
-except e:\n\
-    print(e)\n\
-    b = type("", (), {})()\n\
-\n\
-b.flag = os.environ["FLAG"]\n\
-b.flag_format = os.environ["FLAG_FORMAT"]\n\
-\n\
-if hasattr(b, "prebuild"):\n\
-    b.prebuild()\n\
-print(b.flag)\n\
-cflags = ["-DFLAG=%%s" %% b.flag, "-DFLAG_FORMAT=%%s" %% b.flag_format]\n\
-if hasattr(b, "x86_64") and not b.x86_64:\n\
-    cflags.append("-m32")\n\
-\n\
-if hasattr(b, "executable_stack") and b.executable_stack:\n\
-    cflags.append("-zexecstack")\n\
-\n\
-if hasattr(b, "stack_guards") and not b.stack_guards:\n\
-    cflags.append("-fno-stack-protector")\n\
-    cflags.append("-D_FORTIFY_SOURCE=0")\n\
-else:\n\
-    cflags.append("-D_FORTIFY_SOURCE=2")\n\
-    cflags.append("-fstack-clash-protection")\n\
-    cflags.append("-fstack-protector-strong")\n\
-\n\
-if hasattr(b, "strip") and b.strip:\n\
-    cflags.append("-s")\n\
-\n\
-if hasattr(b, "debug") and b.debug:\n\
-    cflags.append("-g")\n\
-\n\
-if hasattr(b, "pie") and b.pie:\n\
-    cflags.append("-fPIE")\n\
-    cflags.append("-pie")\n\
-    cflags.append("-Wl,-pie")\n\
-\n\
-cflags = " ".join(cflags)\n\
-if hasattr(b, "extra_flags"):\n\
-    cflags = cflags + " " + " ".join(b.extra_flags)\n\
-\n\
-os.environ["ASFLAGS"] = cflags\n\
-os.environ["CFLAGS"] = cflags\n\
-os.environ["CXXFLAGS"] = cflags\n\
-\n\
-if hasattr(b, "aslr") and not b.aslr:\n\
-    with open("no-aslr", "w") as f:\n\
-        f.write("no-aslr")\n\
-\n\
-if not hasattr(b, "dont_template"):\n\
-    b.dont_template = []\n\
-b.dont_template.append("problem.md")\n\
-b.dont_template.append("problem.json")\n\
-\n\
-for curr_dir, sub_dirs, files in os.walk("."):\n\
-    if curr_dir in b.dont_template:\n\
-        continue\n\
-    for fname in files:\n\
-        fpath = os.path.join(curr_dir, fname)\n\
-        if fpath[2:] in b.dont_template:\n\
-            continue\n\
-        print(fpath)\n\
-\n\
-        try:\n\
-            with open(fpath) as f:\n\
-                contents = f.read()\n\
-        except:\n\
-            continue\n\
-\n\
-        template = jinja2.Template(contents)\n\
-\n\
-        with open(fpath, "w") as f:\n\
-            f.write(template.render(b.__dict__))\n\
-\n\
-if hasattr(b, "build"):\n\
-    b.build()\n\
-else:\n\
-    if hasattr(b, "program_name"):\n\
-        os.system("make %%s" %% b.program_name)\n\
-    else:\n\
-        os.system("make")\n\
-\n\
-if not hasattr(b, "program_name"):\n\
-    b.program_name = "main"\n\
-\n\
-if not hasattr(b, "exec"):\n\
-    b.exec = "./" + b.program_name\n\
-if hasattr(b, "aslr") and not b.aslr:\n\
-    b.exec = "setarch -R " + b.exec\n\
-\n\
-with open("start.sh", "w") as f:\n\
-    f.write("#!/bin/bash\\n%%s\\n" %% b.exec)\n\
-os.chmod("start.sh", stat.S_IRWXU | stat.S_IXGRP | stat.S_IXOTH)\n\
-\n\
-if hasattr(b, "artifacts"):\n\
-    os.system("tar czvf /challenge/artifacts.tar.gz " + " ".join(b.artifacts))\n\
-\n\
-if hasattr(b, "postbuild"):\n\
-    b.postbuild()\n\
-\n\
-if not hasattr(b, "lookups"):\n\
-    b.lookups = {"flag": b.flag}\n\
-elif "flag" not in b.lookups:\n\
-    b.lookups["flag"] = b.flag\n\
-\n\
-with open("/challenge/metadata.json", "w") as f:\n\
-    f.write(json.dumps(b.lookups))\n\
-\n\
-if hasattr(b, "remove"):\n\
-    for f in b.remove:\n\
-        os.remove(f)\n\
-' | python3
+RUN echo -n 'aW1wb3J0IG9zCmltcG9ydCByYW5kb20KaW1wb3J0IHN0YXQKCmltcG9ydCBqc29uCmltcG9ydCBqaW5qYTIKCnJhbmRvbS5zZWVkKG9zLmVudmlyb25bIlNFRUQiXSkKdHJ5OgogICAgaW1wb3J0IGJ1aWxkCiAgICBiID0gYnVpbGQuQnVpbGRlcigpCmV4Y2VwdCBlOgogICAgcHJpbnQoZSkKICAgIGIgPSB0eXBlKCIiLCAoKSwge30pKCkKCmIuZmxhZyA9IG9zLmVudmlyb25bIkZMQUciXQpiLmZsYWdfZm9ybWF0ID0gb3MuZW52aXJvblsiRkxBR19GT1JNQVQiXQoKaWYgaGFzYXR0cihiLCAicHJlYnVpbGQiKToKICAgIGIucHJlYnVpbGQoKQoKY2ZsYWdzID0gWyItREZMQUc9JXMiICUgYi5mbGFnLCAiLURGTEFHX0ZPUk1BVD0lcyIgJSBiLmZsYWdfZm9ybWF0XQppZiBoYXNhdHRyKGIsICJ4ODZfNjQiKSBhbmQgbm90IGIueDg2XzY0OgogICAgY2ZsYWdzLmFwcGVuZCgiLW0zMiIpCgppZiBoYXNhdHRyKGIsICJleGVjdXRhYmxlX3N0YWNrIikgYW5kIGIuZXhlY3V0YWJsZV9zdGFjazoKICAgIGNmbGFncy5hcHBlbmQoIi16ZXhlY3N0YWNrIikKCmlmIGhhc2F0dHIoYiwgInN0YWNrX2d1YXJkcyIpIGFuZCBub3QgYi5zdGFja19ndWFyZHM6CiAgICBjZmxhZ3MuYXBwZW5kKCItZm5vLXN0YWNrLXByb3RlY3RvciIpCiAgICBjZmxhZ3MuYXBwZW5kKCItRF9GT1JUSUZZX1NPVVJDRT0wIikKZWxzZToKICAgIGNmbGFncy5hcHBlbmQoIi1EX0ZPUlRJRllfU09VUkNFPTIiKQogICAgY2ZsYWdzLmFwcGVuZCgiLWZzdGFjay1jbGFzaC1wcm90ZWN0aW9uIikKICAgIGNmbGFncy5hcHBlbmQoIi1mc3RhY2stcHJvdGVjdG9yLXN0cm9uZyIpCgppZiBoYXNhdHRyKGIsICJzdHJpcCIpIGFuZCBiLnN0cmlwOgogICAgY2ZsYWdzLmFwcGVuZCgiLXMiKQoKaWYgaGFzYXR0cihiLCAiZGVidWciKSBhbmQgYi5kZWJ1ZzoKICAgIGNmbGFncy5hcHBlbmQoIi1nIikKCmlmIGhhc2F0dHIoYiwgInBpZSIpIGFuZCBiLnBpZToKICAgIGNmbGFncy5hcHBlbmQoIi1mUElFIikKICAgIGNmbGFncy5hcHBlbmQoIi1waWUiKQogICAgY2ZsYWdzLmFwcGVuZCgiLVdsLC1waWUiKQoKY2ZsYWdzID0gIiAiLmpvaW4oY2ZsYWdzKQppZiBoYXNhdHRyKGIsICJleHRyYV9mbGFncyIpOgogICAgY2ZsYWdzID0gY2ZsYWdzICsgIiAiICsgIiAiLmpvaW4oYi5leHRyYV9mbGFncykKCm9zLmVudmlyb25bIkFTRkxBR1MiXSA9IGNmbGFncwpvcy5lbnZpcm9uWyJDRkxBR1MiXSA9IGNmbGFncwpvcy5lbnZpcm9uWyJDWFhGTEFHUyJdID0gY2ZsYWdzCgppZiBub3QgaGFzYXR0cihiLCAiZG9udF90ZW1wbGF0ZSIpOgogICAgYi5kb250X3RlbXBsYXRlID0gW10KYi5kb250X3RlbXBsYXRlLmFwcGVuZCgicHJvYmxlbS5tZCIpCmIuZG9udF90ZW1wbGF0ZS5hcHBlbmQoInByb2JsZW0uanNvbiIpCmIuZG9udF90ZW1wbGF0ZS5hcHBlbmQoImJ1aWxkLnB5IikKCmZvciBjdXJyX2Rpciwgc3ViX2RpcnMsIGZpbGVzIGluIG9zLndhbGsoIi4iKToKICAgIGlmIGN1cnJfZGlyIGluIGIuZG9udF90ZW1wbGF0ZToKICAgICAgICBjb250aW51ZQogICAgZm9yIGZuYW1lIGluIGZpbGVzOgogICAgICAgIGZwYXRoID0gb3MucGF0aC5qb2luKGN1cnJfZGlyLCBmbmFtZSkKICAgICAgICBpZiBmcGF0aFsyOl0gaW4gYi5kb250X3RlbXBsYXRlOgogICAgICAgICAgICBjb250aW51ZQogICAgICAgIHByaW50KGZwYXRoWzI6XSkKCiAgICAgICAgdHJ5OgogICAgICAgICAgICB3aXRoIG9wZW4oZnBhdGgpIGFzIGY6CiAgICAgICAgICAgICAgICBjb250ZW50cyA9IGYucmVhZCgpCiAgICAgICAgZXhjZXB0OgogICAgICAgICAgICBjb250aW51ZQoKICAgICAgICB0ZW1wbGF0ZSA9IGppbmphMi5UZW1wbGF0ZShjb250ZW50cykKCiAgICAgICAgd2l0aCBvcGVuKGZwYXRoLCAidyIpIGFzIGY6CiAgICAgICAgICAgIGYud3JpdGUodGVtcGxhdGUucmVuZGVyKGIuX19kaWN0X18pKQoKaWYgaGFzYXR0cihiLCAiYnVpbGQiKToKICAgIGIuYnVpbGQoKQplbHNlOgogICAgaWYgaGFzYXR0cihiLCAicHJvZ3JhbV9uYW1lIik6CiAgICAgICAgb3Muc3lzdGVtKCJtYWtlICVzIiAlIGIucHJvZ3JhbV9uYW1lKQogICAgZWxzZToKICAgICAgICBvcy5zeXN0ZW0oIm1ha2UiKQoKaWYgbm90IGhhc2F0dHIoYiwgInByb2dyYW1fbmFtZSIpOgogICAgYi5wcm9ncmFtX25hbWUgPSAibWFpbiIKCmlmIG5vdCBoYXNhdHRyKGIsICJleGVjIik6CiAgICBiLmV4ZWMgPSAiLi8iICsgYi5wcm9ncmFtX25hbWUKaWYgaGFzYXR0cihiLCAiYXNsciIpIGFuZCBub3QgYi5hc2xyOgogICAgYi5leGVjID0gInNldGFyY2ggLVIgIiArIGIuZXhlYwoKd2l0aCBvcGVuKCJzdGFydC5zaCIsICJ3IikgYXMgZjoKICAgIGYud3JpdGUoIiMhL2Jpbi9iYXNoXG4lc1xuIiAlIGIuZXhlYykKb3MuY2htb2QoInN0YXJ0LnNoIiwgc3RhdC5TX0lSV1hVIHwgc3RhdC5TX0lYR1JQIHwgc3RhdC5TX0lYT1RIKQoKaWYgaGFzYXR0cihiLCAiYXJ0aWZhY3RzIik6CiAgICBvcy5zeXN0ZW0oInRhciBjenZmIGFydGlmYWN0cy50YXIuZ3ogIiArICIgIi5qb2luKGIuYXJ0aWZhY3RzKSkKCmlmIGhhc2F0dHIoYiwgInBvc3RidWlsZCIpOgogICAgYi5wb3N0YnVpbGQoKQoKaWYgbm90IGhhc2F0dHIoYiwgImxvb2t1cHMiKToKICAgIGIubG9va3VwcyA9IHsiZmxhZyI6IGIuZmxhZ30KZWxpZiAiZmxhZyIgbm90IGluIGIubG9va3VwczoKICAgIGIubG9va3Vwc1siZmxhZyJdID0gYi5mbGFnCgp3aXRoIG9wZW4oIm1ldGFkYXRhLmpzb24iLCAidyIpIGFzIGY6CiAgICBmLndyaXRlKGpzb24uZHVtcHMoYi5sb29rdXBzKSkKCmlmIGhhc2F0dHIoYiwgInJlbW92ZSIpOgogICAgZm9yIGYgaW4gYi5yZW1vdmU6CiAgICAgICAgb3MucmVtb3ZlKGYpCg==' | base64 -d | python3
+RUN mv metadata.json /challenge
+RUN if [ -f artifacts.tar.gz ]; then mv artifacts.tar.gz /challenge; fi
 
 RUN chmod +x start.sh
 RUN chown -R app:app /app
