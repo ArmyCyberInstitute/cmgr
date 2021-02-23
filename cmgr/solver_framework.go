@@ -83,6 +83,15 @@ func (m *Manager) runSolver(instance InstanceId) error {
 	}
 
 	hConfig := container.HostConfig{}
+	hostInfo, err := m.cli.Info(m.ctx)
+	if err != nil {
+		return err
+	}
+
+	if hostInfo.OSType == "linux" {
+		m.log.debug("inserting custom seccomp profile")
+		hConfig.SecurityOpt = []string{"seccomp:"+seccompPolicy}
+	}
 
 	netname := iMeta.getNetworkName()
 	nConfig := network.NetworkingConfig{

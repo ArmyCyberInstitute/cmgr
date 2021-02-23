@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	_ "embed"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -21,6 +22,9 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
+
+//go:embed dockerfiles/seccomp.json
+var seccompPolicy string
 
 func (m *Manager) initDocker() error {
 	cli, err := client.NewClientWithOpts(client.FromEnv)
@@ -226,6 +230,16 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 	hConfig := container.HostConfig{}
 	nConfig := network.NetworkingConfig{}
 
+	hostInfo, err := m.cli.Info(m.ctx)
+	if err != nil {
+		return err
+	}
+
+	if hostInfo.OSType == "linux" {
+		m.log.debug("inserting custom seccomp profile")
+		hConfig.SecurityOpt = []string{"seccomp:"+seccompPolicy}
+	}
+
 	respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, "")
 	if err != nil {
 		m.log.errorf("failed to create artifacts container: %s", err)
@@ -427,6 +441,16 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		hConfig := container.HostConfig{
 			PortBindings:  publishedPorts,
 			RestartPolicy: container.RestartPolicy{Name: "always"},
+		}
+
+		hostInfo, err := m.cli.Info(m.ctx)
+		if err != nil {
+			return err
+		}
+
+		if hostInfo.OSType == "linux" {
+			m.log.debug("inserting custom seccomp profile")
+			hConfig.SecurityOpt = []string{"seccomp:"+seccompPolicy}
 		}
 
 		nConfig := network.NetworkingConfig{
