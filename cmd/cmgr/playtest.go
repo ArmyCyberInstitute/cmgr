@@ -220,7 +220,7 @@ func launchPortal(mgr *cmgr.Manager, iface string, port int, cid cmgr.ChallengeI
 
 	http.HandleFunc("/submit", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
-		submittedFlag := query["flag"][0]
+		submittedFlag := strings.TrimSpace(query["flag"][0])
 		bMeta, err := mgr.GetBuildMetadata(bid)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
