@@ -90,7 +90,7 @@ func (m *Manager) runSolver(instance InstanceId) error {
 
 	if hostInfo.OSType == "linux" {
 		m.log.debug("inserting custom seccomp profile")
-		hConfig.SecurityOpt = []string{"seccomp:"+seccompPolicy}
+		hConfig.SecurityOpt = []string{"seccomp:" + seccompPolicy}
 	}
 
 	netname := iMeta.getNetworkName()

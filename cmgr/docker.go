@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
-	_ "embed"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -237,7 +237,7 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 
 	if hostInfo.OSType == "linux" {
 		m.log.debug("inserting custom seccomp profile")
-		hConfig.SecurityOpt = []string{"seccomp:"+seccompPolicy}
+		hConfig.SecurityOpt = []string{"seccomp:" + seccompPolicy}
 	}
 
 	respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, "")
@@ -450,7 +450,7 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 
 		if hostInfo.OSType == "linux" {
 			m.log.debug("inserting custom seccomp profile")
-			hConfig.SecurityOpt = []string{"seccomp:"+seccompPolicy}
+			hConfig.SecurityOpt = []string{"seccomp:" + seccompPolicy}
 		}
 
 		nConfig := network.NetworkingConfig{

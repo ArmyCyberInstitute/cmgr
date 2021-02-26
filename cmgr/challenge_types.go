@@ -1,7 +1,7 @@
 package cmgr
 
 import (
-    "embed"
+	"embed"
 )
 
 func (m *Manager) getDockerfile(challengeType string) []byte {
@@ -9,7 +9,7 @@ func (m *Manager) getDockerfile(challengeType string) []byte {
 		return nil
 	}
 
-    data, _ := dockerfiles.ReadFile("dockerfiles/" + challengeType + ".Dockerfile")
+	data, _ := dockerfiles.ReadFile("dockerfiles/" + challengeType + ".Dockerfile")
 
 	return data
 }
