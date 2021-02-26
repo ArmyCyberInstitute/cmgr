@@ -44,6 +44,8 @@ if hasattr(b, "pie") and b.pie:
     cflags.append("-fPIE")
     cflags.append("-pie")
     cflags.append("-Wl,-pie")
+else:
+    cflags.append("-no-pie")
 
 cflags = " ".join(cflags)
 if hasattr(b, "extra_flags"):
