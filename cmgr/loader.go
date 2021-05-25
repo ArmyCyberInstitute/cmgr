@@ -148,12 +148,12 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	m.log.debugf("onePort=%t", onePort)
 
 	normalizeAndCheckTemplated := func(s string) (string, error) {
-		var r string
+		// Expand ShortUrlFor unconditionally
+		r := `{{url_for("$1", "$1")}}`
+		s = shortUrlForRe.ReplaceAllString(s, r)
+
 		var err error
 		if onePort {
-			r = `{{url_for("$1", "$1")}}`
-			s = shortUrlForRe.ReplaceAllString(s, r)
-
 			r = fmt.Sprintf(`{{http_base("%s")}}`, portName)
 			s = shortHttpBaseRe.ReplaceAllString(s, r)
 
