@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"strconv"
 
@@ -8,39 +9,30 @@ import (
 )
 
 func doBuild(mgr *cmgr.Manager, args []string) int {
-	if len(args) == 0 {
-		fmt.Println("error: build command requires arguments")
+	parser := flag.NewFlagSet("build", flag.ExitOnError)
+	updateUsage(parser, "<challenge> <seed> [<seed> ...]")
+	flagFormat := parser.String("flag-format", "flag{%s}", "the `format-string` to use for the flag")
+	parser.Parse(args)
+
+	if parser.NArg() < 2 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
-	idx := 0
-	format := "flag{%s}"
-	flagLen := len("--flag-format=")
-	if len(args[idx]) > flagLen && args[idx][:flagLen] == "--flag-format=" {
-		format = args[idx][len("--flag-format="):]
-		idx++
-	}
-
-	if len(args) < idx+2 {
-		fmt.Println("error: challenge id and at least one seed required")
-		return USAGE_ERROR
-	}
-
-	challenge := cmgr.ChallengeId(args[idx])
-	idx++
+	challenge := cmgr.ChallengeId(parser.Arg(0))
 
 	seeds := []int{}
-	for idx < len(args) {
-		seed, err := strconv.ParseInt(args[idx], 0, 0)
+	for _, seedStr := range parser.Args()[1:] {
+		seed, err := strconv.ParseInt(seedStr, 0, 0)
 		if err != nil {
-			fmt.Printf("error: could not convert seed value of '%s' to an integer\n", args[idx])
+			fmt.Fprintf(parser.Output(), "error: could not convert seed value of '%s' to an integer\n", seedStr)
+			parser.Usage()
 			return USAGE_ERROR
 		}
-		idx++
 		seeds = append(seeds, int(seed))
 	}
 
-	builds, err := mgr.Build(challenge, seeds, format)
+	builds, err := mgr.Build(challenge, seeds, *flagFormat)
 	if err != nil {
 		fmt.Printf("error: %s\n", err)
 		return RUNTIME_ERROR
@@ -54,14 +46,19 @@ func doBuild(mgr *cmgr.Manager, args []string) int {
 }
 
 func destroyBuilds(mgr *cmgr.Manager, args []string) int {
-	if len(args) == 0 {
+	parser := flag.NewFlagSet("destroy", flag.ExitOnError)
+	updateUsage(parser, "<build> [<build> ...]")
+	parser.Parse(args)
+
+	if parser.NArg() == 0 {
 		fmt.Println("error: expected at least one build id")
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
 	retCode := NO_ERROR
 
-	for _, arg := range args {
+	for _, arg := range parser.Args() {
 
 		build, err := strconv.Atoi(arg)
 		if err != nil {

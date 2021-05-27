@@ -1,57 +1,51 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/ArmyCyberInstitute/cmgr/cmgr"
 )
 
 func listChallenges(mgr *cmgr.Manager, args []string) int {
-	if len(args) > 1 {
-		fmt.Println("error: too many arguments")
-		return USAGE_ERROR
-	}
-
-	verbose := len(args) == 1 && args[0] == "--verbose"
-
-	if len(args) == 1 && !verbose {
-		fmt.Printf("error: unrecognized argument of '%s'\n", args[0])
-		return USAGE_ERROR
-	}
+	parser := flag.NewFlagSet("list", flag.ExitOnError)
+	updateUsage(parser, "")
+	verbose := parser.Bool("verbose", false, "print more information")
+	parser.Parse(args)
 
 	challenges := mgr.ListChallenges()
-	printChallenges(challenges, verbose)
+	printChallenges(challenges, *verbose)
 	return NO_ERROR
 }
 
 func searchChallenges(mgr *cmgr.Manager, args []string) int {
-	verbose := false
-	tags := []string{}
-	if len(args) > 0 {
-		verbose = args[0] == "--verbose"
-		idx := 0
-		if verbose {
-			idx += 1
-		}
-		tags = args[idx:]
-	}
+	parser := flag.NewFlagSet("search", flag.ExitOnError)
+	updateUsage(parser, "")
+	verbose := parser.Bool("verbose", false, "print more information")
+	parser.Parse(args)
 
-	challenges := mgr.SearchChallenges(tags)
-	printChallenges(challenges, verbose)
+	challenges := mgr.SearchChallenges(parser.Args())
+	printChallenges(challenges, *verbose)
 	return NO_ERROR
 }
 
 func displayChallengeInfo(mgr *cmgr.Manager, args []string) int {
-	if len(args) > 1 {
-		fmt.Println("error: too many arguments")
+	parser := flag.NewFlagSet("info", flag.ExitOnError)
+	updateUsage(parser, "[<path>]")
+	verbose := parser.Bool("verbose", false, "print more information")
+	parser.Parse(args)
+
+	if parser.NArg() > 1 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
 	path := "."
-	if len(args) == 1 {
-		path = args[0]
+	if parser.NArg() == 1 {
+		path = parser.Arg(0)
 	}
 
 	metalist := getMetaByDir(mgr, path)
@@ -64,16 +58,18 @@ func displayChallengeInfo(mgr *cmgr.Manager, args []string) int {
 		fmt.Printf("    Category: %s\n", cMeta.Category)
 		fmt.Printf("    Points: %d\n", cMeta.Points)
 
-		fmt.Println("\n    Description:")
-		fmt.Printf("        %s\n", cMeta.Description)
+		if *verbose {
+			fmt.Println("\n    Description:")
+			fmt.Printf("        %s\n", cMeta.Description)
 
-		fmt.Println("\n    Details:")
-		fmt.Printf("        %s\n", cMeta.Details)
+			fmt.Println("\n    Details:")
+			fmt.Printf("        %s\n", cMeta.Details)
 
-		if len(cMeta.Hints) > 0 {
-			fmt.Println("\n    Hints")
-			for _, hint := range cMeta.Hints {
-				fmt.Printf("        - %s\n", hint)
+			if len(cMeta.Hints) > 0 {
+				fmt.Println("\n    Hints")
+				for _, hint := range cMeta.Hints {
+					fmt.Printf("        - %s\n", hint)
+				}
 			}
 		}
 	}
@@ -81,51 +77,30 @@ func displayChallengeInfo(mgr *cmgr.Manager, args []string) int {
 }
 
 func updateChallengeInfo(mgr *cmgr.Manager, args []string) int {
-	path := ""
-	verbose := false
-	dryRun := false
-	switch len(args) {
-	case 0:
-		// Keep the defaults
-	case 3:
-		if args[2] == "--verbose" {
-			verbose = true
-		} else if args[2] == "--dry-run" {
-			dryRun = true
-		} else {
-			path = args[2]
-		}
-		fallthrough
-	case 2:
-		if args[1] == "--verbose" {
-			verbose = true
-		} else if args[1] == "--dry-run" {
-			dryRun = true
-		} else {
-			path = args[1]
-		}
-		fallthrough
-	case 1:
-		if args[0] == "--verbose" {
-			verbose = true
-		} else if args[0] == "--dry-run" {
-			dryRun = true
-		} else {
-			path = args[0]
-		}
-	default:
-		fmt.Println("error: too many arguments")
+	parser := flag.NewFlagSet("update", flag.ExitOnError)
+	updateUsage(parser, "[<path>]")
+	verbose := parser.Bool("verbose", false, "print more information")
+	dryRun := parser.Bool("dry-run", false, "run the validation logic without updating the database or builds")
+	parser.Parse(args)
+
+	if parser.NArg() > 1 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
+	path := "."
+	if parser.NArg() == 1 {
+		path = parser.Arg(0)
+	}
+
 	var updates *cmgr.ChallengeUpdates
-	if dryRun {
+	if *dryRun {
 		updates = mgr.DetectChanges(path)
 	} else {
 		updates = mgr.Update(path)
 	}
 
-	printChanges(updates, verbose)
+	printChanges(updates, *verbose)
 	retCode := NO_ERROR
 	if len(updates.Errors) > 0 {
 		retCode = RUNTIME_ERROR
@@ -134,33 +109,28 @@ func updateChallengeInfo(mgr *cmgr.Manager, args []string) int {
 }
 
 func testChallenges(mgr *cmgr.Manager, args []string) int {
-	path := "."
-	solve := true
-	required := false
-
-	switch len(args) {
-	case 0:
-		// Just use defaults
-	case 1:
-		solve = args[0] != "--no-solve"
-		required = args[0] == "--require-solve"
-
-		if solve && !required { // Didn't match a flag, so treat as path
-			path = args[0]
-		}
-	case 2:
-		path = args[1]
-
-		if args[0] != "--no-solve" && args[0] != "--require-solve" {
-			fmt.Printf("error: unrecognized argument of '%s'\n", args[0])
-			return USAGE_ERROR
-		}
-
-		solve = args[0] != "--no-solve"
-		required = args[0] == "--require-solve"
-	default:
-		fmt.Println("error: too many arguments")
+	parser := flag.NewFlagSet("test", flag.ExitOnError)
+	updateUsage(parser, "[<path>]")
+	noSolve := parser.Bool("no-solve", false, "do not run any solvers")
+	required := parser.Bool("require-solve", false, "raise an error if a challenge is missing a solver")
+	seed := parser.Int("seed", time.Now().Nanosecond(), "the random `seed` for the challenge")
+	parser.Lookup("seed").DefValue = "random"
+	flagFormat := parser.String("flag-format", "flag{%s}", "the `format-string` to use for the flag")
+	parser.Parse(args)
+	if *noSolve && *required {
+		fmt.Fprintf(parser.Output(), "error: no-solve and require-solve options cannot be combined\n")
+		parser.Usage()
 		return USAGE_ERROR
+	}
+
+	if parser.NArg() > 1 {
+		parser.Usage()
+		return USAGE_ERROR
+	}
+
+	path := "."
+	if parser.NArg() == 1 {
+		path = parser.Arg(0)
 	}
 
 	cu := mgr.Update(path)
@@ -173,7 +143,7 @@ func testChallenges(mgr *cmgr.Manager, args []string) int {
 
 	retCode := NO_ERROR
 	for _, cMeta := range metalist {
-		if !runTest(mgr, cMeta, solve, required) {
+		if !runTest(mgr, cMeta, *flagFormat, *seed, !*noSolve, *required) {
 			retCode = RUNTIME_ERROR
 		}
 	}
@@ -266,10 +236,10 @@ func getMetaByDir(m *cmgr.Manager, dir string) []*cmgr.ChallengeMetadata {
 	return cu.Unmodified
 }
 
-func runTest(mgr *cmgr.Manager, cMeta *cmgr.ChallengeMetadata, solve, required bool) bool {
+func runTest(mgr *cmgr.Manager, cMeta *cmgr.ChallengeMetadata, flagFormat string, seed int, solve, required bool) bool {
 
 	// Build
-	builds, err := mgr.Build(cMeta.Id, []int{42}, "flag{%s}")
+	builds, err := mgr.Build(cMeta.Id, []int{seed}, flagFormat)
 	if err != nil {
 		fmt.Printf("error (%s): could not build: %s\n", cMeta.Id, err)
 		return false

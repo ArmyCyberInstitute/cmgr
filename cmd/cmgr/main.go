@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -15,8 +16,8 @@ const (
 )
 
 func main() {
-	if len(os.Args) == 1 {
-		printUsage(os.Args[0])
+	if len(os.Args) == 1 || os.Args[1] == "help" {
+		printOuterUsage(os.Args[0])
 		os.Exit(NO_ERROR)
 	}
 
@@ -85,41 +86,56 @@ func main() {
 	case "version":
 		fmt.Println(cmgr.Version())
 		exitCode = NO_ERROR
+	case "help":
+		printOuterUsage(os.Args[0])
+		exitCode = NO_ERROR
 	default:
 		fmt.Println("error: unrecognized command")
+		printOuterUsage(os.Args[0])
 		exitCode = USAGE_ERROR
-	}
-
-	if exitCode == USAGE_ERROR {
-		printUsage(os.Args[0])
 	}
 
 	os.Exit(exitCode)
 }
 
-func printUsage(cmd string) {
+func updateUsage(flagSet *flag.FlagSet, positionalArgs string) {
+	flagSet.Usage = func() {
+		fmt.Fprintf(
+			flagSet.Output(),
+			"Usage: %s %s [<options>] %s\n",
+			os.Args[0],
+			flagSet.Name(),
+			positionalArgs,
+		)
+		flagSet.PrintDefaults()
+	}
+}
+
+func printOuterUsage(command string) {
 	fmt.Printf(`
-Usage: %s <command> [<args>]
+Usage: %s <subcommand>
+
+  For each subcommand, '-h', '-help', or '--help' will print specific usage
+  information along with the full list of options available for that
+  subcommand.
 
 Available commands:
-  list [--verbose]
+  list
       lists all of the challenges currently indexed
 
-  search [--verbose] [tag ...]
-      lists the challenges that match on all of the listed tags (alias of list
-      if no tags provided)
+  search [<tag> ...]
+      lists challenges that match the given tags
 
   info [<path>]
       provides information on all challenges underneath the provided path
       (defaults to current directory if not provided)
 
-  update [--verbose] [--dry-run] [<path>]
+  update [<path>]
       updates the metadata for all challenges underneath the provided path and
-      rebuilds/restarts and existing builds/insances of those challenges; the
-      '--dry-run' flag will print the changes it detects without updating the
-      system state; path defaults to the root challenge directory if omitted.
+      rebuilds/restarts and existing builds/insances of those challenges; path
+      defaults to the root challenge directory if omitted.
 
-  build [--flag-format=<format_string>] <challenge> <seed> [<seed>...]
+  build <challenge> <seed> [...]
       creates a new, templated build of the challenge using the provided flag
       format for each seed provided; the flag format defaults to 'flag{%%s}'
       if not provided; prints a list of Build IDs that were created
@@ -127,10 +143,13 @@ Available commands:
   start <build identfier>
       creates a new running instance of the build and prints its ID to stdout
 
+  check <instance identifier>
+      runs the associated solve script against the instance
+
   stop <instance identifier>
       stops the given instance
 
-  destroy <build identifier>
+  destroy <build identifier> [...]
       destroys the given build if no instances are running, otherwise it exits
       with a non-zero exit code and does nothing; reclaims disk space used by
       Docker images and artifact files
@@ -158,29 +177,20 @@ Available commands:
       Returns all of the associated challenge, build, and instance metadata for
       the named schema in JSON format.
 
-  reset [--verbose]
+  reset
       stops all known instances and destroys all known builds
 
-  test [--no-solve|--require-solve] [<path>]
+  test [<path>]
       Shortcut for calling 'update' on the given path followed by build,
-      start, check, stop, destroy for each challenge in the directory;
-      'no-solve' will skip the last three steps and leave an instance of each
-      challenge running while 'require-solve' will treat the absence of a
-      solve script as an error.
+      start, check, stop, destroy for each challenge in the directory.
 
   playtest <challenge>
       Creates a build and instance of the challenge and then starts a simple
-      http front-end scoped to only that instance.  The port used by the server
-      as well as the seed and flag format can all be customized through
-      environment variables (PORT, SEED, and FLAG_FORMAT).  The server will
-      bind to the interface specified by CMGR_INTERFACE (see "environment
-      variables" below) but will use the loopback interface (i.e., 'localhost')
-      if the variable is either not set or set to '0.0.0.0'.
+      http front-end scoped to only that instance.
 
-  system-dump [--summary|--json] [<challenge> ...]
-      Lists the challenges along with their builds and instances; only counts
-      are given for 'summary' and all metadata is given in JSON format for
-      'json'; all challenges are listed if no challenge IDs are provided.
+  system-dump [<challenge> ...]
+      Lists the challenges along with their builds and instances; all
+      challenges are listed if no challenge IDs are provided.
 
   version
       Prints version information and exits.
@@ -205,5 +215,5 @@ Relevant environment variables:
       variables.  See https://docs.docker.com/engine/reference/commandline/cli/
       for specific details.
 
-`, cmd)
+`, command)
 }

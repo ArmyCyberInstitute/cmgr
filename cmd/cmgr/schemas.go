@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"path/filepath"
@@ -12,8 +13,12 @@ import (
 )
 
 func listSchemas(mgr *cmgr.Manager, args []string) int {
-	if len(args) != 0 {
-		fmt.Println("error: unexpected argument")
+	parser := flag.NewFlagSet("list-schemas", flag.ExitOnError)
+	updateUsage(parser, "")
+	parser.Parse(args)
+
+	if parser.NArg() != 0 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
@@ -31,12 +36,16 @@ func listSchemas(mgr *cmgr.Manager, args []string) int {
 }
 
 func addSchema(mgr *cmgr.Manager, args []string) int {
-	if len(args) != 1 {
-		fmt.Println("error: expected exactly one argument")
+	parser := flag.NewFlagSet("add-schema", flag.ExitOnError)
+	updateUsage(parser, "<schema file>")
+	parser.Parse(args)
+
+	if parser.NArg() != 1 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
-	schema, retCode := loadSchema(args[0])
+	schema, retCode := loadSchema(parser.Arg(0))
 	if retCode != NO_ERROR {
 		return retCode
 	}
@@ -52,12 +61,16 @@ func addSchema(mgr *cmgr.Manager, args []string) int {
 }
 
 func updateSchema(mgr *cmgr.Manager, args []string) int {
-	if len(args) != 1 {
-		fmt.Println("error: expected exactly one argument")
+	parser := flag.NewFlagSet("update-schema", flag.ExitOnError)
+	updateUsage(parser, "<schema file>")
+	parser.Parse(args)
+
+	if parser.NArg() != 1 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
-	schema, retCode := loadSchema(args[0])
+	schema, retCode := loadSchema(parser.Arg(0))
 	if retCode != NO_ERROR {
 		return retCode
 	}
@@ -73,12 +86,16 @@ func updateSchema(mgr *cmgr.Manager, args []string) int {
 }
 
 func removeSchema(mgr *cmgr.Manager, args []string) int {
-	if len(args) != 1 {
-		fmt.Println("error: expected exactly one argument")
+	parser := flag.NewFlagSet("remove-schema", flag.ExitOnError)
+	updateUsage(parser, "<schema name>")
+	parser.Parse(args)
+
+	if parser.NArg() != 1 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
-	err := mgr.DeleteSchema(args[0])
+	err := mgr.DeleteSchema(parser.Arg(0))
 	if err != nil {
 		fmt.Printf("error: %s\n", err)
 		return RUNTIME_ERROR
@@ -88,12 +105,16 @@ func removeSchema(mgr *cmgr.Manager, args []string) int {
 }
 
 func showSchema(mgr *cmgr.Manager, args []string) int {
-	if len(args) != 1 {
-		fmt.Println("error: expected exactly one argument")
+	parser := flag.NewFlagSet("show-schema", flag.ExitOnError)
+	updateUsage(parser, "<schema name>")
+	parser.Parse(args)
+
+	if parser.NArg() != 1 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
-	state, err := mgr.GetSchemaState(args[0])
+	state, err := mgr.GetSchemaState(parser.Arg(0))
 	if err != nil {
 		fmt.Printf("error: %s\n", err)
 		return RUNTIME_ERROR

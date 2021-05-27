@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"flag"
 	"fmt"
 	"io"
 	"mime"
@@ -11,7 +12,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -19,27 +19,20 @@ import (
 )
 
 func playtestChallenge(mgr *cmgr.Manager, args []string) int {
-	if len(args) != 1 {
-		fmt.Println("error: too many arguments")
+	parser := flag.NewFlagSet("playtest", flag.ExitOnError)
+	updateUsage(parser, "<challenge>")
+	port := parser.Int("port", 4242, "the `port` from which to serve the challenge")
+	seed := parser.Int("seed", time.Now().Nanosecond(), "the random `seed` for the challenge")
+	parser.Lookup("seed").DefValue = "random"
+	flagFormat := parser.String("flag-format", "flag{%s}", "the `format-string` to use for the flag")
+	parser.Parse(args)
+
+	if parser.NArg() != 1 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
-	cid := cmgr.ChallengeId(args[0])
-
-	portStr, ok := os.LookupEnv("PORT")
-	if !ok {
-		portStr = "4242"
-	}
-
-	seedStr, ok := os.LookupEnv("SEED")
-	if !ok {
-		seedStr = fmt.Sprintf("%d", time.Now().Nanosecond())
-	}
-
-	flagFormat, ok := os.LookupEnv("FLAG_FORMAT")
-	if !ok {
-		flagFormat = "flag{%s}"
-	}
+	cid := cmgr.ChallengeId(parser.Arg(0))
 
 	iface, ok := os.LookupEnv(cmgr.IFACE_ENV)
 	if !ok {
@@ -49,19 +42,7 @@ func playtestChallenge(mgr *cmgr.Manager, args []string) int {
 		iface = "localhost" // Force the server to use a single interface
 	}
 
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		fmt.Printf("error: cannot convert PORT variable to int (%s)\n", portStr)
-		return RUNTIME_ERROR
-	}
-
-	seed, err := strconv.Atoi(seedStr)
-	if err != nil {
-		fmt.Printf("error: cannot convert SEED variable to int (%s)\n", seedStr)
-		return RUNTIME_ERROR
-	}
-
-	builds, err := mgr.Build(cid, []int{seed}, flagFormat)
+	builds, err := mgr.Build(cid, []int{*seed}, *flagFormat)
 	if err != nil {
 		fmt.Printf("error creating build: %s\n", err)
 		return RUNTIME_ERROR
@@ -84,8 +65,8 @@ func playtestChallenge(mgr *cmgr.Manager, args []string) int {
 		os.Exit(0)
 	}()
 
-	fmt.Printf("challenge information available at: http://%s:%d/\n", iface, port)
-	return launchPortal(mgr, iface, port, cid, bid, iid)
+	fmt.Printf("challenge information available at: http://%s:%d/\n", iface, *port)
+	return launchPortal(mgr, iface, *port, cid, bid, iid)
 }
 
 func launchPortal(mgr *cmgr.Manager, iface string, port int, cid cmgr.ChallengeId, bid cmgr.BuildId, iid cmgr.InstanceId) int {

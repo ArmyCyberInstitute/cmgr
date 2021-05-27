@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"strconv"
 
@@ -8,15 +9,20 @@ import (
 )
 
 func startInstance(mgr *cmgr.Manager, args []string) int {
-	if len(args) != 1 {
-		fmt.Println("error: expected exactly one additional argument")
+	parser := flag.NewFlagSet("start", flag.ExitOnError)
+	updateUsage(parser, "<build>")
+	parser.Parse(args)
+
+	if parser.NArg() != 1 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
-	build, err := strconv.Atoi(args[0])
+	build, err := strconv.Atoi(parser.Arg(0))
 	if err != nil {
-		fmt.Printf("error: could not interpret build id: %s\n", err)
-		return RUNTIME_ERROR
+		fmt.Fprintf(parser.Output(), "error: could not interpret '%s' as a build id: %s\n", parser.Arg(0), err)
+		parser.Usage()
+		return USAGE_ERROR
 	}
 
 	instance, err := mgr.Start(cmgr.BuildId(build))
@@ -30,17 +36,22 @@ func startInstance(mgr *cmgr.Manager, args []string) int {
 }
 
 func checkInstances(mgr *cmgr.Manager, args []string) int {
-	if len(args) == 0 {
-		fmt.Println("error: expected at least one instance ID")
+	parser := flag.NewFlagSet("check", flag.ExitOnError)
+	updateUsage(parser, "<instance> [<instance> ...]")
+	parser.Parse(args)
+
+	if parser.NArg() < 1 {
+		parser.Usage()
 		return USAGE_ERROR
 	}
 
 	instances := []cmgr.InstanceId{}
-	for _, instanceStr := range args {
+	for _, instanceStr := range parser.Args() {
 		instanceInt, err := strconv.Atoi(instanceStr)
 		if err != nil {
-			fmt.Printf("error: invalid instance ID of '%s'\n", instanceStr)
-			return RUNTIME_ERROR
+			fmt.Fprintf(parser.Output(), "error: could not interpret '%s' as an instance id: %s\n", instanceStr, err)
+			parser.Usage()
+			return USAGE_ERROR
 		}
 		instances = append(instances, cmgr.InstanceId(instanceInt))
 	}
@@ -57,20 +68,25 @@ func checkInstances(mgr *cmgr.Manager, args []string) int {
 }
 
 func stopInstance(mgr *cmgr.Manager, args []string) int {
-	if len(args) != 1 {
-		fmt.Println("error: expected exactly one additional argument")
+	parser := flag.NewFlagSet("stop", flag.ExitOnError)
+	updateUsage(parser, "<instance>")
+	parser.Parse(args)
+
+	if parser.NArg() != 1 {
 		return USAGE_ERROR
 	}
 
-	instance, err := strconv.Atoi(args[0])
+	instance, err := strconv.Atoi(parser.Arg(0))
 	if err != nil {
-		fmt.Printf("error: could not interpret instance id: %s\n", err)
-		return RUNTIME_ERROR
+		fmt.Fprintf(parser.Output(), "error: could not interpret '%s' as an instance id: %s\n", parser.Arg(0), err)
+		parser.Usage()
+		return USAGE_ERROR
 	}
 
 	err = mgr.Stop(cmgr.InstanceId(instance))
 	if err != nil {
 		fmt.Printf("error: could not stop instance: %s\n", err)
+		parser.Usage()
 		return RUNTIME_ERROR
 	}
 
