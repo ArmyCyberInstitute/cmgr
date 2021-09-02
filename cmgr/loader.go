@@ -120,9 +120,9 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	}
 
 	// Validate Namespace
-	re := regexp.MustCompile(`^([a-zA-Z0-9]+(/[a-zA-Z0-9]+)*)?$`)
+	re := regexp.MustCompile(`^([a-z0-9]+(/[a-z0-9]+)*)?$`)
 	if !re.MatchString(md.Namespace) {
-		lastErr = fmt.Errorf("invalid namespace (limited to ASCII alphanumeric + '/') of '%s': %s",
+		lastErr = fmt.Errorf("invalid namespace (limited to lowercase letters, numerals, and '/') of '%s': %s",
 			md.Namespace, md.Path)
 		m.log.error(lastErr)
 	}
