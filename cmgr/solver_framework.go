@@ -103,7 +103,7 @@ func (m *Manager) runSolver(instance InstanceId) error {
 		},
 	}
 
-	respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, "")
+	respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, nil, "")
 	if err != nil {
 		m.log.errorf("failed to create solve container: %s", err)
 		return err

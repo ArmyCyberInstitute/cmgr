@@ -240,7 +240,7 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 		hConfig.SecurityOpt = []string{"seccomp:" + seccompPolicy}
 	}
 
-	respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, "")
+	respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, nil, "")
 	if err != nil {
 		m.log.errorf("failed to create artifacts container: %s", err)
 		return err
@@ -462,7 +462,7 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			},
 		}
 
-		respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, "")
+		respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, nil, "")
 		if err != nil {
 			m.log.errorf("failed to create instance container: %s", err)
 			return err
