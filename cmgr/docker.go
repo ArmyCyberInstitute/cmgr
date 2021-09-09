@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -611,23 +612,33 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			return err
 		}
 
-		cInfo, err := m.cli.ContainerInspect(m.ctx, cid)
-		if err != nil {
-			m.log.errorf("failed to get container info: %s", err)
-			return err
-		}
+		backoff := time.Millisecond
+		done := false
+		for !done && backoff < time.Second {
+			m.log.debug("Querying docker for port info...")
 
-		for cPort, hPortInfo := range cInfo.NetworkSettings.Ports {
-			if len(hPortInfo) == 0 {
-				continue
-			}
-
-			hPort, err := strconv.Atoi(string(hPortInfo[0].HostPort))
+			cInfo, err := m.cli.ContainerInspect(m.ctx, cid)
 			if err != nil {
+				m.log.errorf("failed to get container info: %s", err)
 				return err
 			}
-			instance.Ports[revPortMap[string(cPort)]] = hPort
-			m.log.debugf("container port %s mapped to %s", cPort, hPortInfo[0].HostPort)
+			done = true
+
+			for cPort, hPortInfo := range cInfo.NetworkSettings.Ports {
+				if len(hPortInfo) == 0 {
+					done = false
+					time.Sleep(backoff)
+					backoff = 2 * backoff
+					break
+				}
+
+				hPort, err := strconv.Atoi(string(hPortInfo[0].HostPort))
+				if err != nil {
+					return err
+				}
+				instance.Ports[revPortMap[string(cPort)]] = hPort
+				m.log.debugf("container port %s mapped to %s", cPort, hPortInfo[0].HostPort)
+			}
 		}
 	}
 
