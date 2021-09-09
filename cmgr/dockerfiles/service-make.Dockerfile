@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:20.04 AS base
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
@@ -17,6 +17,7 @@ COPY . /app
 WORKDIR /app
 
 # End of share layers for all builds of the same flask challenge
+FROM base AS challenge
 
 ARG FLAG_FORMAT
 ARG FLAG

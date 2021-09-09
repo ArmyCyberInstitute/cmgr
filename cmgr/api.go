@@ -147,11 +147,42 @@ func (m *Manager) Update(fp string) *ChallengeUpdates {
 	return cu
 }
 
+// Builds the "base" stage of the challenge and push it to the Docker
+// repository identified by the `CMGR_REGISTRY`.  Any `cmgr` instances
+// that use the same repository will then use this base image as the initial
+// cache for building the challenge (must match both challenge hash and
+// challenge ID). If `CMGR_REGISTRY` is unspecified, the repository has
+// not been configured for the active Docker daemon, or an error occurs
+// during the build step, then  this function will return a descriptive
+// error.  If "force" is `false`, then `cmgr` checks the repository prior to
+// attempting to building the "base" image and returns an error if an image
+// already exists.  If "force" is `true`, `cmgr` skips this check and
+// unconditionally attempts to build and push a base image.
+//
+// NOTE: There is no validation of whether the "base" stage is self-contained
+// (i.e., has copies of all required libraries) so this does not guarantee
+// necessarily future builds will work.  Built-in challenge types are
+// carefully designed to reduce the risk, but any network traffic after
+// the "base" stage(e.g., downloading extra packages or libraries)
+// significantly increases the likelihood that the image becomes
+// non-functional.  It is ultimately the challenge author's responsibility to
+// take proper precautions.
+func (m *Manager) Freeze(challenge ChallengeId, force bool) error {
+	return m.freezeBaseImage(challenge, force)
+}
+
 // Templates out a "challenge" and generates concrete images, flags, and
 // lookup values for the seeds provided which is called a "build" and returns
 // a list of identifiers that can be used to reference the build in other API
 // functions.  This function may take a significant amount of time because it
 // will implicitly download base docker images and build the artifacts.
+//
+// NOTE: if `CMGR_REGISTRY` is specified and the specified challenge and
+// challenge hash are found in the repository, then that image will be used
+// for the build cache.  This can reduce the risk of dependency changes
+// breaking functioning challenges, but can may also make debugging
+// challenges harder.  This feature is opt-in by setting the
+// `CMGR_REGISTRY` environment variable.
 func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) ([]*BuildMetadata, error) {
 	schema := fmt.Sprintf("%s%x", manualSchemaPrefix, m.rand.Int63())
 	instanceCount := -1

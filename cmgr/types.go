@@ -9,12 +9,14 @@ import (
 )
 
 const (
-	DB_ENV           string = "CMGR_DB"
-	DIR_ENV          string = "CMGR_DIR"
-	ARTIFACT_DIR_ENV string = "CMGR_ARTIFACT_DIR"
-	REGISTRY_ENV     string = "CMGR_REGISTRY"
-	LOGGING_ENV      string = "CMGR_LOGGING"
-	IFACE_ENV        string = "CMGR_INTERFACE"
+	DB_ENV             string = "CMGR_DB"
+	DIR_ENV            string = "CMGR_DIR"
+	ARTIFACT_DIR_ENV   string = "CMGR_ARTIFACT_DIR"
+	REGISTRY_ENV       string = "CMGR_REGISTRY"
+	REGISTRY_USER_ENV  string = "CMGR_REGISTRY_USER"
+	REGISTRY_TOKEN_ENV string = "CMGR_REGISTRY_TOKEN"
+	LOGGING_ENV        string = "CMGR_LOGGING"
+	IFACE_ENV          string = "CMGR_INTERFACE"
 
 	DYNAMIC_INSTANCES int = -1
 	LOCKED            int = -2
@@ -36,6 +38,8 @@ type Manager struct {
 	challengeDockerfiles map[string][]byte
 	rand                 *rand.Rand
 	challengeInterface   string
+	challengeRegistry    string
+	authString           string
 }
 
 type PortInfo struct {

@@ -5,7 +5,8 @@
   "category": "Cryptography",
   "points": 50,
   "description": "We found a file that appears to be encrypted.",
-  "details": "The file is {{url_for('secret.enc', 'here')}}, and someone told us the decryption instructions can be obtained with <code>nc {{server}} {{port}}</code>",
+  "details": "The file is {{url_for('secret.enc', 'here')}}, and someone told us the decryption instructions can be obtained with <code>nc {{server}} {{port}}</code>.",
+  "hints": ["It's probably not helpful, but it looks like the build time can be found {{url_for('time.txt', 'here')}}."],
     "tags" : [
         "crypto",
         "custom",

@@ -55,6 +55,8 @@ func main() {
 		exitCode = displayChallengeInfo(mgr, cmdArgs)
 	case "update":
 		exitCode = updateChallengeInfo(mgr, cmdArgs)
+	case "freeze":
+		exitCode = freezeChallenge(mgr, cmdArgs)
 	case "build":
 		exitCode = doBuild(mgr, cmdArgs)
 	case "start":
@@ -133,7 +135,13 @@ Available commands:
   update [<path>]
       updates the metadata for all challenges underneath the provided path and
       rebuilds/restarts and existing builds/insances of those challenges; path
-      defaults to the root challenge directory if omitted.
+      defaults to the root challenge directory if omitted
+
+  freeze <challenge>
+      for challenge formats that support it, creates a base container image
+      and pushes it the registry specified by CMGR_REGISTRY environment
+      variable; future calls to build will use this image as the base cache
+      layer for the challenge which should minimize reproducibility issues
 
   build <challenge> <seed> [...]
       creates a new, templated build of the challenge using the provided flag
@@ -210,6 +218,15 @@ Relevant environment variables:
       ports should be bound (defaults to '0.0.0.0'); if the specified interface
       does not exist on the host running the Docker daemon, Docker will silently
       ignore this value and instead bind to the loopback address
+
+  CMGR_REGISTRY - the host/IP and follow on path for a docker registry; all
+      frozen challenges will be pushed as images into this registry (i.e.,
+      <registry>/<challenge_slug>).
+
+  CMGR_REGISTRY_USER - the username to use to authenticate with the registry
+
+  CMGR_REGISTRY_TOKEN - the token/password to use to authenticate with the
+      registry
 
   Note: The Docker client is configured via Docker's standard environment
       variables.  See https://docs.docker.com/engine/reference/commandline/cli/

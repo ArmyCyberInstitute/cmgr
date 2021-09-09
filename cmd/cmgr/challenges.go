@@ -108,6 +108,24 @@ func updateChallengeInfo(mgr *cmgr.Manager, args []string) int {
 	return retCode
 }
 
+func freezeChallenge(mgr *cmgr.Manager, args []string) int {
+	parser := flag.NewFlagSet("freeze", flag.ExitOnError)
+	updateUsage(parser, "<challenge>")
+	force := parser.Bool("force", false, "rebuild even if an image exists on the server")
+	parser.Parse(args)
+
+	if parser.NArg() != 1 {
+		parser.Usage()
+		return USAGE_ERROR
+	}
+
+	retCode := NO_ERROR
+	if mgr.Freeze(cmgr.ChallengeId(parser.Arg(0)), *force) != nil {
+		retCode = RUNTIME_ERROR
+	}
+	return retCode
+}
+
 func testChallenges(mgr *cmgr.Manager, args []string) int {
 	parser := flag.NewFlagSet("test", flag.ExitOnError)
 	updateUsage(parser, "[<path>]")

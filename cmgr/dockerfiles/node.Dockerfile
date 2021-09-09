@@ -1,4 +1,4 @@
-FROM node:12
+FROM node:12 AS base
 
 RUN groupadd -r app && useradd -r -d /app -g app app
 
@@ -16,6 +16,7 @@ ENV PORT=5000
 RUN npm ci --only=production
 
 # End of share layers for all builds of the same node challenge
+FROM base AS challenge
 
 ARG FLAG
 ARG SEED

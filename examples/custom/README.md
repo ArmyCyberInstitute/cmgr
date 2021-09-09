@@ -14,9 +14,21 @@ building the `Dockerfile` for a custom challenge.
 
 ### Build stage named 'builder'
 
-If any stage in the Dockerfile is labeled `builder`, then that staged
+If any stage in the Dockerfile is labeled `builder`, then that stage
 (rather thand the last stage) must contain the `/challenge/metadata.json`
 and, if applicable, `/challenge/artifacts.tar.gz` files.
+
+### Build stage named 'base'
+
+If any stage in the Dockerfile is labeled `base`, then that stage can
+be "frozen" using `cmgr freeze`.  If all dependencies are downloaded by the
+end of the `base` stage, then freezing can ensure that the challenge does
+not "break" in the future from breaking changes in dependencies.  However,
+the configuration is frozen in its current state so future vulnerabilities in
+a major dependency (e.g., `node`) may cause the challenge to collect
+"alternate solutions" over time.  No checks are made to determine if other
+ resources are downloaded after `base` so it is the challenge authors
+ responsibility to obey this contract in their Dockerfile.
 
 ### Publishing ports
 

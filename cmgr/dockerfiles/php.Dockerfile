@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:20.04 AS base
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
@@ -13,6 +13,7 @@ RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get
 COPY --chown=php:php . /app
 
 # End of share layers for all builds of the same php challenge
+FROM base AS challenge
 
 ARG FLAG
 ARG SEED

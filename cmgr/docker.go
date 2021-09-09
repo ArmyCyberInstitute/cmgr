@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -49,6 +51,17 @@ func (m *Manager) initDocker() error {
 		chalInterface = "0.0.0.0"
 	}
 	m.challengeInterface = chalInterface
+
+	m.challengeRegistry, isSet = os.LookupEnv(REGISTRY_ENV)
+	if isSet {
+		authPayload := fmt.Sprintf(
+			`{"username":"%s","password":"%s","serveraddress":"%s"}`,
+			os.Getenv(REGISTRY_USER_ENV),
+			os.Getenv(REGISTRY_TOKEN_ENV),
+			strings.SplitN(m.challengeRegistry, "/", 2)[0],
+		)
+		m.authString = base64.StdEncoding.EncodeToString([]byte(authPayload))
+	}
 
 	return nil
 }
@@ -151,9 +164,128 @@ func (bMeta *BuildMetadata) dockerId(image Image) string {
 	return fmt.Sprintf("%d-%s", bMeta.Id, image.Host)
 }
 
+func challengeToFreezeName(challenge ChallengeId) string {
+	return strings.ReplaceAll(string(challenge), "/", "_")
+}
+
+func (m *Manager) freezeBaseImage(challenge ChallengeId, force bool) error {
+	cMeta, err := m.lookupChallengeMetadata(challenge)
+	if err != nil {
+		return err
+	}
+
+	imageName := fmt.Sprintf("%s/%s:%x", m.challengeRegistry, challengeToFreezeName(challenge), cMeta.SourceChecksum)
+
+	if !force {
+		// Do some check here to see if it already exists
+	}
+
+	buildCtxFile, err := m.createBuildContext(cMeta, m.getDockerfile(cMeta.ChallengeType))
+	if err != nil {
+		m.log.errorf("failed to create build context: %s", err)
+		return err
+	}
+	defer os.Remove(buildCtxFile)
+	buildCtx, err := os.Open(buildCtxFile)
+	if err != nil {
+		m.log.errorf("failed to seek to beginning of file for %s: %s", cMeta.Id, err)
+		return err
+	}
+	defer buildCtx.Close()
+
+	// Setup build options
+	opts := types.ImageBuildOptions{
+		Remove:     true,
+		Tags:       []string{imageName},
+		Target:     "base",
+		NoCache:    force, // Require to use latest info on force
+		PullParent: force, // Update parent image as well on force
+	}
+
+	// Build the image
+	m.log.debugf("creating base image %s", imageName)
+	resp, err := m.cli.ImageBuild(m.ctx, buildCtx, opts)
+	if err != nil {
+		m.log.errorf("failed to build base image: %s", err)
+		return err
+	}
+
+	// Read the response because errors aren't propagated.
+	messages, err := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		m.log.errorf("failed to read build response from docker: %s", err)
+		return err
+	}
+
+	// Search the response for an error message
+	re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
+	errMsg := re.Find(messages)
+	if errMsg != nil {
+		var dMsg dockerError
+		err = json.Unmarshal(errMsg, &dMsg)
+		if err == nil {
+			errMsg = []byte(dMsg.Error)
+		}
+		err = fmt.Errorf("failed to build image: %s", errMsg)
+		m.log.error(err)
+		return err
+	}
+
+	// Push the image
+	pushOpts := types.ImagePushOptions{RegistryAuth: m.authString}
+	pushResp, err := m.cli.ImagePush(m.ctx, imageName, pushOpts)
+	if err != nil {
+		m.log.errorf("failed to push base image: %s", err)
+		return err
+	}
+
+	// Read the response because errors aren't propagated.
+	messages, err = ioutil.ReadAll(pushResp)
+	resp.Body.Close()
+	if err != nil {
+		m.log.errorf("failed to read push response from docker: %s", err)
+		return err
+	}
+
+	// Search the response for an error message
+	errMsg = re.Find(messages)
+	if errMsg != nil {
+		var dMsg dockerError
+		err = json.Unmarshal(errMsg, &dMsg)
+		if err == nil {
+			errMsg = []byte(dMsg.Error)
+		}
+		err = fmt.Errorf("failed to push image: %s", errMsg)
+		m.log.error(err)
+		return err
+	}
+
+	return nil
+}
+
 func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, buildCtxFile string) error {
 
 	seedStr := fmt.Sprintf("%d", bMeta.Seed)
+
+	baseName := fmt.Sprintf("%s/%s:%x", m.challengeRegistry, challengeToFreezeName(cMeta.Id), cMeta.SourceChecksum)
+	pullOpts := types.ImagePullOptions{RegistryAuth: m.authString}
+	var buildCache []string
+	pullResp, err := m.cli.ImagePull(m.ctx, baseName, pullOpts)
+	if err == nil {
+		// Read the response because errors aren't propagated.
+		messages, err := ioutil.ReadAll(pullResp)
+		pullResp.Close()
+		if err == nil {
+			// Search the response for an error message
+			re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
+			errMsg := re.Find(messages)
+			if errMsg == nil {
+				m.log.infof("Successfully pulled base image '%s'", baseName)
+				buildCache = append(buildCache, baseName)
+			}
+		}
+	}
 
 	images := []Image{}
 	var buildImage string
@@ -178,9 +310,10 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 				"SEED":        &seedStr,
 				"FLAG":        bMeta.makeFlag(),
 			},
-			Remove: true,
-			Tags:   []string{imageName},
-			Target: host.Target,
+			Remove:    true,
+			CacheFrom: buildCache,
+			Tags:      []string{imageName},
+			Target:    host.Target,
 		}
 
 		// Call build
