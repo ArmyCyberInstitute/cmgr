@@ -6,9 +6,52 @@ on:
 name: Upload Release Asset
 
 jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create-release.outputs.upload_url }}
+    steps:
+      - name: Create Release
+        id: create-release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Collect examples
+        run: |
+          tar czvf examples.tar.gz examples
+
+      - name: Upload Examples
+        id: upload-examples
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
+          asset_path: ./examples.tar.gz
+          asset_name: examples.tar.gz
+          asset_content_type: application/octet-stream
   build:
-    name: Upload Release Asset
-    runs-on: ubuntu-20.04
+    name: Build Release Binaries
+    runs-on: ${{ matrix.os }}
+    needs: create-release
+    strategy:
+      matrix:
+        os:
+          - ubuntu-20.04
+          - macos-11
+        arch:
+          - amd64
+          - arm64
     steps:
       - name: Set up Go 1.x
         uses: actions/setup-go@v2
@@ -23,22 +66,19 @@ jobs:
         run: |
           go get -v -t -d ./...
           mkdir bin
-          go build -v -ldflags "-X github.com/ArmyCyberInstitute/cmgr/cmgr.version=`git describe --tags`" -o bin ./...
-          tar czvf examples.tar.gz examples
+          GOARCH=${arch} go build -v -ldflags "-X github.com/ArmyCyberInstitute/cmgr/cmgr.version=`git describe --tags`" -o bin ./...
           cp LICENSE bin/LICENSE
           cat NOTICE NOTICE.release > bin/NOTICE
           cd bin && tar czvf cmgr.tar.gz cmgr cmgrd LICENSE NOTICE
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
+          arch: ${{ matrix.arch }}
+
+      - name: Get OS/architecture suffix
+        id: suffix
+        run: |
+          echo "::set-output name=arch_suffix::`go version | cut -d ' ' -f 4,4 | cut -d '/' -f 1,1`_${arch}"
+        env:
+          arch: ${{ matrix.arch }}
 
       - name: Upload Binaries
         id: upload-binaries
@@ -46,18 +86,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: ./bin/cmgr.tar.gz
-          asset_name: cmgr.tar.gz
+          asset_name: cmgr_${{ steps.suffix.outputs.arch_suffix }}.tar.gz
           asset_content_type: application/octet-stream
 
-      - name: Upload Examples
-        id: upload-examples
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
-          asset_path: ./examples.tar.gz
-          asset_name: examples.tar.gz
-          asset_content_type: application/octet-stream
