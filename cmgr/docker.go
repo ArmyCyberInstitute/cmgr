@@ -700,7 +700,7 @@ func (m *Manager) destroyImages(build BuildId) error {
 		}
 	}
 
-	iro := types.ImageRemoveOptions{Force: false, PruneChildren: true}
+	iro := types.ImageRemoveOptions{Force: true, PruneChildren: true}
 	for _, image := range bMeta.Images {
 
 		imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, bMeta.dockerId(image))
