@@ -31,7 +31,11 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 	if md.Namespace != "" {
 		prefix = md.Namespace + "/"
 	}
-	md.Id = ChallengeId(prefix + sanitizeName(md.Name))
+	if md.Id != "" {
+		md.Id = ChallengeId(prefix + sanitizeName(string(md.Id)))
+	} else {
+		md.Id = ChallengeId(prefix + sanitizeName(md.Name))
+	}
 	md.Path = filepath.Dir(path)
 
 	solverPath := filepath.Join(md.Path, "solver")
