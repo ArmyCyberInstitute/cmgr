@@ -96,6 +96,8 @@ func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*Challen
 		}
 
 		switch strings.ToLower(match[1]) {
+		case "id":
+			md.Id = ChallengeId(match[2])
 		case "namespace":
 			md.Namespace = match[2]
 		case "type":

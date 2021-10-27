@@ -70,3 +70,21 @@ reference to each artifact file and port exposed to the competitor (most
 likely in the "details" section).  Although not required, the "namespace"
 entry is highly encouraged as it minimizes the likelihood of naming conflicts
 if challenges are released and/or merged with other sources.
+
+## Renaming Challenges
+
+Challenge IDs are usually determined by sanitizing the user-facing challenge name
+and prepending the provided namespace (if any).
+
+However, this means that changing a challenge's name and running `cmgr update` will be
+interpreted as removing the formerly-named challenge and adding a new one. This can be problematic
+when challenges have existing references to their former IDs in schemas or front-end software.
+
+To avoid this issue, it is possible to specify an ID separately from the user-facing name
+by adding an "ID" list bullet to the block immediately following the title. When specified, the
+value of this ID field, rather than the challenge's name, is sanitized and prepended with the
+namespace to determine the challenge ID.
+
+This makes it possible to update the user-facing name of a deployed challenge without
+affecting existing schema or front-end references by explicitly specifying the challenge's
+former name as its ID when changing its name.
