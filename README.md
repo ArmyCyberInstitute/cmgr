@@ -19,13 +19,15 @@ time you use `cmgr` on a system.
 
 ```sh
 wget https://github.com/ArmyCyberInstitute/cmgr/releases/latest/download/examples.tar.gz
-wget https://github.com/ArmyCyberInstitute/cmgr/releases/latest/download/cmgr.tar.gz
+wget https://github.com/ArmyCyberInstitute/cmgr/releases/latest/download/cmgr_`uname -s | tr '[:upper:]' '[:lower:]'`_amd64.tar.gz
 tar xzvf examples.tar.gz
 cd examples
-tar xzvf ../cmgr.tar.gz
+tar xzvf ../cmgr_`uname -s | tr '[:upper:]' '[:lower:]'`_amd64.tar.gz
 ./cmgr update
-./cmgr test --require-solve
+CMGR_LOGGING=info ./cmgr test --require-solve
 ```
+
+**NOTE:** If you are running this on an ARM-based computer, you will need to change `amd64` in the cmgr tarball to `arm64`.
 
 At this point, you can start checking out problems by finding the challenge ID
 of one you would like to play and running `./cmgr playtest <challenge>`.  This
