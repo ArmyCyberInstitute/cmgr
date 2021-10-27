@@ -538,9 +538,15 @@ func (m *Manager) startNetwork(instance *InstanceMetadata) error {
 }
 
 func (m *Manager) stopNetwork(instance *InstanceMetadata) error {
-	err := m.cli.NetworkRemove(m.ctx, instance.getNetworkName())
+	networkName := instance.getNetworkName()
+	err := m.cli.NetworkRemove(m.ctx, networkName)
 	if err != nil {
-		m.log.errorf("failed to remove network: %s", err)
+		if client.IsErrNotFound(err) {
+			m.log.warnf("skipped removing network (not found): %s", networkName)
+			err = nil
+		} else {
+			m.log.errorf("failed to remove network: %s", err)
+		}
 	}
 	return err
 }
@@ -651,7 +657,12 @@ func (m *Manager) stopContainers(instance *InstanceMetadata) error {
 		opts := types.ContainerRemoveOptions{RemoveVolumes: true, Force: true}
 		err = m.cli.ContainerRemove(m.ctx, cid, opts)
 		if err != nil {
-			m.log.errorf("failed to remove container: %s", err)
+			if client.IsErrNotFound(err) {
+				m.log.warnf("skipped removing container (not found): %s", cid)
+				err = nil
+			} else {
+				m.log.errorf("failed to remove container: %s", err)
+			}
 		}
 	}
 
@@ -676,21 +687,31 @@ func (m *Manager) destroyImages(build BuildId) error {
 	}
 
 	if bMeta.HasArtifacts {
-		err := os.Remove(filepath.Join(m.artifactsDir, bMeta.getArtifactsFilename()))
+		artifactsFilename := bMeta.getArtifactsFilename()
+		err := os.Remove(filepath.Join(m.artifactsDir, artifactsFilename))
 		if err != nil {
-			m.log.errorf("failed to remove artifacts file: %s", err)
-			return err
+			if errors.Is(err, os.ErrNotExist) {
+				m.log.warnf("skipped removing artifacts file (not found): %s", artifactsFilename)
+				err = nil
+			} else {
+				m.log.errorf("failed to remove artifacts file: %s", err)
+				return err
+			}
 		}
 	}
 
-	iro := types.ImageRemoveOptions{Force: false, PruneChildren: true}
+	iro := types.ImageRemoveOptions{Force: true, PruneChildren: true}
 	for _, image := range bMeta.Images {
 
 		imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, bMeta.dockerId(image))
 		_, err := m.cli.ImageRemove(m.ctx, imageName, iro)
 		if err != nil {
-			m.log.errorf("failed to remove image: %s", err)
-			return err
+			if client.IsErrNotFound(err) {
+				m.log.warnf("skipped removing image (not found): %s", imageName)
+			} else {
+				m.log.errorf("failed to remove image: %s", err)
+				return err
+			}
 		}
 	}
 
