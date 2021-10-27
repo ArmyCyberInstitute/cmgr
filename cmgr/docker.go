@@ -12,12 +12,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -562,8 +561,15 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		publishedPorts := nat.PortMap{}
 		for _, portStr := range image.Ports {
 			port := nat.Port(portStr)
+			hPort, err := getFreePort(m.challengeInterface)
+			if err != nil {
+				m.log.error("failed to request host port for container")
+				return err
+			}
+			instance.Ports[revPortMap[portStr]] = hPort
+			m.log.debugf("container port %s mapped to %v", portStr, hPort)
 			exposedPorts[port] = struct{}{}
-			publishedPorts[port] = []nat.PortBinding{{HostIP: m.challengeInterface}}
+			publishedPorts[port] = []nat.PortBinding{{HostIP: m.challengeInterface, HostPort: fmt.Sprint(hPort)}}
 		}
 
 		cConfig := container.Config{
@@ -604,41 +610,12 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 
 		cid := respCC.ID
 		instance.Containers = append(instance.Containers, cid)
-		m.log.infof("created new image: %s", cid)
+		m.log.infof("created new container: %s", cid)
 
 		err = m.cli.ContainerStart(m.ctx, cid, types.ContainerStartOptions{})
 		if err != nil {
 			m.log.errorf("failed to start container: %s", err)
 			return err
-		}
-
-		backoff := time.Millisecond
-		done := false
-		for !done && backoff < time.Second {
-			m.log.debug("Querying docker for port info...")
-
-			cInfo, err := m.cli.ContainerInspect(m.ctx, cid)
-			if err != nil {
-				m.log.errorf("failed to get container info: %s", err)
-				return err
-			}
-			done = true
-
-			for cPort, hPortInfo := range cInfo.NetworkSettings.Ports {
-				if len(hPortInfo) == 0 {
-					done = false
-					time.Sleep(backoff)
-					backoff = 2 * backoff
-					break
-				}
-
-				hPort, err := strconv.Atoi(string(hPortInfo[0].HostPort))
-				if err != nil {
-					return err
-				}
-				instance.Ports[revPortMap[string(cPort)]] = hPort
-				m.log.debugf("container port %s mapped to %s", cPort, hPortInfo[0].HostPort)
-			}
 		}
 	}
 
@@ -695,4 +672,17 @@ func (m *Manager) destroyImages(build BuildId) error {
 	}
 
 	return nil
+}
+
+func getFreePort(iface string) (int, error) {
+	a, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:0", iface))
+	if err != nil {
+		return 0, err
+	}
+	l, err := net.ListenTCP("tcp", a)
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
 }
