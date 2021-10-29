@@ -233,7 +233,14 @@ func (m *Manager) newInstance(build *BuildMetadata) (InstanceId, error) {
 		return 0, err
 	}
 
-	return iMeta.Id, m.startContainers(build, iMeta)
+	err = m.startContainers(build, iMeta)
+	if err != nil {
+		// It is possible we are in a partially deployed state.  Make sure
+		// we are torn down, but ignore the returned error.
+		m.stopInstance(iMeta)
+	}
+
+	return iMeta.Id, err
 }
 
 // Stops the running "instance".
