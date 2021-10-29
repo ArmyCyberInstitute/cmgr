@@ -86,6 +86,11 @@ Relevant environment variables:
       and should be one of the following: debug, info, warn, error, or disabled
       (defaults to 'info')
 
+  CMGR_PORTS - the range of ports that are dedicated for serving challenges;
+      cmgr will assume that it fully owns these ports and nothing else will
+      try to use them (i.e., not in ephemeral range or overlapping with a
+      service running on the host); format is '1000-1000'
+
   CMGR_INTERFACE - the host interface/address to which published challenge
       ports should be bound (defaults to '0.0.0.0'); if the specified interface
       does not exist on the host running the Docker daemon, Docker will silently

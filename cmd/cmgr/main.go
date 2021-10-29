@@ -219,6 +219,11 @@ Relevant environment variables:
       does not exist on the host running the Docker daemon, Docker will silently
       ignore this value and instead bind to the loopback address
 
+  CMGR_PORTS - the range of ports that are dedicated for serving challenges;
+      cmgr will assume that it fully owns these ports and nothing else will
+      try to use them (i.e., not in ephemeral range or overlapping with a
+      service running on the host); format is '1000-1000'
+
   CMGR_REGISTRY - the host/IP and follow on path for a docker registry; all
       frozen challenges will be pushed as images into this registry (i.e.,
       <registry>/<challenge_slug>).

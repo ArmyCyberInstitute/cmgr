@@ -207,6 +207,18 @@ func (m *Manager) getReversePortMap(id ChallengeId) (map[string]string, error) {
 	return rpm, nil
 }
 
+func (m *Manager) usedPortSet() (map[int]struct{}, error) {
+	var ports []int
+	err := m.db.Select(&ports, "SELECT port FROM portAssignments;")
+
+	portSet := make(map[int]struct{})
+	for _, port := range ports {
+		portSet[port] = struct{}{}
+	}
+
+	return portSet, err
+}
+
 func (m *Manager) safeToRefresh(new *ChallengeMetadata) bool {
 	old, err := m.lookupChallengeMetadata(new.Id)
 	if err != nil {

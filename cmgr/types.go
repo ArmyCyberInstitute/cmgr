@@ -17,6 +17,7 @@ const (
 	REGISTRY_TOKEN_ENV string = "CMGR_REGISTRY_TOKEN"
 	LOGGING_ENV        string = "CMGR_LOGGING"
 	IFACE_ENV          string = "CMGR_INTERFACE"
+	PORTS_ENV          string = "CMGR_PORTS"
 
 	DYNAMIC_INSTANCES int = -1
 	LOCKED            int = -2
@@ -40,6 +41,8 @@ type Manager struct {
 	challengeInterface   string
 	challengeRegistry    string
 	authString           string
+	portLow              int
+	portHigh             int
 }
 
 type PortInfo struct {

@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -64,7 +66,76 @@ func (m *Manager) initDocker() error {
 		m.authString = base64.StdEncoding.EncodeToString([]byte(authPayload))
 	}
 
-	return nil
+	m.portLow, m.portHigh, err = getPortRange()
+	if err != nil {
+		m.log.errorf("%s", err)
+	}
+
+	return err
+}
+
+func getPortRange() (int, int, error) {
+	portRange := os.Getenv(PORTS_ENV)
+	if portRange == "" {
+		return 0, 0, nil
+	}
+
+	portStrs := strings.Split(portRange, "-")
+	if len(portStrs) != 2 {
+		return 0, 0, fmt.Errorf("malformed port range: '%s' does not contain '-' character", portRange)
+	}
+
+	var low int
+	var high int
+	var err error
+	low, err = strconv.Atoi(portStrs[0])
+	if err == nil {
+		high, err = strconv.Atoi(portStrs[1])
+	}
+
+	if err != nil {
+		return 0, 0, err
+	}
+
+	if low < 1024 || high > (1<<16) || high < low {
+		err = fmt.Errorf("bad port range: %d-%d either contains invalid/privileged ports or includes 0 ports", low, high)
+	}
+
+	return low, high, err
+}
+
+// Returns a string to simplify integration with Docker's Go API.  Specifically,
+// an empty string will tell it to use an ephemeral port while a non-empty string
+// (even if it is "0") will tell it to attempt binding to that specific port.
+func (m *Manager) getFreePort() (string, error) {
+	if m.portLow == 0 {
+		return "", nil
+	}
+
+	numPorts := m.portHigh - m.portLow + 1
+
+	// Get currently used ports...
+	ports, err := m.usedPortSet()
+	if err != nil {
+		return "", nil
+	}
+
+	// Pick a random starting point in the port range...
+	port := rand.Intn(numPorts) + m.portLow
+
+	// Sweep through ports looking for a free one...
+	for i := 0; i < numPorts; i++ {
+		if _, used := ports[port]; !used {
+			return fmt.Sprint(port), nil
+		}
+
+		port = port + 1
+		if port > m.portHigh {
+			port = m.portLow
+		}
+	}
+
+	return "", fmt.Errorf("All ports between %d and %d are in use", m.portLow, m.portHigh)
 }
 
 func (b *BuildMetadata) makeFlag() *string {
@@ -551,13 +622,23 @@ func (m *Manager) stopNetwork(instance *InstanceMetadata) error {
 	return err
 }
 
-func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetadata) error {
+// This approach is pretty heavy-handed and effectively serializes the creation
+// of all challenges that expose ports.  If this becomes a performance issue,
+// may need to look at fully managing ports in memory rather than a hybrid
+// with the SQLite database.
+var portLock sync.Mutex
 
+func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetadata) error {
 	revPortMap, err := m.getReversePortMap(build.Challenge)
 	if err != nil {
 		return err
 	}
 
+	if len(revPortMap) != 0 {
+		// No need to lock the port mapping if we are not mapping any ports...
+		portLock.Lock()
+		defer portLock.Unlock()
+	}
 	// Call create in docker
 	netname := instance.getNetworkName()
 	for _, image := range build.Images {
@@ -568,8 +649,14 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		publishedPorts := nat.PortMap{}
 		for _, portStr := range image.Ports {
 			port := nat.Port(portStr)
+			hostPort, err := m.getFreePort()
+			if err != nil {
+				return err
+			}
 			exposedPorts[port] = struct{}{}
-			publishedPorts[port] = []nat.PortBinding{{HostIP: m.challengeInterface}}
+			publishedPorts[port] = []nat.PortBinding{
+				{HostIP: m.challengeInterface, HostPort: hostPort},
+			}
 		}
 
 		cConfig := container.Config{

@@ -58,6 +58,14 @@ address is not bound to the host running the Docker daemon, this value gets
 silently ignored by Docker and the exposed ports will be bound to the loopback
 interface.)
 
+- *CMGR\_PORTS*: the range of ports that are dedicated for serving challenges;
+cmgr will assume that it fully owns these ports and nothing else will try
+to use them (i.e., not in ephemeral range or overlapping with a service
+running on the host); format is '1000-1000'.  Ephemeral ports on a Linux host
+can be enumerated with `cat /proc/sys/net/ipv4/ip_local_port_range` and adjusted
+with `sysctl`.  Some programs (e.g., `docker`) will need to be restarted after
+adjusting the kernel parameter.
+
 Additionally, we rely on the Docker SDK's ability to self-configure base off
 environment variables.  The documentation for those variables can be found at
 [https://docs.docker.com/engine/reference/commandline/cli/](https://docs.docker.com/engine/reference/commandline/cli/).
