@@ -519,6 +519,22 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 		md.PortMap[portName] = PortInfo{host.Name, port}
 	}
 
+	// Validate ContainerOptions hosts
+	for opt_host := range md.ContainerOptions {
+		found := false
+		for _, host := range hostNames {
+			if host.Name == opt_host {
+				found = true
+				break
+			}
+		}
+		if !found {
+			err = fmt.Errorf("container options are specified for host %s, which is not present in Dockerfile", opt_host)
+			m.log.error(err)
+			return err
+		}
+	}
+
 	return err
 }
 
