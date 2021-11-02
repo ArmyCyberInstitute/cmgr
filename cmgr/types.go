@@ -65,7 +65,7 @@ type ContainerOptions struct {
 	Cpus            string            `json:"cpus,omitempty"`
 	Memory          string            `json:"memory,omitempty"`
 	Ulimits         []string          `json:"ulimits,omitempty"`
-	PidsLimit       int64             `json:"pidslimit",omitempty"`
+	PidsLimit       int64             `json:"pidslimit,omitempty"`
 	ReadonlyRootfs  bool              `json:"readonlyrootfs,omitempty"`
 	DroppedCaps     []string          `json:"droppedcaps,omitempty"`
 	NoNewPrivileges bool              `json:"nonewprivileges,omitempty"`
