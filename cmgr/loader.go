@@ -312,6 +312,14 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 				m.log.error(lastErr)
 			}
 		}
+
+		if opts.PidsLimit != nil {
+			if *opts.PidsLimit < -1 {
+				lastErr = fmt.Errorf("%vinvalid PidsLimit container option (must be >= -1)", hostStr)
+				m.log.error(lastErr)
+			}
+		}
+
 	}
 
 	return lastErr

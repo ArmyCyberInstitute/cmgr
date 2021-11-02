@@ -699,6 +699,10 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 				}
 				hConfig.Ulimits = limits
 			}
+			if cOpts.PidsLimit != nil {
+				hConfig.PidsLimit = cOpts.PidsLimit
+			}
+
 		}
 
 		hostInfo, err := m.cli.Info(m.ctx)
