@@ -25,6 +25,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
@@ -703,7 +704,7 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 				hConfig.PidsLimit = cOpts.PidsLimit
 			}
 			hConfig.ReadonlyRootfs = cOpts.ReadonlyRootfs
-
+			hConfig.CapDrop = (strslice.StrSlice)(cOpts.CapDrop)
 		}
 
 		hostInfo, err := m.cli.Info(m.ctx)

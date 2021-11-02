@@ -290,13 +290,13 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	for host, opts := range md.ContainerOptions {
 		hostStr := ""
 		if host != "" {
-			hostStr = fmt.Sprintf("host %v: ", host)
+			hostStr = fmt.Sprintf("host %s: ", host)
 		}
 
 		if opts.Cpus != nil {
 			_, err := dockeropts.ParseCPUs(*opts.Cpus)
 			if err != nil {
-				lastErr = fmt.Errorf("%verror parsing CPUs container option: %v", hostStr, err)
+				lastErr = fmt.Errorf("%serror parsing CPUs container option: %v", hostStr, err)
 				m.log.error(lastErr)
 			}
 		}
@@ -304,7 +304,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		if opts.Memory != nil {
 			_, err = units.RAMInBytes(*opts.Memory)
 			if err != nil {
-				lastErr = fmt.Errorf("%verror parsing memory container option: %v", hostStr, err)
+				lastErr = fmt.Errorf("%serror parsing memory container option: %v", hostStr, err)
 				m.log.error(lastErr)
 			}
 		}
@@ -312,15 +312,41 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		for _, ulimit := range opts.Ulimits {
 			_, err = units.ParseUlimit(ulimit)
 			if err != nil {
-				lastErr = fmt.Errorf("%verror parsing ulimit container option: %v", hostStr, err)
+				lastErr = fmt.Errorf("%serror parsing ulimit container option: %v", hostStr, err)
 				m.log.error(lastErr)
 			}
 		}
 
 		if opts.PidsLimit != nil {
 			if *opts.PidsLimit < -1 {
-				lastErr = fmt.Errorf("%vinvalid PidsLimit container option (must be >= -1)", hostStr)
+				lastErr = fmt.Errorf("%sinvalid PidsLimit container option (must be >= -1)", hostStr)
 				m.log.error(lastErr)
+			}
+		}
+
+		droppable_capabilities := map[string]struct{}{
+			"CAP_ALL":              {},
+			"CAP_AUDIT_WRITE":      {},
+			"CAP_CHOWN":            {},
+			"CAP_DAC_OVERRIDE":     {},
+			"CAP_FOWNER":           {},
+			"CAP_FSETID":           {},
+			"CAP_KILL":             {},
+			"CAP_MKNOD":            {},
+			"CAP_NET_BIND_SERVICE": {},
+			"CAP_NET_RAW":          {},
+			"CAP_SETFCAP":          {},
+			"CAP_SETGID":           {},
+			"CAP_SETPCAP":          {},
+			"CAP_SETUID":           {},
+			"CAP_SYS_CHROOT":       {},
+		}
+		for _, cap := range opts.CapDrop {
+			if _, ok := droppable_capabilities[cap]; !ok {
+				if _, ok = droppable_capabilities[fmt.Sprintf("CAP_%s", cap)]; !ok {
+					lastErr = fmt.Errorf("%sinvalid CapDrop container option: %s", hostStr, cap)
+					m.log.error(lastErr)
+				}
 			}
 		}
 
