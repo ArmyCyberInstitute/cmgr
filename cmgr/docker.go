@@ -711,6 +711,9 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			for k, v := range cOpts.StorageOpt {
 				hConfig.StorageOpt[k] = v
 			}
+			if cOpts.CgroupParent != nil {
+				hConfig.CgroupParent = *cOpts.CgroupParent
+			}
 		}
 
 		hostInfo, err := m.cli.Info(m.ctx)
