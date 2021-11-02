@@ -705,6 +705,9 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			}
 			hConfig.ReadonlyRootfs = cOpts.ReadonlyRootfs
 			hConfig.CapDrop = (strslice.StrSlice)(cOpts.CapDrop)
+			if cOpts.NoNewPrivileges {
+				hConfig.SecurityOpt = append(hConfig.SecurityOpt, "no-new-privileges:true")
+			}
 		}
 
 		hostInfo, err := m.cli.Info(m.ctx)
