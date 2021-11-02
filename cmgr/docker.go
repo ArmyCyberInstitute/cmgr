@@ -702,6 +702,7 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			if cOpts.PidsLimit != nil {
 				hConfig.PidsLimit = cOpts.PidsLimit
 			}
+			hConfig.ReadonlyRootfs = cOpts.ReadonlyRootfs
 
 		}
 
