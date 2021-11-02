@@ -341,10 +341,10 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			"CAP_SETUID":           {},
 			"CAP_SYS_CHROOT":       {},
 		}
-		for _, cap := range opts.CapDrop {
+		for _, cap := range opts.DroppedCaps {
 			if _, ok := droppable_capabilities[cap]; !ok {
 				if _, ok = droppable_capabilities[fmt.Sprintf("CAP_%s", cap)]; !ok {
-					lastErr = fmt.Errorf("%sinvalid CapDrop container option: %s", hostStr, cap)
+					lastErr = fmt.Errorf("%sinvalid DroppedCaps container option: %s", hostStr, cap)
 					m.log.error(lastErr)
 				}
 			}

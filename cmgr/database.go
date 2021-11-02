@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
@@ -141,6 +142,30 @@ const schemaQuery string = `
 		id TEXT NOT NULL PRIMARY KEY,
 		FOREIGN KEY (instance) REFERENCES instances (id)
 			ON UPDATE RESTRICT ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS networkOptions (
+		challenge INTEGER NOT NULL,
+		internal INTEGER NOT NULL CHECK(internal == 0 OR internal == 1),
+		FOREIGN KEY (challenge) REFERENCES challenges (id)
+			ON UPDATE CASCADE ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS containerOptions (
+		challenge INTEGER NOT NULL,
+		host TEXT NOT NULL,
+		init INTEGER NOT NULL CHECK(init == 0 OR init == 1),
+		cpus TEXT,
+		memory TEXT,
+		ulimits TEXT,
+		pidslimit INTEGER,
+		readonlyrootfs INTEGER NOT NULL CHECK(readonlyrootfs == 0 OR readonlyrootfs == 1),
+		droppedcaps TEXT,
+		nonewprivileges INTEGER NOT NULL CHECK(nonewprivileges == 0 OR nonewprivileges == 1),
+		storageopts TEXT,
+		cgroupparent TEXT,
+		FOREIGN KEY (challenge) REFERENCES challenges (id)
+			ON UPDATE CASCADE ON DELETE CASCADE
 	);`
 
 // Connects to the desired database (creating it if it does not exist) and then
@@ -225,7 +250,11 @@ func (m *Manager) safeToRefresh(new *ChallengeMetadata) bool {
 		return false
 	}
 
-	safe := old.ChallengeType == new.ChallengeType
+	sameType := old.ChallengeType == new.ChallengeType
+	sameNetworkOptions := reflect.DeepEqual(old.NetworkOptions, new.NetworkOptions)
+	sameContainerOptions := reflect.DeepEqual(old.ContainerOptions, new.ContainerOptions)
+
+	safe := sameType && sameNetworkOptions && sameContainerOptions
 
 	return safe
 }

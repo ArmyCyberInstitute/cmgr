@@ -66,9 +66,9 @@ type ContainerOptions struct {
 	Ulimits         []string          `json:"ulimits,omitempty"`
 	PidsLimit       *int64            `json:"pidslimit",omitempty"`
 	ReadonlyRootfs  bool              `json:"readonlyrootfs,omitempty"`
-	CapDrop         []string          `json:"capdrop,omitempty"`
+	DroppedCaps     []string          `json:"droppedcaps,omitempty"`
 	NoNewPrivileges bool              `json:"nonewprivileges,omitempty"`
-	StorageOpt      map[string]string `json:"storageopt,omitempty"`
+	StorageOpts     map[string]string `json:"storageopts,omitempty"`
 	CgroupParent    *string           `json:"cgroupparent,omitempty"`
 }
 

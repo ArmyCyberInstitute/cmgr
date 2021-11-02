@@ -1,6 +1,7 @@
 package cmgr
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -81,6 +82,24 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 	metadata.Attributes = make(map[string]string)
 	for _, attr := range attributes {
 		metadata.Attributes[attr.Key] = attr.Value
+	}
+
+	networkOptions := new(NetworkOptions)
+	if err == nil {
+		err = txn.Select(&networkOptions, "SELECT internal FROM network_options WHERE challenge=?", challenge)
+	}
+	metadata.NetworkOptions = networkOptions
+
+	containerOptions := new([]dbContainerOptions)
+	if err == nil {
+		err = txn.Select(containerOptions, "SELECT host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, storageopts, cgroupparent FROM containerOptions WHERE challenge=?", challenge)
+	}
+	for _, dbOpts := range *containerOptions {
+		cOpts, err := newFromDbContainerOptions(dbOpts)
+		if err != nil {
+			break
+		}
+		metadata.ContainerOptions[dbOpts.Host] = cOpts
 	}
 
 	if err == nil {
@@ -206,6 +225,65 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 				v.Host,
 				v.Port)
 
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				break
+			}
+		}
+		if err != nil {
+			continue
+		}
+
+		m.log.debugf("%s: %v", metadata.Id, metadata.NetworkOptions)
+		_, err = txn.Exec("INSERT INTO networkOptions(challenge, internal) VALUES (?, ?);",
+			metadata.Id,
+			metadata.NetworkOptions.Internal)
+		if err != nil {
+			m.log.error(err)
+			err = txn.Rollback()
+			if err != nil { // If rollback fails, we're in trouble.
+				m.log.error(err)
+				return append(errs, err)
+			}
+		}
+		if err != nil {
+			continue
+		}
+
+		for host, opts := range metadata.ContainerOptions {
+			host_str := ""
+			if host != "" {
+				host_str = fmt.Sprintf(" (%s)", host)
+			}
+			dbOpts, err := opts.toDbContainerOptions()
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				break
+			}
+			m.log.debugf("%s%s: %v", metadata.Id, host_str, dbOpts)
+			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, storageopts, cgroupparent VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+				metadata.Id,
+				host,
+				dbOpts.Init,
+				dbOpts.Cpus,
+				dbOpts.Memory,
+				dbOpts.Ulimits,
+				dbOpts.PidsLimit,
+				dbOpts.ReadonlyRootfs,
+				dbOpts.DroppedCaps,
+				dbOpts.NoNewPrivileges,
+				dbOpts.StorageOpts,
+				dbOpts.CgroupParent)
 			if err != nil {
 				m.log.error(err)
 				err = txn.Rollback()
@@ -405,6 +483,83 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			continue
 		}
 
+		_, err = txn.Exec("DELETE FROM networkOptions WHERE challenge = ?;", metadata.Id)
+
+		if err != nil {
+			m.log.error(err)
+			err = txn.Rollback()
+			if err != nil { // If rollback fails, we're in trouble.
+				m.log.error(err)
+				return append(errs, err)
+			}
+			continue
+		}
+
+		_, err = txn.Exec("INSERT INTO networkOptions(challenge, internal) VALUES (?, ?);",
+			metadata.Id,
+			metadata.NetworkOptions.Internal)
+		if err != nil {
+			m.log.error(err)
+			err = txn.Rollback()
+			if err != nil { // If rollback fails, we're in trouble.
+				m.log.error(err)
+				return append(errs, err)
+			}
+		}
+		if err != nil {
+			continue
+		}
+
+		_, err = txn.Exec("DELETE FROM containerOptions WHERE challenge = ?;", metadata.Id)
+
+		if err != nil {
+			m.log.error(err)
+			err = txn.Rollback()
+			if err != nil { // If rollback fails, we're in trouble.
+				m.log.error(err)
+				return append(errs, err)
+			}
+			continue
+		}
+
+		for host, opts := range metadata.ContainerOptions {
+			dbOpts, err := opts.toDbContainerOptions()
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				break
+			}
+			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, storageopts, cgroupparent VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+				metadata.Id,
+				host,
+				dbOpts.Init,
+				dbOpts.Cpus,
+				dbOpts.Memory,
+				dbOpts.Ulimits,
+				dbOpts.PidsLimit,
+				dbOpts.ReadonlyRootfs,
+				dbOpts.DroppedCaps,
+				dbOpts.NoNewPrivileges,
+				dbOpts.StorageOpts,
+				dbOpts.CgroupParent)
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				break
+			}
+		}
+		if err != nil {
+			continue
+		}
+
 		if err := txn.Commit(); err != nil { // It's undocumented what this means...
 			m.log.error(err)
 			errs = append(errs, err)
@@ -431,6 +586,11 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 
 				for _, buildId := range buildIds {
 					build, err := m.lookupBuildMetadata(buildId)
+					if err != nil {
+						errs = append(errs, err)
+						continue
+					}
+					cMeta, err := m.lookupChallengeMetadata(build.Challenge)
 					if err != nil {
 						errs = append(errs, err)
 						continue
@@ -462,7 +622,7 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 							err = m.stopContainers(instance)
 						}
 						if err == nil {
-							err = m.startContainers(build, instance)
+							err = m.startContainers(build, instance, cMeta.ContainerOptions)
 						}
 						if err != nil {
 							errs = append(errs, err)
@@ -498,6 +658,94 @@ func (m *Manager) removeChallenges(removedChallenges []*ChallengeMetadata) error
 	}
 
 	return nil
+}
+
+// Database representation of ContainerOptions
+// Complex list/map options are serialized to JSON strings
+type dbContainerOptions struct {
+	Host            string
+	Init            bool
+	Cpus            *string
+	Memory          *string
+	Ulimits         *string
+	PidsLimit       *int64
+	ReadonlyRootfs  bool
+	DroppedCaps     *string
+	NoNewPrivileges bool
+	StorageOpts     *string
+	CgroupParent    *string
+}
+
+func newFromDbContainerOptions(dbOpts dbContainerOptions) (ContainerOptions, error) {
+	cOpts := ContainerOptions{}
+	cOpts.Init = dbOpts.Init
+	cOpts.Cpus = dbOpts.Cpus
+	cOpts.Memory = dbOpts.Memory
+	if dbOpts.Ulimits != nil {
+		ulimits := new([]string)
+		err := json.Unmarshal([]byte(*dbOpts.Ulimits), &ulimits)
+		if err != nil {
+			return cOpts, err
+		}
+		cOpts.Ulimits = *ulimits
+	}
+	cOpts.PidsLimit = dbOpts.PidsLimit
+	cOpts.ReadonlyRootfs = dbOpts.ReadonlyRootfs
+	if dbOpts.DroppedCaps != nil {
+		droppedCaps := new([]string)
+		err := json.Unmarshal([]byte(*dbOpts.DroppedCaps), &droppedCaps)
+		if err != nil {
+			return cOpts, err
+		}
+		cOpts.DroppedCaps = *droppedCaps
+	}
+	cOpts.NoNewPrivileges = dbOpts.NoNewPrivileges
+	if dbOpts.StorageOpts != nil {
+		storageOpts := make(map[string]string)
+		err := json.Unmarshal([]byte(*dbOpts.StorageOpts), &storageOpts)
+		if err != nil {
+			return cOpts, err
+		}
+		cOpts.StorageOpts = storageOpts
+	}
+	cOpts.CgroupParent = dbOpts.CgroupParent
+	return cOpts, nil
+}
+
+func (cOpts ContainerOptions) toDbContainerOptions() (dbContainerOptions, error) {
+	dbOpts := dbContainerOptions{}
+	dbOpts.Init = cOpts.Init
+	dbOpts.Cpus = cOpts.Cpus
+	dbOpts.Memory = cOpts.Memory
+	if cOpts.Ulimits != nil {
+		ulimitsBytes, err := json.Marshal(cOpts.Ulimits)
+		if err != nil {
+			return dbOpts, err
+		}
+		ulimits := string(ulimitsBytes)
+		dbOpts.Ulimits = &ulimits
+	}
+	dbOpts.PidsLimit = cOpts.PidsLimit
+	dbOpts.ReadonlyRootfs = cOpts.ReadonlyRootfs
+	if cOpts.DroppedCaps != nil {
+		droppedCapsBytes, err := json.Marshal(cOpts.DroppedCaps)
+		if err != nil {
+			return dbOpts, err
+		}
+		droppedCaps := string(droppedCapsBytes)
+		dbOpts.DroppedCaps = &droppedCaps
+	}
+	dbOpts.NoNewPrivileges = cOpts.NoNewPrivileges
+	if cOpts.StorageOpts != nil {
+		storageOptsBytes, err := json.Marshal(cOpts.StorageOpts)
+		if err != nil {
+			return dbOpts, err
+		}
+		storageOpts := string(storageOptsBytes)
+		dbOpts.StorageOpts = &storageOpts
+	}
+	dbOpts.CgroupParent = cOpts.CgroupParent
+	return dbOpts, nil
 }
 
 const (

@@ -704,11 +704,11 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 				hConfig.PidsLimit = cOpts.PidsLimit
 			}
 			hConfig.ReadonlyRootfs = cOpts.ReadonlyRootfs
-			hConfig.CapDrop = (strslice.StrSlice)(cOpts.CapDrop)
+			hConfig.CapDrop = (strslice.StrSlice)(cOpts.DroppedCaps)
 			if cOpts.NoNewPrivileges {
 				hConfig.SecurityOpt = append(hConfig.SecurityOpt, "no-new-privileges:true")
 			}
-			for k, v := range cOpts.StorageOpt {
+			for k, v := range cOpts.StorageOpts {
 				hConfig.StorageOpt[k] = v
 			}
 			if cOpts.CgroupParent != nil {
