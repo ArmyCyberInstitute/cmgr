@@ -708,6 +708,9 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			if cOpts.NoNewPrivileges {
 				hConfig.SecurityOpt = append(hConfig.SecurityOpt, "no-new-privileges:true")
 			}
+			for k, v := range cOpts.StorageOpt {
+				hConfig.StorageOpt[k] = v
+			}
 		}
 
 		hostInfo, err := m.cli.Info(m.ctx)
