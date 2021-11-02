@@ -673,7 +673,17 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			PortBindings:  publishedPorts,
 			RestartPolicy: container.RestartPolicy{Name: "always"},
 		}
-		if cOpts, ok := opts[image.Host]; ok {
+
+		hasContainerOpts := false
+		cOpts, hasContainerOpts := opts[""]
+		if hostCOpts, ok := opts[image.Host]; ok {
+			cOpts = hostCOpts
+			hasContainerOpts = true
+		}
+		if image.Host == "builder" {
+			hasContainerOpts = false
+		}
+		if hasContainerOpts {
 			hConfig.Init = &cOpts.Init
 			if cOpts.Cpus != nil {
 				nanoCpus, err := dockeropts.ParseCPUs(*cOpts.Cpus)
