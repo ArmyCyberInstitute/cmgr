@@ -304,6 +304,14 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			lastErr = fmt.Errorf("%verror parsing memory container option: %v", hostStr, err)
 			m.log.error(lastErr)
 		}
+
+		for _, ulimit := range opts.Ulimits {
+			_, err = units.ParseUlimit(ulimit)
+			if err != nil {
+				lastErr = fmt.Errorf("%verror parsing ulimit container option: %v", hostStr, err)
+				m.log.error(lastErr)
+			}
+		}
 	}
 
 	return lastErr

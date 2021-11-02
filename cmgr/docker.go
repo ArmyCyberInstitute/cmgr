@@ -688,6 +688,17 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 				}
 				hConfig.Memory = memoryBytes
 			}
+			if len(cOpts.Ulimits) > 0 {
+				limits := make([]*units.Ulimit, len(cOpts.Ulimits))
+				for i, limitStr := range cOpts.Ulimits {
+					limit, err := units.ParseUlimit(limitStr)
+					if err != nil {
+						return err
+					}
+					limits[i] = limit
+				}
+				hConfig.Ulimits = limits
+			}
 		}
 
 		hostInfo, err := m.cli.Info(m.ctx)
