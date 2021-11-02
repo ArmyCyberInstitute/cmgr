@@ -62,15 +62,15 @@ type NetworkOptions struct {
 
 type ContainerOptions struct {
 	Init            bool              `json:"init,omitempty"`
-	Cpus            *string           `json:"cpus,omitempty"`
-	Memory          *string           `json:"memory,omitempty"`
+	Cpus            string            `json:"cpus,omitempty"`
+	Memory          string            `json:"memory,omitempty"`
 	Ulimits         []string          `json:"ulimits,omitempty"`
-	PidsLimit       *int64            `json:"pidslimit",omitempty"`
+	PidsLimit       int64             `json:"pidslimit",omitempty"`
 	ReadonlyRootfs  bool              `json:"readonlyrootfs,omitempty"`
 	DroppedCaps     []string          `json:"droppedcaps,omitempty"`
 	NoNewPrivileges bool              `json:"nonewprivileges,omitempty"`
 	StorageOpts     map[string]string `json:"storageopts,omitempty"`
-	CgroupParent    *string           `json:"cgroupparent,omitempty"`
+	CgroupParent    string            `json:"cgroupparent,omitempty"`
 }
 
 // Handle either top-level container options (applies to all containers) or

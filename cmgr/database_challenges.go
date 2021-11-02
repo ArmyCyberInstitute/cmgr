@@ -665,86 +665,96 @@ func (m *Manager) removeChallenges(removedChallenges []*ChallengeMetadata) error
 type dbContainerOptions struct {
 	Host            string
 	Init            bool
-	Cpus            *string
-	Memory          *string
-	Ulimits         *string
-	PidsLimit       *int64
+	Cpus            string
+	Memory          string
+	Ulimits         string
+	PidsLimit       int64
 	ReadonlyRootfs  bool
-	DroppedCaps     *string
+	DroppedCaps     string
 	NoNewPrivileges bool
-	StorageOpts     *string
-	CgroupParent    *string
+	StorageOpts     string
+	CgroupParent    string
 }
 
 func newFromDbContainerOptions(dbOpts dbContainerOptions) (ContainerOptions, error) {
 	cOpts := ContainerOptions{}
+
 	cOpts.Init = dbOpts.Init
+
 	cOpts.Cpus = dbOpts.Cpus
+
 	cOpts.Memory = dbOpts.Memory
-	if dbOpts.Ulimits != nil {
-		ulimits := new([]string)
-		err := json.Unmarshal([]byte(*dbOpts.Ulimits), &ulimits)
-		if err != nil {
-			return cOpts, err
-		}
-		cOpts.Ulimits = *ulimits
+
+	ulimits := new([]string)
+	err := json.Unmarshal([]byte(dbOpts.Ulimits), &ulimits)
+	if err != nil {
+		return cOpts, err
 	}
+	cOpts.Ulimits = *ulimits
+
 	cOpts.PidsLimit = dbOpts.PidsLimit
+
 	cOpts.ReadonlyRootfs = dbOpts.ReadonlyRootfs
-	if dbOpts.DroppedCaps != nil {
-		droppedCaps := new([]string)
-		err := json.Unmarshal([]byte(*dbOpts.DroppedCaps), &droppedCaps)
-		if err != nil {
-			return cOpts, err
-		}
-		cOpts.DroppedCaps = *droppedCaps
+
+	droppedCaps := new([]string)
+	err = json.Unmarshal([]byte(dbOpts.DroppedCaps), &droppedCaps)
+	if err != nil {
+		return cOpts, err
 	}
+	cOpts.DroppedCaps = *droppedCaps
+
 	cOpts.NoNewPrivileges = dbOpts.NoNewPrivileges
-	if dbOpts.StorageOpts != nil {
-		storageOpts := make(map[string]string)
-		err := json.Unmarshal([]byte(*dbOpts.StorageOpts), &storageOpts)
-		if err != nil {
-			return cOpts, err
-		}
-		cOpts.StorageOpts = storageOpts
+
+	storageOpts := make(map[string]string)
+	err = json.Unmarshal([]byte(dbOpts.StorageOpts), &storageOpts)
+	if err != nil {
+		return cOpts, err
 	}
+	cOpts.StorageOpts = storageOpts
+
 	cOpts.CgroupParent = dbOpts.CgroupParent
+
 	return cOpts, nil
 }
 
 func (cOpts ContainerOptions) toDbContainerOptions() (dbContainerOptions, error) {
 	dbOpts := dbContainerOptions{}
+
 	dbOpts.Init = cOpts.Init
+
 	dbOpts.Cpus = cOpts.Cpus
+
 	dbOpts.Memory = cOpts.Memory
-	if cOpts.Ulimits != nil {
-		ulimitsBytes, err := json.Marshal(cOpts.Ulimits)
-		if err != nil {
-			return dbOpts, err
-		}
-		ulimits := string(ulimitsBytes)
-		dbOpts.Ulimits = &ulimits
+
+	ulimitsBytes, err := json.Marshal(cOpts.Ulimits)
+	if err != nil {
+		return dbOpts, err
 	}
+	ulimits := string(ulimitsBytes)
+	dbOpts.Ulimits = ulimits
+
 	dbOpts.PidsLimit = cOpts.PidsLimit
+
 	dbOpts.ReadonlyRootfs = cOpts.ReadonlyRootfs
-	if cOpts.DroppedCaps != nil {
-		droppedCapsBytes, err := json.Marshal(cOpts.DroppedCaps)
-		if err != nil {
-			return dbOpts, err
-		}
-		droppedCaps := string(droppedCapsBytes)
-		dbOpts.DroppedCaps = &droppedCaps
+
+	droppedCapsBytes, err := json.Marshal(cOpts.DroppedCaps)
+	if err != nil {
+		return dbOpts, err
 	}
+	droppedCaps := string(droppedCapsBytes)
+	dbOpts.DroppedCaps = droppedCaps
+
 	dbOpts.NoNewPrivileges = cOpts.NoNewPrivileges
-	if cOpts.StorageOpts != nil {
-		storageOptsBytes, err := json.Marshal(cOpts.StorageOpts)
-		if err != nil {
-			return dbOpts, err
-		}
-		storageOpts := string(storageOptsBytes)
-		dbOpts.StorageOpts = &storageOpts
+
+	storageOptsBytes, err := json.Marshal(cOpts.StorageOpts)
+	if err != nil {
+		return dbOpts, err
 	}
+	storageOpts := string(storageOptsBytes)
+	dbOpts.StorageOpts = storageOpts
+
 	dbOpts.CgroupParent = cOpts.CgroupParent
+
 	return dbOpts, nil
 }
 

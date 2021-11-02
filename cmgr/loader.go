@@ -293,16 +293,16 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			hostStr = fmt.Sprintf("host %s: ", host)
 		}
 
-		if opts.Cpus != nil {
-			_, err := dockeropts.ParseCPUs(*opts.Cpus)
+		if opts.Cpus != "" {
+			_, err := dockeropts.ParseCPUs(opts.Cpus)
 			if err != nil {
 				lastErr = fmt.Errorf("%serror parsing CPUs container option: %v", hostStr, err)
 				m.log.error(lastErr)
 			}
 		}
 
-		if opts.Memory != nil {
-			_, err = units.RAMInBytes(*opts.Memory)
+		if opts.Memory != "" {
+			_, err = units.RAMInBytes(opts.Memory)
 			if err != nil {
 				lastErr = fmt.Errorf("%serror parsing memory container option: %v", hostStr, err)
 				m.log.error(lastErr)
@@ -317,11 +317,9 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			}
 		}
 
-		if opts.PidsLimit != nil {
-			if *opts.PidsLimit < -1 {
-				lastErr = fmt.Errorf("%sinvalid PidsLimit container option (must be >= -1)", hostStr)
-				m.log.error(lastErr)
-			}
+		if opts.PidsLimit < -1 {
+			lastErr = fmt.Errorf("%sinvalid PidsLimit container option (must be >= -1)", hostStr)
+			m.log.error(lastErr)
 		}
 
 		droppable_capabilities := map[string]struct{}{

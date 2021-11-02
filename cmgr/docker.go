@@ -685,15 +685,15 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		}
 		if hasContainerOpts {
 			hConfig.Init = &cOpts.Init
-			if cOpts.Cpus != nil {
-				nanoCpus, err := dockeropts.ParseCPUs(*cOpts.Cpus)
+			if cOpts.Cpus != "" {
+				nanoCpus, err := dockeropts.ParseCPUs(cOpts.Cpus)
 				if err != nil {
 					return err
 				}
 				hConfig.NanoCPUs = nanoCpus
 			}
-			if cOpts.Memory != nil {
-				memoryBytes, err := units.RAMInBytes(*cOpts.Memory)
+			if cOpts.Memory != "" {
+				memoryBytes, err := units.RAMInBytes(cOpts.Memory)
 				if err != nil {
 					return err
 				}
@@ -710,8 +710,8 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 				}
 				hConfig.Ulimits = limits
 			}
-			if cOpts.PidsLimit != nil {
-				hConfig.PidsLimit = cOpts.PidsLimit
+			if cOpts.PidsLimit != 0 {
+				hConfig.PidsLimit = &cOpts.PidsLimit
 			}
 			hConfig.ReadonlyRootfs = cOpts.ReadonlyRootfs
 			hConfig.CapDrop = (strslice.StrSlice)(cOpts.DroppedCaps)
@@ -721,8 +721,8 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			for k, v := range cOpts.StorageOpts {
 				hConfig.StorageOpt[k] = v
 			}
-			if cOpts.CgroupParent != nil {
-				hConfig.CgroupParent = *cOpts.CgroupParent
+			if cOpts.CgroupParent != "" {
+				hConfig.CgroupParent = cOpts.CgroupParent
 			}
 		}
 

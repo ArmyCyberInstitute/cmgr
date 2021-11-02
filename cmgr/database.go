@@ -155,15 +155,15 @@ const schemaQuery string = `
 		challenge INTEGER NOT NULL,
 		host TEXT NOT NULL,
 		init INTEGER NOT NULL CHECK(init == 0 OR init == 1),
-		cpus TEXT,
-		memory TEXT,
-		ulimits TEXT,
-		pidslimit INTEGER,
+		cpus TEXT NOT NULL,
+		memory TEXT NOT NULL,
+		ulimits TEXT NOT NULL,
+		pidslimit INTEGER NOT NULL,
 		readonlyrootfs INTEGER NOT NULL CHECK(readonlyrootfs == 0 OR readonlyrootfs == 1),
-		droppedcaps TEXT,
+		droppedcaps TEXT NOT NULL,
 		nonewprivileges INTEGER NOT NULL CHECK(nonewprivileges == 0 OR nonewprivileges == 1),
-		storageopts TEXT,
-		cgroupparent TEXT,
+		storageopts TEXT NOT NULL,
+		cgroupparent TEXT NOT NULL,
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE CASCADE ON DELETE CASCADE
 	);`
