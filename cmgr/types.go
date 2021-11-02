@@ -2,6 +2,7 @@ package cmgr
 
 import (
 	"context"
+	"encoding/json"
 	"math/rand"
 
 	"github.com/docker/docker/client"
@@ -72,28 +73,48 @@ type ContainerOptions struct {
 	CgroupParent    *string           `json:"cgroupparent,omitempty"`
 }
 
+// Handle either top-level container options (applies to all containers) or
+// a per-host map for multi-container challenges
+type ContainerOptionsWrapper map[string]ContainerOptions
+
+func (c *ContainerOptionsWrapper) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 {
+		return nil
+	}
+	m := make(map[string]ContainerOptions)
+	if err := json.Unmarshal(b, &m); err != nil {
+		o := ContainerOptions{}
+		if err := json.Unmarshal(b, &o); err != nil {
+			return err
+		}
+		m[""] = o
+	}
+	*c = m
+	return nil
+}
+
 type ChallengeId string
 type ChallengeMetadata struct {
-	Id               ChallengeId                 `json:"id"`
-	Name             string                      `json:"name,omitempty"`
-	Namespace        string                      `json:"namespace"`
-	ChallengeType    string                      `json:"challenge_type"`
-	Description      string                      `json:"description,omitempty"`
-	Details          string                      `json:"details,omitempty"`
-	Hints            []string                    `json:"hints,omitempty"`
-	SourceChecksum   uint32                      `json:"source_checksum"`
-	MetadataChecksum uint32                      `json:"metadata_checksum`
-	Path             string                      `json:"path"`
-	Templatable      bool                        `json:"templatable,omitempty"`
-	PortMap          map[string]PortInfo         `json:"port_map,omitempty"`
-	Hosts            []HostInfo                  `json:"hosts"`
-	MaxUsers         int                         `json:"max_users,omitempty"`
-	Category         string                      `json:"category,omitempty"`
-	Points           int                         `json:"points,omitempty"`
-	Tags             []string                    `json:"tags,omitempty"`
-	Attributes       map[string]string           `json:"attributes,omitempty"`
-	NetworkOptions   *NetworkOptions             `json:"network_options,omitempty"`
-	ContainerOptions map[string]ContainerOptions `json:"container_options,omitempty"`
+	Id               ChallengeId             `json:"id"`
+	Name             string                  `json:"name,omitempty"`
+	Namespace        string                  `json:"namespace"`
+	ChallengeType    string                  `json:"challenge_type"`
+	Description      string                  `json:"description,omitempty"`
+	Details          string                  `json:"details,omitempty"`
+	Hints            []string                `json:"hints,omitempty"`
+	SourceChecksum   uint32                  `json:"source_checksum"`
+	MetadataChecksum uint32                  `json:"metadata_checksum`
+	Path             string                  `json:"path"`
+	Templatable      bool                    `json:"templatable,omitempty"`
+	PortMap          map[string]PortInfo     `json:"port_map,omitempty"`
+	Hosts            []HostInfo              `json:"hosts"`
+	MaxUsers         int                     `json:"max_users,omitempty"`
+	Category         string                  `json:"category,omitempty"`
+	Points           int                     `json:"points,omitempty"`
+	Tags             []string                `json:"tags,omitempty"`
+	Attributes       map[string]string       `json:"attributes,omitempty"`
+	NetworkOptions   *NetworkOptions         `json:"network_options,omitempty"`
+	ContainerOptions ContainerOptionsWrapper `json:"container_options,omitempty"`
 
 	SolveScript bool             `json:"solve_script,omitempty"`
 	Builds      []*BuildMetadata `json:"builds,omitempty"`
