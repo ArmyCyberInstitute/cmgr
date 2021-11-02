@@ -590,6 +590,9 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 
 	// Validate ContainerOptions hosts
 	for opt_host := range md.ContainerOptions {
+		if opt_host == "" {
+			continue
+		}
 		found := false
 		for _, host := range hostNames {
 			if host.Name == opt_host {
