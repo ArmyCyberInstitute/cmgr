@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	dockeropts "github.com/docker/cli/opts"
+	"github.com/docker/go-units"
 )
 
 func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetadata, error) {
@@ -295,6 +296,12 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		_, err := dockeropts.ParseCPUs(*opts.Cpus)
 		if err != nil {
 			lastErr = fmt.Errorf("%verror parsing CPUs container option: %v", hostStr, err)
+			m.log.error(lastErr)
+		}
+
+		_, err = units.RAMInBytes(*opts.Memory)
+		if err != nil {
+			lastErr = fmt.Errorf("%verror parsing memory container option: %v", hostStr, err)
 			m.log.error(lastErr)
 		}
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	"github.com/docker/go-units"
 )
 
 //go:embed dockerfiles/seccomp.json
@@ -679,6 +680,13 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 					return err
 				}
 				hConfig.NanoCPUs = nanoCpus
+			}
+			if cOpts.Memory != nil {
+				memoryBytes, err := units.RAMInBytes(*cOpts.Memory)
+				if err != nil {
+					return err
+				}
+				hConfig.Memory = memoryBytes
 			}
 		}
 
