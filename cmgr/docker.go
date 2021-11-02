@@ -599,7 +599,7 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 	return err
 }
 
-func (m *Manager) startNetwork(instance *InstanceMetadata, opts *NetworkOptions) error {
+func (m *Manager) startNetwork(instance *InstanceMetadata, opts NetworkOptions) error {
 	netSpec := types.NetworkCreate{
 		Driver:   "bridge",
 		Internal: opts.Internal,

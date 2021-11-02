@@ -84,9 +84,9 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 		metadata.Attributes[attr.Key] = attr.Value
 	}
 
-	networkOptions := new(NetworkOptions)
+	networkOptions := NetworkOptions{}
 	if err == nil {
-		err = txn.Select(&networkOptions, "SELECT internal FROM network_options WHERE challenge=?", challenge)
+		err = txn.Select(networkOptions, "SELECT internal FROM network_options WHERE challenge=?", challenge)
 	}
 	metadata.NetworkOptions = networkOptions
 

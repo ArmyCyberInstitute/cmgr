@@ -113,7 +113,7 @@ type ChallengeMetadata struct {
 	Points           int                     `json:"points,omitempty"`
 	Tags             []string                `json:"tags,omitempty"`
 	Attributes       map[string]string       `json:"attributes,omitempty"`
-	NetworkOptions   *NetworkOptions         `json:"network_options,omitempty"`
+	NetworkOptions   NetworkOptions          `json:"network_options,omitempty"`
 	ContainerOptions ContainerOptionsWrapper `json:"container_options,omitempty"`
 
 	SolveScript bool             `json:"solve_script,omitempty"`
