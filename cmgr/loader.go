@@ -293,16 +293,20 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			hostStr = fmt.Sprintf("host %v: ", host)
 		}
 
-		_, err := dockeropts.ParseCPUs(*opts.Cpus)
-		if err != nil {
-			lastErr = fmt.Errorf("%verror parsing CPUs container option: %v", hostStr, err)
-			m.log.error(lastErr)
+		if opts.Cpus != nil {
+			_, err := dockeropts.ParseCPUs(*opts.Cpus)
+			if err != nil {
+				lastErr = fmt.Errorf("%verror parsing CPUs container option: %v", hostStr, err)
+				m.log.error(lastErr)
+			}
 		}
 
-		_, err = units.RAMInBytes(*opts.Memory)
-		if err != nil {
-			lastErr = fmt.Errorf("%verror parsing memory container option: %v", hostStr, err)
-			m.log.error(lastErr)
+		if opts.Memory != nil {
+			_, err = units.RAMInBytes(*opts.Memory)
+			if err != nil {
+				lastErr = fmt.Errorf("%verror parsing memory container option: %v", hostStr, err)
+				m.log.error(lastErr)
+			}
 		}
 
 		for _, ulimit := range opts.Ulimits {
