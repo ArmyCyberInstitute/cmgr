@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	dockeropts "github.com/docker/cli/opts"
 )
 
 func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetadata, error) {
@@ -279,6 +281,20 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	for port, used := range refPort {
 		if !used && md.ChallengeType != "hacksport" {
 			lastErr = fmt.Errorf("port '%s' published but not referenced: %s", port, md.Path)
+			m.log.error(lastErr)
+		}
+	}
+
+	// Validate ContainerOptions
+	for host, opts := range md.ContainerOptions {
+		hostStr := ""
+		if host != "" {
+			hostStr = fmt.Sprintf("host %v: ", host)
+		}
+
+		_, err := dockeropts.ParseCPUs(*opts.Cpus)
+		if err != nil {
+			lastErr = fmt.Errorf("%verror parsing CPUs container option: %v", hostStr, err)
 			m.log.error(lastErr)
 		}
 	}

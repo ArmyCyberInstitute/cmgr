@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	dockeropts "github.com/docker/cli/opts"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
@@ -629,7 +630,7 @@ func (m *Manager) stopNetwork(instance *InstanceMetadata) error {
 // with the SQLite database.
 var portLock sync.Mutex
 
-func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetadata) error {
+func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetadata, opts map[string]ContainerOptions) error {
 	revPortMap, err := m.getReversePortMap(build.Challenge)
 	if err != nil {
 		return err
@@ -669,6 +670,16 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		hConfig := container.HostConfig{
 			PortBindings:  publishedPorts,
 			RestartPolicy: container.RestartPolicy{Name: "always"},
+		}
+		if cOpts, ok := opts[image.Host]; ok {
+			hConfig.Init = &cOpts.Init
+			if cOpts.Cpus != nil {
+				nanoCpus, err := dockeropts.ParseCPUs(*cOpts.Cpus)
+				if err != nil {
+					return err
+				}
+				hConfig.NanoCPUs = nanoCpus
+			}
 		}
 
 		hostInfo, err := m.cli.Info(m.ctx)

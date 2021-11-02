@@ -59,18 +59,12 @@ type NetworkOptions struct {
 	Internal bool `json:"internal"`
 }
 
-type Ulimit struct {
-	Name string  `json:"name"`
-	Soft *uint32 `json:"soft, omitempty"`
-	Hard uint32  `json:"hard"`
-}
-
 type ContainerOptions struct {
 	Init            bool              `json:"init,omitempty"`
-	Cpus            *float32          `json:"cpus,omitempty"`
-	Memory          *uint32           `json:"memory,omitempty"`
-	Ulimits         []Ulimit          `json:"ulimits,omitempty"`
-	PidsLimit       *uint32           `json:"pidslimit",omitempty"`
+	Cpus            *string           `json:"cpus,omitempty"`
+	Memory          *string           `json:"memory,omitempty"`
+	Ulimits         []string          `json:"ulimits,omitempty"`
+	PidsLimit       *int64            `json:"pidslimit",omitempty"`
 	ReadonlyRootfs  bool              `json:"readonlyrootfs,omitempty"`
 	CapDrop         []string          `json:"capdrop,omitempty"`
 	NoNewPrivileges bool              `json:"nonewprivileges,omitempty"`
