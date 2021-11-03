@@ -271,7 +271,7 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 				break
 			}
 			m.log.debugf("%s%s: %v", metadata.Id, host_str, dbOpts)
-			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, storageopts, cgroupparent VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, storageopts, cgroupparent VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
 				metadata.Id,
 				host,
 				dbOpts.Init,
@@ -533,7 +533,7 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 				}
 				break
 			}
-			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, storageopts, cgroupparent VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, storageopts, cgroupparent VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
 				metadata.Id,
 				host,
 				dbOpts.Init,
