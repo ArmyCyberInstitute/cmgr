@@ -217,7 +217,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 			option := strings.ToLower(match[1])
 			switch option {
 			case "internal":
-				value, err := strconv.ParseBool(match[2])
+				value, err := parseBool(match[2])
 				if err != nil {
 					err = fmt.Errorf("unable to parse 'internal' option value on line %d: %s", i, md.Path)
 					m.log.error(err)
