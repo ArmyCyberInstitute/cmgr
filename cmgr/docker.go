@@ -676,7 +676,7 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 
 		hasContainerOpts := false
 		cOpts, hasContainerOpts := opts[""]
-		if hostCOpts, ok := opts[image.Host]; ok {
+		if hostCOpts, ok := opts[strings.ToLower(image.Host)]; ok {
 			cOpts = hostCOpts
 			hasContainerOpts = true
 		}

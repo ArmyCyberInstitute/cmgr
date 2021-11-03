@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/rand"
+	"strings"
 
 	"github.com/docker/docker/client"
 	"github.com/jmoiron/sqlx"
@@ -89,7 +90,11 @@ func (c *ContainerOptionsWrapper) UnmarshalJSON(b []byte) error {
 		}
 		m[""] = o
 	}
-	*c = m
+	l := make(map[string]ContainerOptions)
+	for k, v := range m {
+		l[strings.ToLower(k)] = v
+	}
+	*c = l
 	return nil
 }
 
