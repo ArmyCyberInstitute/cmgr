@@ -423,6 +423,9 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			}
 		}
+		if md.ContainerOptions == nil {
+			md.ContainerOptions = make(ContainerOptionsWrapper)
+		}
 		md.ContainerOptions[host] = opts
 
 	default:
