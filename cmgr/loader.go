@@ -310,9 +310,14 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		}
 
 		for _, ulimit := range opts.Ulimits {
-			_, err = units.ParseUlimit(ulimit)
+			limit, err := units.ParseUlimit(ulimit)
 			if err != nil {
 				lastErr = fmt.Errorf("%serror parsing ulimit container option: %v", hostStr, err)
+				m.log.error(lastErr)
+			}
+			// See https://docs.docker.com/engine/reference/commandline/run/#set-ulimits-in-container---ulimit
+			if limit.Name == "nproc" {
+				lastErr = fmt.Errorf("%snproc ulimits are not supported, use the PidsLimit container option instead", hostStr)
 				m.log.error(lastErr)
 			}
 		}
