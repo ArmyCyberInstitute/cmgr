@@ -52,6 +52,125 @@ an HTML href tag that uses `http_base`.
 - Organization: ACI
 - Created: 2020-06-24
 
+## Network Options
+
+This optional section can be used to configure the Docker network associated
+with each instance of this challenge. The available options are listed below,
+along with example usage.
+
+The `Internal` option disables Internet access, restricting network traffic to
+the instance's containers. This is equivalent to passing the [`--internal`](https://docs.docker.com/engine/reference/commandline/network_create/#network-internal-mode) flag to [`docker network create`](https://docs.docker.com/engine/reference/commandline/network_create/). Specify a boolean value, as shown below. Defaults to `false`.
+
+- Internal: true
+
+## Container Options
+
+This optional section can be used to apply additional restrictions to containers
+launched as instances of this challenge. The available options are listed below,
+along with example usage.
+
+For [multi-container](./custom/README.md) challenges, either specify a `Container Options`
+section as usual to apply the same restrictions to all containers, or specify
+different sections for each host (build stage), e.g. `Container Options: work`.
+
+Container options are never applied to the ["builder"](./custom/README.md) stage or to solver containers.
+
+The `Init` option runs an init process as PID 1 inside the container. This can be useful if your
+challenge process forks, and will ensure that zombie processes are reaped. This is equivalent to
+passing the [`--init`](https://docs.docker.com/engine/reference/run/#specify-an-init-process) flag
+to `docker run`. Specify a boolean value, as shown below. Defaults to `false`.
+
+- Init: true
+
+The `CPUs` option specifies a maximum number of CPU cores that a container can utilize at full
+capacity. This may be useful in order to prevent computationally-heavy challenge instances from
+dominating the host. This is equivalent to passing the [`--cpus`](https://docs.docker.com/engine/reference/run/#cpu-period-constraint)
+option to `docker run`. Specify a floating-point value, as shown below. Unset by default.
+
+- CPUs: 0.5
+
+The `Memory` option specifies the maximum amount of memory available to a container. Attempting to
+exceed this limit at runtime may cause the container to restart, depending on how the challenge
+process handles allocation failures. This is useful in order to put an upper bound on the memory
+available to each challenge instance, preventing memory leaks from crashing the Docker host.
+This is equivalent to passing the [`--memory`](https://docs.docker.com/engine/reference/run/#user-memory-constraints)
+option to `docker run`. Specify an integer value with unit, like `128m`. Unset by default.
+
+- Memory: 128m
+
+The `Ulimits` option can be used to specify various [resource limits](https://access.redhat.com/solutions/61334)
+inside the container. Note that the `nproc` ulimit is not supported, for reasons described
+[here](https://docs.docker.com/engine/reference/commandline/run/#for-nproc-usage) (use the `PidsLimit` option instead).
+This is equivalent to passing [`--ulimit`](https://docs.docker.com/engine/reference/commandline/run/#set-ulimits-in-container---ulimit)
+options to `docker run`. **However**, unlike in the Docker CLI, separate soft and hard limits are not supported.
+Specify a list of limit names and hard limits, as shown below. Unset by default.
+
+- Ulimits:
+  - nofile=512
+  - stack=4096
+  - fsize=2048
+
+The `PidsLimit` option specifies the maximum number of simultaneous processes inside the container.
+This is useful in order to prevent forkbombs from crashing the Docker host. This is equivalent to
+passing the [`--pids-limit`](https://docs.docker.com/engine/reference/commandline/run/) option to
+`docker run`. Specify an integer value, as shown below. Unset by default.
+
+- PidsLimit: 256
+
+The `ReadonlyRootfs` option can be used to mount the container's root filesystem as read-only. If
+your challenge does not need to write to disk outside of `/dev/shm`, this is an easy way to improve
+the security of your challenge containers. This is equivalent to passing the
+[`--read-only`](https://docs.docker.com/engine/reference/commandline/run/) flag to `docker run`.
+Specify a boolean value, as shown below. Defaults to `false`.
+
+- ReadonlyRootfs: true
+
+The `DroppedCaps` option can be used to drop additional Linux capabilities inside the container
+beyond Docker's [defaults](https://docs.docker.com/engine/reference/run/#runtime-privilege-and-linux-capabilities).
+This is equivalent to passing [`--cap-drop`](https://docs.docker.com/engine/reference/run/#runtime-privilege-and-linux-capabilities)
+options to `docker run`. Specify a list of uppercase capability names, as shown below. Unset by default.
+
+- DroppedCaps:
+  - CHOWN
+  - SETPCAP
+  - SETUID
+
+The `NoNewPrivileges` option can be used to
+[prevent](https://www.kernel.org/doc/html/latest/userspace-api/no_new_privs.html)
+processes inside the container from gaining additional privileges via `execve()` calls
+(by exploiting setuid binaries, etc). This is equivalent to passing the
+[`--security-opt="no-new-privileges:true"`](https://docs.docker.com/engine/reference/run/#security-configuration)
+option to `docker run`. Specify a boolean value, as shown below. Defaults to `false`.
+
+- NoNewPrivileges: true
+
+The `StorageOpts` option can be used to pass additional options to the container's storage driver.
+This is equivalent to passing [`--storage-opt`](https://docs.docker.com/engine/reference/commandline/run/#set-storage-driver-options-per-container) options to `docker run`.
+
+**Note that this is potentially dangerous**, as passing an option unsupported by the Docker host's
+storage driver can cause container creation to fail at runtime. This option is intended for advanced
+users only. The primary motivation is to allow specifying a writable layer size limit via the `size=`
+option when using the `overlay2` storage driver and [pquota-enabled](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/storage_administration_guide/xfsquota) XFS backing storage (see this
+[Docker Engine PR](https://github.com/moby/moby/pull/24771) for more details.)
+
+Specify a list of options, as shown below. Unset by default.
+
+- StorageOpts:
+  - size=256m
+
+The `CgroupParent` option can be used to manually specify the cgroup that a container will run in.
+This is equivalent to passing the [`--cgroup-parent`](https://docs.docker.com/engine/reference/run/#specify-custom-cgroups)
+flag to `docker run`.
+
+**Note that this is potentially dangerous**, as passing a cgroup name that does not exist on the
+Docker host can cause container creation to fail at runtime. This option is intended for advanced
+users. Note that it is also possible to set a default parent cgroup for all containers at the
+[daemon level](https://docs.docker.com/engine/reference/commandline/dockerd/#default-cgroup-parent).
+
+Specify a cgroup name, as shown below. Unset by default.
+
+- CgroupParent: customcgroup.slice
+
 ## Extra Sections
 
 Any `h2` sections (i.e. lines starting with `##`) that don't match one of the
