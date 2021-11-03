@@ -1,6 +1,7 @@
 package cmgr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"math/rand"
@@ -82,13 +83,17 @@ func (c *ContainerOptionsWrapper) UnmarshalJSON(b []byte) error {
 	if len(b) == 0 {
 		return nil
 	}
+	o := ContainerOptions{}
 	m := make(map[string]ContainerOptions)
-	if err := json.Unmarshal(b, &m); err != nil {
-		o := ContainerOptions{}
-		if err := json.Unmarshal(b, &o); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(&o)
+	if err == nil {
+		m[""] = o
+	} else {
+		if err := json.Unmarshal(b, &m); err != nil {
 			return err
 		}
-		m[""] = o
 	}
 	l := make(map[string]ContainerOptions)
 	for k, v := range m {
