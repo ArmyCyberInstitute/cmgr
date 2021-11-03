@@ -179,7 +179,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			match := tagLineRe.FindStringSubmatch(line)
 			if match == nil {
-				err = fmt.Errorf("unexpected text in 'tags' section on line %d: %s", i, md.Path)
+				err = fmt.Errorf("unexpected text in 'tags' section on line %d: %s", i+1, md.Path)
 				m.log.error(err)
 				continue
 			}
@@ -195,7 +195,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			match := kvLineRe.FindStringSubmatch(line)
 			if match == nil {
-				err = fmt.Errorf("unexpected text in 'attributes' section on line %d: %s", i, md.Path)
+				err = fmt.Errorf("unexpected text in 'attributes' section on line %d: %s", i+1, md.Path)
 				m.log.error(err)
 				continue
 			}
@@ -211,7 +211,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			match := kvLineRe.FindStringSubmatch(line)
 			if match == nil {
-				err = fmt.Errorf("unexpected text in 'network options' section on line %d: %s", i, md.Path)
+				err = fmt.Errorf("unexpected text in 'network options' section on line %d: %s", i+1, md.Path)
 				m.log.error(err)
 				continue
 			}
@@ -221,14 +221,14 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 			case "internal":
 				value, err := parseBool(match[2])
 				if err != nil {
-					err = fmt.Errorf("unable to parse 'internal' option value on line %d: %s", i, md.Path)
+					err = fmt.Errorf("unable to parse 'internal' option value on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
 				md.NetworkOptions.Internal = value
 				continue
 			default:
-				err = fmt.Errorf("unexpected option '%s' in 'network options' section on line %d: %s", option, i, md.Path)
+				err = fmt.Errorf("unexpected option '%s' in 'network options' section on line %d: %s", option, i+1, md.Path)
 				continue
 			}
 		}
@@ -246,7 +246,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 			}
 			match := kvLineRe.FindStringSubmatch(line)
 			if match == nil {
-				err = fmt.Errorf("unexpected text in 'container options' section on line %d: %s", i, md.Path)
+				err = fmt.Errorf("unexpected text in 'container options' section on line %d: %s", i+1, md.Path)
 				m.log.error(err)
 				continue
 			}
@@ -258,13 +258,13 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 			switch key {
 			case "init":
 				if value == "" {
-					err = fmt.Errorf("missing value for 'init' option on line %d: %s", i, md.Path)
+					err = fmt.Errorf("missing value for 'init' option on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
 				value, err := parseBool(value)
 				if err != nil {
-					err = fmt.Errorf("failed to parse 'init' option value as bool on line %d: %s", i, md.Path)
+					err = fmt.Errorf("failed to parse 'init' option value as bool on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
@@ -272,7 +272,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			case "cpus":
 				if value == "" {
-					err = fmt.Errorf("missing value for 'cpus' option on line %d: %s", i, md.Path)
+					err = fmt.Errorf("missing value for 'cpus' option on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
@@ -280,7 +280,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			case "memory":
 				if value == "" {
-					err = fmt.Errorf("missing value for 'memory' option on line %d: %s", i, md.Path)
+					err = fmt.Errorf("missing value for 'memory' option on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
@@ -288,7 +288,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			case "ulimits":
 				if value != "" {
-					err = fmt.Errorf("inline value provided for 'ulimits' option on line %d (use unordered list): %s", i, md.Path)
+					err = fmt.Errorf("inline value provided for 'ulimits' option on line %d (use unordered list): %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
@@ -306,7 +306,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 					}
 					valMatch = optionLineRe.FindStringSubmatch(valLine)
 					if valMatch == nil {
-						err = fmt.Errorf("invalid value provided for 'ulimits' option on line %d: %s", i, md.Path)
+						err = fmt.Errorf("invalid value provided for 'ulimits' option on line %d: %s", i+1, md.Path)
 						m.log.error(err)
 						continue
 					}
@@ -315,13 +315,13 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			case "pidslimit":
 				if value == "" {
-					err = fmt.Errorf("missing value for 'pidslimit' option on line %d: %s", i, md.Path)
+					err = fmt.Errorf("missing value for 'pidslimit' option on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
 				value, err := strconv.ParseInt(value, 10, 64)
 				if err != nil {
-					err = fmt.Errorf("failed to parse 'pidslimit' option value as int64 on line %d: %s", i, md.Path)
+					err = fmt.Errorf("failed to parse 'pidslimit' option value as int64 on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
@@ -329,13 +329,13 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			case "readonlyrootfs":
 				if value == "" {
-					err = fmt.Errorf("missing value for 'readonlyrootfs' option on line %d: %s", i, md.Path)
+					err = fmt.Errorf("missing value for 'readonlyrootfs' option on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
 				value, err := parseBool(value)
 				if err != nil {
-					err = fmt.Errorf("failed to parse 'readonlyrootfs' option value as bool on line %d: %s", i, md.Path)
+					err = fmt.Errorf("failed to parse 'readonlyrootfs' option value as bool on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
@@ -343,7 +343,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			case "droppedcaps":
 				if value != "" {
-					err = fmt.Errorf("inline value provided for 'droppedcaps' option on line %d (use unordered list): %s", i, md.Path)
+					err = fmt.Errorf("inline value provided for 'droppedcaps' option on line %d (use unordered list): %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
@@ -361,7 +361,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 					}
 					valMatch = optionLineRe.FindStringSubmatch(valLine)
 					if valMatch == nil {
-						err = fmt.Errorf("invalid value provided for 'droppedcaps' option on line %d: %s", i, md.Path)
+						err = fmt.Errorf("invalid value provided for 'droppedcaps' option on line %d: %s", i+1, md.Path)
 						m.log.error(err)
 						continue
 					}
@@ -370,13 +370,13 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			case "nonewprivileges":
 				if value == "" {
-					err = fmt.Errorf("missing value for 'nonewprivileges' option on line %d: %s", i, md.Path)
+					err = fmt.Errorf("missing value for 'nonewprivileges' option on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
 				value, err := parseBool(value)
 				if err != nil {
-					err = fmt.Errorf("failed to parse 'nonewprivileges' option value as bool on line %d: %s", i, md.Path)
+					err = fmt.Errorf("failed to parse 'nonewprivileges' option value as bool on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
@@ -384,7 +384,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			case "storageopts":
 				if value != "" {
-					err = fmt.Errorf("inline value provided for 'storageopts' option on line %d (use unordered list): %s", i, md.Path)
+					err = fmt.Errorf("inline value provided for 'storageopts' option on line %d (use unordered list): %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
@@ -402,7 +402,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 					}
 					valMatch = optionLineRe.FindStringSubmatch(valLine)
 					if valMatch == nil {
-						err = fmt.Errorf("invalid value provided for 'storageopts' option on line %d: %s", i, md.Path)
+						err = fmt.Errorf("invalid value provided for 'storageopts' option on line %d: %s", i+1, md.Path)
 						m.log.error(err)
 						continue
 					}
@@ -411,14 +411,14 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			case "cgroupparent":
 				if value == "" {
-					err = fmt.Errorf("missing value for 'cgroupparent' option on line %d: %s", i, md.Path)
+					err = fmt.Errorf("missing value for 'cgroupparent' option on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
 				opts.CgroupParent = value
 				continue
 			default:
-				err = fmt.Errorf("unrecognized container option '%s' on line %d: %s", match[1], i, md.Path)
+				err = fmt.Errorf("unrecognized container option '%s' on line %d: %s", match[1], i+1, md.Path)
 				m.log.error(err)
 				continue
 			}
