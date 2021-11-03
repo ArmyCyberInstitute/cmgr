@@ -734,7 +734,7 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 
 		if hostInfo.OSType == "linux" {
 			m.log.debug("inserting custom seccomp profile")
-			hConfig.SecurityOpt = []string{"seccomp:" + seccompPolicy}
+			hConfig.SecurityOpt = append(hConfig.SecurityOpt, "seccomp:"+seccompPolicy)
 		}
 
 		nConfig := network.NetworkingConfig{
