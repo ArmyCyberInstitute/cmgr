@@ -613,7 +613,8 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 						errs = append(errs, err)
 						continue
 					}
-					// Restart containers
+
+					// Recreate network and containers
 					instances, err := m.getBuildInstances(build.Id)
 					if err != nil {
 						errs = append(errs, err)
@@ -623,6 +624,12 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 						instance, err := m.lookupInstanceMetadata(iid)
 						if err == nil {
 							err = m.stopContainers(instance)
+						}
+						if err == nil {
+							err = m.stopNetwork(instance)
+						}
+						if err == nil {
+							err = m.startNetwork(instance, cMeta.NetworkOptions)
 						}
 						if err == nil {
 							err = m.startContainers(build, instance, cMeta.ContainerOptions)
