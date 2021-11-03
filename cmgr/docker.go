@@ -718,8 +718,9 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			if cOpts.NoNewPrivileges {
 				hConfig.SecurityOpt = append(hConfig.SecurityOpt, "no-new-privileges:true")
 			}
-			for k, v := range cOpts.StorageOpts {
-				hConfig.StorageOpt[k] = v
+			for _, storageOpt := range cOpts.StorageOpts {
+				subs := strings.SplitN(storageOpt, "=", 2)
+				hConfig.StorageOpt[subs[0]] = subs[1]
 			}
 			if cOpts.CgroupParent != "" {
 				hConfig.CgroupParent = cOpts.CgroupParent

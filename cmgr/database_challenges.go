@@ -661,7 +661,7 @@ func (m *Manager) removeChallenges(removedChallenges []*ChallengeMetadata) error
 }
 
 // Database representation of ContainerOptions
-// Complex list/map options are serialized to JSON strings
+// List-based options are serialized as JSON strings
 type dbContainerOptions struct {
 	Host            string
 	Init            bool
@@ -705,12 +705,12 @@ func newFromDbContainerOptions(dbOpts dbContainerOptions) (ContainerOptions, err
 
 	cOpts.NoNewPrivileges = dbOpts.NoNewPrivileges
 
-	storageOpts := make(map[string]string)
+	storageOpts := new([]string)
 	err = json.Unmarshal([]byte(dbOpts.StorageOpts), &storageOpts)
 	if err != nil {
 		return cOpts, err
 	}
-	cOpts.StorageOpts = storageOpts
+	cOpts.StorageOpts = *storageOpts
 
 	cOpts.CgroupParent = dbOpts.CgroupParent
 

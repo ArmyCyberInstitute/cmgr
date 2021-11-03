@@ -348,6 +348,14 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			}
 		}
 
+		for _, sOpt := range opts.StorageOpts {
+			subs := strings.SplitN(sOpt, "=", 2)
+			if len(subs) < 2 {
+				lastErr = fmt.Errorf("%sinvalid StorageOpts container option: %s", hostStr, sOpt)
+				m.log.error(lastErr)
+			}
+		}
+
 	}
 
 	return lastErr
