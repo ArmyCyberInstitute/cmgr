@@ -99,6 +99,9 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 		if err != nil {
 			break
 		}
+		if metadata.ContainerOptions == nil {
+			metadata.ContainerOptions = make(ContainerOptionsWrapper)
+		}
 		metadata.ContainerOptions[dbOpts.Host] = cOpts
 	}
 
@@ -685,32 +688,32 @@ func newFromDbContainerOptions(dbOpts dbContainerOptions) (ContainerOptions, err
 
 	cOpts.Memory = dbOpts.Memory
 
-	ulimits := new([]string)
+	ulimits := make([]string, 0)
 	err := json.Unmarshal([]byte(dbOpts.Ulimits), &ulimits)
 	if err != nil {
 		return cOpts, err
 	}
-	cOpts.Ulimits = *ulimits
+	cOpts.Ulimits = ulimits
 
 	cOpts.PidsLimit = dbOpts.PidsLimit
 
 	cOpts.ReadonlyRootfs = dbOpts.ReadonlyRootfs
 
-	droppedCaps := new([]string)
+	droppedCaps := make([]string, 0)
 	err = json.Unmarshal([]byte(dbOpts.DroppedCaps), &droppedCaps)
 	if err != nil {
 		return cOpts, err
 	}
-	cOpts.DroppedCaps = *droppedCaps
+	cOpts.DroppedCaps = droppedCaps
 
 	cOpts.NoNewPrivileges = dbOpts.NoNewPrivileges
 
-	storageOpts := new([]string)
+	storageOpts := make([]string, 0)
 	err = json.Unmarshal([]byte(dbOpts.StorageOpts), &storageOpts)
 	if err != nil {
 		return cOpts, err
 	}
-	cOpts.StorageOpts = *storageOpts
+	cOpts.StorageOpts = storageOpts
 
 	cOpts.CgroupParent = dbOpts.CgroupParent
 
