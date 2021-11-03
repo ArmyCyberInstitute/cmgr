@@ -200,6 +200,37 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			md.Attributes[match[1]] = match[2]
 		}
+	case "network options":
+		for i := startIdx; i < endIdx; i++ {
+			line := strings.TrimSpace(lines[i])
+			if line == "" {
+				continue
+			}
+
+			match := kvLineRe.FindStringSubmatch(line)
+			if match == nil {
+				err = fmt.Errorf("unexpected text in 'network options' section on line %d: %s", i, md.Path)
+				m.log.error(err)
+				continue
+			}
+
+			option := strings.ToLower(match[1])
+			switch option {
+			case "internal":
+				value, err := strconv.ParseBool(match[2])
+				if err != nil {
+					err = fmt.Errorf("unable to parse 'internal' option value on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				md.NetworkOptions.Internal = value
+				continue
+			default:
+				err = fmt.Errorf("unexpected option '%s' in 'network options' section on line %d: %s", option, i, md.Path)
+				continue
+			}
+		}
+
 	default:
 		attrVal := strings.TrimSpace(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Attributes[section] = attrVal
