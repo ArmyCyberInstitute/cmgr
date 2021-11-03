@@ -44,6 +44,7 @@ func parseBool(s string) (bool, error) {
 var sectionRe *regexp.Regexp = regexp.MustCompile(`^##\s*(.+)`)
 var kvLineRe *regexp.Regexp = regexp.MustCompile(`^\s*-\s*(\w+):\s*(.*)`)
 var tagLineRe *regexp.Regexp = regexp.MustCompile(`^\s*-\s*(\w+)\s*$`)
+var optionLineRe *regexp.Regexp = regexp.MustCompile(`^\s*-\s*([\w=]+)\s*$`)
 
 func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*ChallengeMetadata, error) {
 	m.log.debugf("Found challenge Markdown at %s", path)
@@ -154,20 +155,21 @@ func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*Challen
 func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, lines []string, startIdx, endIdx int) error {
 	var err error
 	m.log.debugf("processing markdown: section='%s' start=%d end=%d", section, startIdx, endIdx)
-	switch strings.ToLower(section) {
-	case "description":
+	sectionLower := strings.ToLower(section)
+	switch {
+	case sectionLower == "description":
 		text, tmpErr := m.parseMarkdown(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Description = text
 		err = tmpErr
-	case "details":
+	case sectionLower == "details":
 		text, tmpErr := m.parseMarkdown(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Details = text
 		err = tmpErr
-	case "hints":
+	case sectionLower == "hints":
 		hints, tmpErr := m.parseHints(lines[startIdx:endIdx])
 		md.Hints = hints
 		err = tmpErr
-	case "tags":
+	case sectionLower == "tags":
 		md.Tags = []string{}
 		for i, rawLine := range lines[startIdx:endIdx] {
 			line := strings.TrimSpace(rawLine)
@@ -184,7 +186,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			md.Tags = append(md.Tags, match[1])
 		}
-	case "attributes":
+	case sectionLower == "attributes":
 		for i := startIdx; i < endIdx; i++ {
 			line := strings.TrimSpace(lines[i])
 			if line == "" {
@@ -200,7 +202,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			md.Attributes[match[1]] = match[2]
 		}
-	case "network options":
+	case sectionLower == "network options":
 		for i := startIdx; i < endIdx; i++ {
 			line := strings.TrimSpace(lines[i])
 			if line == "" {
@@ -230,6 +232,198 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				continue
 			}
 		}
+	case strings.HasPrefix(sectionLower, "container options"):
+		host := ""
+		sectionParts := strings.SplitN(sectionLower, ":", 2)
+		if len(sectionParts) == 2 {
+			host = strings.TrimSpace(sectionParts[1])
+		}
+		opts := ContainerOptions{}
+		for i := startIdx; i < endIdx; i++ {
+			line := strings.TrimSpace(lines[i])
+			if line == "" {
+				continue
+			}
+			match := kvLineRe.FindStringSubmatch(line)
+			if match == nil {
+				err = fmt.Errorf("unexpected text in 'container options' section on line %d: %s", i, md.Path)
+				m.log.error(err)
+				continue
+			}
+			key := strings.ToLower(match[1])
+			var value string
+			if len(match) == 3 {
+				value = strings.TrimSpace(match[2])
+			}
+			switch key {
+			case "init":
+				if value == "" {
+					err = fmt.Errorf("missing value for 'init' option on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				value, err := parseBool(value)
+				if err != nil {
+					err = fmt.Errorf("failed to parse 'init' option value as bool on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				opts.Init = value
+				continue
+			case "cpus":
+				if value == "" {
+					err = fmt.Errorf("missing value for 'cpus' option on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				opts.Cpus = value
+				continue
+			case "memory":
+				if value == "" {
+					err = fmt.Errorf("missing value for 'memory' option on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				opts.Memory = value
+				continue
+			case "ulimits":
+				if value != "" {
+					err = fmt.Errorf("inline value provided for 'ulimits' option on line %d (use unordered list): %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				for i < endIdx-1 {
+					i++
+					valLine := strings.TrimSpace(lines[i])
+					if valLine == "" {
+						continue
+					}
+					valMatch := kvLineRe.FindStringSubmatch(valLine)
+					if valMatch != nil {
+						// Found next option line, rewind and break
+						i--
+						break
+					}
+					valMatch = optionLineRe.FindStringSubmatch(valLine)
+					if valMatch == nil {
+						err = fmt.Errorf("invalid value provided for 'ulimits' option on line %d: %s", i, md.Path)
+						m.log.error(err)
+						continue
+					}
+					opts.Ulimits = append(opts.Ulimits, valMatch[1])
+				}
+				continue
+			case "pidslimit":
+				if value == "" {
+					err = fmt.Errorf("missing value for 'pidslimit' option on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				value, err := strconv.ParseInt(value, 10, 64)
+				if err != nil {
+					err = fmt.Errorf("failed to parse 'pidslimit' option value as int64 on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				opts.PidsLimit = value
+				continue
+			case "readonlyrootfs":
+				if value == "" {
+					err = fmt.Errorf("missing value for 'readonlyrootfs' option on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				value, err := parseBool(value)
+				if err != nil {
+					err = fmt.Errorf("failed to parse 'readonlyrootfs' option value as bool on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				opts.ReadonlyRootfs = value
+				continue
+			case "droppedcaps":
+				if value != "" {
+					err = fmt.Errorf("inline value provided for 'droppedcaps' option on line %d (use unordered list): %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				for i < endIdx-1 {
+					i++
+					valLine := strings.TrimSpace(lines[i])
+					if valLine == "" {
+						continue
+					}
+					valMatch := kvLineRe.FindStringSubmatch(valLine)
+					if valMatch != nil {
+						// Found next option line, rewind and break
+						i--
+						break
+					}
+					valMatch = optionLineRe.FindStringSubmatch(valLine)
+					if valMatch == nil {
+						err = fmt.Errorf("invalid value provided for 'droppedcaps' option on line %d: %s", i, md.Path)
+						m.log.error(err)
+						continue
+					}
+					opts.DroppedCaps = append(opts.DroppedCaps, valMatch[1])
+				}
+				continue
+			case "nonewprivileges":
+				if value == "" {
+					err = fmt.Errorf("missing value for 'nonewprivileges' option on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				value, err := parseBool(value)
+				if err != nil {
+					err = fmt.Errorf("failed to parse 'nonewprivileges' option value as bool on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				opts.NoNewPrivileges = value
+				continue
+			case "storageopts":
+				if value != "" {
+					err = fmt.Errorf("inline value provided for 'storageopts' option on line %d (use unordered list): %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				for i < endIdx-1 {
+					i++
+					valLine := strings.TrimSpace(lines[i])
+					if valLine == "" {
+						continue
+					}
+					valMatch := kvLineRe.FindStringSubmatch(valLine)
+					if valMatch != nil {
+						// Found next option line, rewind and break
+						i--
+						break
+					}
+					valMatch = optionLineRe.FindStringSubmatch(valLine)
+					if valMatch == nil {
+						err = fmt.Errorf("invalid value provided for 'storageopts' option on line %d: %s", i, md.Path)
+						m.log.error(err)
+						continue
+					}
+					opts.StorageOpts = append(opts.StorageOpts, valMatch[1])
+				}
+				continue
+			case "cgroupparent":
+				if value == "" {
+					err = fmt.Errorf("missing value for 'cgroupparent' option on line %d: %s", i, md.Path)
+					m.log.error(err)
+					continue
+				}
+				opts.CgroupParent = value
+				continue
+			default:
+				err = fmt.Errorf("unrecognized container option '%s' on line %d: %s", match[1], i, md.Path)
+				m.log.error(err)
+				continue
+			}
+		}
+		md.ContainerOptions[host] = opts
 
 	default:
 		attrVal := strings.TrimSpace(strings.Join(lines[startIdx:endIdx], "\n"))
