@@ -21,6 +21,7 @@ const (
 	LOGGING_ENV        string = "CMGR_LOGGING"
 	IFACE_ENV          string = "CMGR_INTERFACE"
 	PORTS_ENV          string = "CMGR_PORTS"
+	DISK_QUOTA_ENV     string = "CMGR_ENABLE_DISK_QUOTAS"
 
 	DYNAMIC_INSTANCES int = -1
 	LOCKED            int = -2

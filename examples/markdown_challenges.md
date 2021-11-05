@@ -144,19 +144,22 @@ option to `docker run`. Specify a boolean value, as shown below. Defaults to `fa
 
 - NoNewPrivileges: true
 
-The `StorageOpts` option can be used to pass additional options to the container's storage driver.
-This is equivalent to passing [`--storage-opt`](https://docs.docker.com/engine/reference/commandline/run/#set-storage-driver-options-per-container) options to `docker run`.
+The `DiskQuota` option can be used to limit the maximum size of the container's writable layer. This
+is equivalent to passing the [`--storage-opt
+size`](https://docs.docker.com/engine/reference/commandline/run/#set-storage-driver-options-per-container)
+option to `docker run`.
 
-**Note that this is potentially dangerous**, as passing an option unsupported by the Docker host's
-storage driver can cause container creation to fail at runtime. This option is intended for advanced
-users only. The primary motivation is to allow specifying a writable layer size limit via the `size=`
-option when using the `overlay2` storage driver and [pquota-enabled](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/storage_administration_guide/xfsquota) XFS backing storage (see this
-[Docker Engine PR](https://github.com/moby/moby/pull/24771) for more details.)
+Note that this option is **only supported** when using the `overlay2` Docker storage driver and
+[pquota-enabled](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/storage_administration_guide/xfsquota)
+XFS backing storage (see this [Docker Engine PR](https://github.com/moby/moby/pull/24771) for more
+details.) If these requirements are not met, container creation will fail at runtime.
 
-Specify a list of options, as shown below. Unset by default.
+To help prevent this issue, the `DiskQuota` option only takes effect if the
+`CMGR_ENABLE_DISK_QUOTAS` environment variable is set.
 
-- StorageOpts:
-  - size=256m
+Specify an integer value with unit, like `256m`. Unset by default.
+
+- DiskQuota: 256m
 
 The `CgroupParent` option can be used to manually specify the cgroup that a container will run in.
 This is equivalent to passing the [`--cgroup-parent`](https://docs.docker.com/engine/reference/run/#specify-custom-cgroups)

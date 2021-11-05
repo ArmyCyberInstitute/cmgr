@@ -719,7 +719,15 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 				hConfig.SecurityOpt = append(hConfig.SecurityOpt, "no-new-privileges:true")
 			}
 			if cOpts.DiskQuota != "" {
-				hConfig.StorageOpt["size"] = cOpts.DiskQuota
+				_, quotas_enabled := os.LookupEnv(DISK_QUOTA_ENV)
+				if quotas_enabled {
+					var storageOpt = map[string]string{
+						"size": cOpts.DiskQuota,
+					}
+					hConfig.StorageOpt = storageOpt
+				} else {
+					m.log.warnf("disk quota for %s container '%s' ignored (disk quotas are not enabled)", build.Challenge, image.Host)
+				}
 			}
 			if cOpts.CgroupParent != "" {
 				hConfig.CgroupParent = cOpts.CgroupParent
