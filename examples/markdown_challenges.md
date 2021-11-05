@@ -162,10 +162,8 @@ The `CgroupParent` option can be used to manually specify the cgroup that a cont
 This is equivalent to passing the [`--cgroup-parent`](https://docs.docker.com/engine/reference/run/#specify-custom-cgroups)
 flag to `docker run`.
 
-**Note that this is potentially dangerous**, as passing a cgroup name that does not exist on the
-Docker host can cause container creation to fail at runtime. This option is intended for advanced
-users. Note that it is also possible to set a default parent cgroup for all containers at the
-[daemon level](https://docs.docker.com/engine/reference/commandline/dockerd/#default-cgroup-parent).
+Note that it is also possible to set a default parent cgroup for all containers at the [daemon
+level](https://docs.docker.com/engine/reference/commandline/dockerd/#default-cgroup-parent).
 
 Specify a cgroup name, as shown below. Unset by default.
 
