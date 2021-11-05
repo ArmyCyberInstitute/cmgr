@@ -71,7 +71,7 @@ type ContainerOptions struct {
 	ReadonlyRootfs  bool     `json:"readonlyrootfs,omitempty"`
 	DroppedCaps     []string `json:"droppedcaps,omitempty"`
 	NoNewPrivileges bool     `json:"nonewprivileges,omitempty"`
-	StorageOpts     []string `json:"storageopts,omitempty"`
+	DiskQuota       string   `json:"diskquota,omitempty"`
 	CgroupParent    string   `json:"cgroupparent,omitempty"`
 }
 

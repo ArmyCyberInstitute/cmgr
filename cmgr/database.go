@@ -162,7 +162,7 @@ const schemaQuery string = `
 		readonlyrootfs INTEGER NOT NULL CHECK(readonlyrootfs == 0 OR readonlyrootfs == 1),
 		droppedcaps TEXT NOT NULL,
 		nonewprivileges INTEGER NOT NULL CHECK(nonewprivileges == 0 OR nonewprivileges == 1),
-		storageopts TEXT NOT NULL,
+		diskquota TEXT NOT NULL,
 		cgroupparent TEXT NOT NULL,
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE CASCADE ON DELETE CASCADE

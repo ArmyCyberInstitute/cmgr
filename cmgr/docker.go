@@ -718,9 +718,8 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			if cOpts.NoNewPrivileges {
 				hConfig.SecurityOpt = append(hConfig.SecurityOpt, "no-new-privileges:true")
 			}
-			for _, storageOpt := range cOpts.StorageOpts {
-				subs := strings.SplitN(storageOpt, "=", 2)
-				hConfig.StorageOpt[subs[0]] = subs[1]
+			if cOpts.DiskQuota != "" {
+				hConfig.StorageOpt["size"] = cOpts.DiskQuota
 			}
 			if cOpts.CgroupParent != "" {
 				hConfig.CgroupParent = cOpts.CgroupParent

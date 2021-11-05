@@ -382,32 +382,13 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 				}
 				opts.NoNewPrivileges = value
 				continue
-			case "storageopts":
-				if value != "" {
-					err = fmt.Errorf("inline value provided for 'storageopts' option on line %d (use unordered list): %s", i+1, md.Path)
+			case "diskquota":
+				if value == "" {
+					err = fmt.Errorf("missing value for 'diskquota' option on line %d: %s", i+1, md.Path)
 					m.log.error(err)
 					continue
 				}
-				for i < endIdx-1 {
-					i++
-					valLine := strings.TrimSpace(lines[i])
-					if valLine == "" {
-						continue
-					}
-					valMatch := kvLineRe.FindStringSubmatch(valLine)
-					if valMatch != nil {
-						// Found next option line, rewind and break
-						i--
-						break
-					}
-					valMatch = optionLineRe.FindStringSubmatch(valLine)
-					if valMatch == nil {
-						err = fmt.Errorf("invalid value provided for 'storageopts' option on line %d: %s", i+1, md.Path)
-						m.log.error(err)
-						continue
-					}
-					opts.StorageOpts = append(opts.StorageOpts, valMatch[1])
-				}
+				opts.DiskQuota = value
 				continue
 			case "cgroupparent":
 				if value == "" {

@@ -353,14 +353,13 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			}
 		}
 
-		for _, sOpt := range opts.StorageOpts {
-			subs := strings.SplitN(sOpt, "=", 2)
-			if len(subs) < 2 {
-				lastErr = fmt.Errorf("%sinvalid StorageOpts container option: %s", hostStr, sOpt)
+		if opts.DiskQuota != "" {
+			_, err := units.RAMInBytes(opts.DiskQuota) // Despite its name, Docker uses this method to parse the size= storage option.
+			if err != nil {
+				lastErr = fmt.Errorf("%serror parsing DiskQuota container option: %v", hostStr, err)
 				m.log.error(lastErr)
 			}
 		}
-
 	}
 
 	return lastErr
