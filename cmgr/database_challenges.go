@@ -85,9 +85,11 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 	}
 
 	networkOptions := new(NetworkOptions)
-	if err == nil {
-		err = txn.Get(networkOptions, "SELECT internalnetwork FROM networkOptions WHERE challenge=?", challenge)
-	}
+	// Note: there are currently no network-level challenge options, but they will be loaded here if added in the future.
+
+	// if err == nil {
+	// 	err = txn.Get(networkOptions, "SELECT '' FROM networkOptions WHERE challenge=?", challenge)
+	// }
 	metadata.ChallengeOptions.NetworkOptions = *networkOptions
 
 	containerOptions := new([]dbContainerOptions)
@@ -243,21 +245,23 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 			continue
 		}
 
-		m.log.debugf("%s: %v", metadata.Id, metadata.ChallengeOptions.NetworkOptions)
-		_, err = txn.Exec("INSERT INTO networkOptions(challenge, internalnetwork) VALUES (?, ?);",
-			metadata.Id,
-			metadata.ChallengeOptions.NetworkOptions.InternalNetwork)
-		if err != nil {
-			m.log.error(err)
-			err = txn.Rollback()
-			if err != nil { // If rollback fails, we're in trouble.
-				m.log.error(err)
-				return append(errs, err)
-			}
-		}
-		if err != nil {
-			continue
-		}
+		// Note: there are currently no network-level challenge options, but they will be saved here if added in the future.
+
+		// m.log.debugf("%s: %v", metadata.Id, metadata.ChallengeOptions.NetworkOptions)
+		// _, err = txn.Exec("INSERT INTO networkOptions(challenge) VALUES (?);",
+		// 	metadata.Id,
+		// )
+		// if err != nil {
+		// 	m.log.error(err)
+		// 	err = txn.Rollback()
+		// 	if err != nil { // If rollback fails, we're in trouble.
+		// 		m.log.error(err)
+		// 		return append(errs, err)
+		// 	}
+		// }
+		// if err != nil {
+		// 	continue
+		// }
 
 		for host, opts := range metadata.ChallengeOptions.Overrides {
 			host_str := ""
@@ -487,32 +491,33 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			continue
 		}
 
-		_, err = txn.Exec("DELETE FROM networkOptions WHERE challenge = ?;", metadata.Id)
+		// Note: there are currently no network-level challenge options, but they would be updated here if added in the future.
 
-		if err != nil {
-			m.log.error(err)
-			err = txn.Rollback()
-			if err != nil { // If rollback fails, we're in trouble.
-				m.log.error(err)
-				return append(errs, err)
-			}
-			continue
-		}
+		// _, err = txn.Exec("DELETE FROM networkOptions WHERE challenge = ?;", metadata.Id)
 
-		_, err = txn.Exec("INSERT INTO networkOptions(challenge, internalnetwork) VALUES (?, ?);",
-			metadata.Id,
-			metadata.ChallengeOptions.NetworkOptions.InternalNetwork)
-		if err != nil {
-			m.log.error(err)
-			err = txn.Rollback()
-			if err != nil { // If rollback fails, we're in trouble.
-				m.log.error(err)
-				return append(errs, err)
-			}
-		}
-		if err != nil {
-			continue
-		}
+		// if err != nil {
+		// 	m.log.error(err)
+		// 	err = txn.Rollback()
+		// 	if err != nil { // If rollback fails, we're in trouble.
+		// 		m.log.error(err)
+		// 		return append(errs, err)
+		// 	}
+		// 	continue
+		// }
+
+		// _, err = txn.Exec("INSERT INTO networkOptions(challenge) VALUES (?);",
+		// 	metadata.Id)
+		// if err != nil {
+		// 	m.log.error(err)
+		// 	err = txn.Rollback()
+		// 	if err != nil { // If rollback fails, we're in trouble.
+		// 		m.log.error(err)
+		// 		return append(errs, err)
+		// 	}
+		// }
+		// if err != nil {
+		// 	continue
+		// }
 
 		_, err = txn.Exec("DELETE FROM containerOptions WHERE challenge = ?;", metadata.Id)
 

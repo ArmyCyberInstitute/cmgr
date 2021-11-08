@@ -144,12 +144,14 @@ const schemaQuery string = `
 			ON UPDATE RESTRICT ON DELETE CASCADE
 	);
 
-	CREATE TABLE IF NOT EXISTS networkOptions (
-		challenge INTEGER NOT NULL,
-		internalnetwork INTEGER NOT NULL CHECK(internalnetwork == 0 OR internalnetwork == 1),
-		FOREIGN KEY (challenge) REFERENCES challenges (id)
-			ON UPDATE CASCADE ON DELETE CASCADE
-	);
+	-- There are currently not any network-level challenge options, so this table is not created.
+	-- However, this is kept as a placeholder in case additional options are added in the future.
+	--
+	-- CREATE TABLE IF NOT EXISTS networkOptions (
+	--	challenge INTEGER NOT NULL,
+	--	FOREIGN KEY (challenge) REFERENCES challenges (id)
+	--		ON UPDATE CASCADE ON DELETE CASCADE
+	--);
 
 	CREATE TABLE IF NOT EXISTS containerOptions (
 		challenge INTEGER NOT NULL,

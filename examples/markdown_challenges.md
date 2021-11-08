@@ -52,17 +52,6 @@ an HTML href tag that uses `http_base`.
 - Organization: ACI
 - Created: 2020-06-24
 
-## Network Options
-
-This optional section can be used to configure the Docker network associated
-with each instance of this challenge. The available options are listed below,
-along with example usage.
-
-The `Internal` option disables Internet access, restricting network traffic to
-the instance's containers. This is equivalent to passing the [`--internal`](https://docs.docker.com/engine/reference/commandline/network_create/#network-internal-mode) flag to [`docker network create`](https://docs.docker.com/engine/reference/commandline/network_create/). Specify a boolean value, as shown below. Defaults to `false`.
-
-- Internal: true
-
 ## Container Options
 
 This optional section can be used to apply additional restrictions to containers

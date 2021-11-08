@@ -59,9 +59,7 @@ type HostInfo struct {
 	Target string `json:"target,omitempty"`
 }
 
-type NetworkOptions struct {
-	InternalNetwork bool `json:"internal_network" yaml:"internal_network"`
-}
+type NetworkOptions struct{}
 
 type ContainerOptions struct {
 	Init            bool     `json:"init,omitempty"            yaml:"init"`

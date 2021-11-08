@@ -43,8 +43,6 @@ pivot points in a Linux environment.
 ## Challenge Options
 
 ```yaml
-internal_network: true
-
 init: true
 cpus: 0.5
 pidslimit: 5

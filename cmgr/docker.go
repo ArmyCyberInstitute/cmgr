@@ -601,8 +601,7 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 
 func (m *Manager) startNetwork(instance *InstanceMetadata, opts NetworkOptions) error {
 	netSpec := types.NetworkCreate{
-		Driver:   "bridge",
-		Internal: opts.InternalNetwork,
+		Driver: "bridge",
 	}
 	netname := instance.getNetworkName()
 	_, err := m.cli.NetworkCreate(m.ctx, netname, netSpec)
