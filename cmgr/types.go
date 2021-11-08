@@ -1,11 +1,8 @@
 package cmgr
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"math/rand"
-	"strings"
 
 	"github.com/docker/docker/client"
 	"github.com/jmoiron/sqlx"
@@ -77,35 +74,7 @@ type ContainerOptions struct {
 type ChallengeOptions struct {
 	NetworkOptions   `yaml:",inline"`
 	ContainerOptions `yaml:",inline"`
-	Overrides        ContainerOptionsWrapper `json:"overrides,omitempty" yaml:"overrides"`
-}
-
-// Handle either top-level container options (applies to all containers) or
-// a per-host map for multi-container challenges
-type ContainerOptionsWrapper map[string]ContainerOptions
-
-func (c *ContainerOptionsWrapper) UnmarshalJSON(b []byte) error {
-	if len(b) == 0 {
-		return nil
-	}
-	o := ContainerOptions{}
-	m := make(map[string]ContainerOptions)
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	err := dec.Decode(&o)
-	if err == nil {
-		m[""] = o
-	} else {
-		if err := json.Unmarshal(b, &m); err != nil {
-			return err
-		}
-	}
-	l := make(map[string]ContainerOptions)
-	for k, v := range m {
-		l[strings.ToLower(k)] = v
-	}
-	*c = l
-	return nil
+	Overrides        map[string]ContainerOptions `json:"overrides,omitempty" yaml:"overrides"`
 }
 
 type ChallengeId string

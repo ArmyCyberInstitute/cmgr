@@ -102,7 +102,7 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 			break
 		}
 		if metadata.ChallengeOptions.Overrides == nil {
-			metadata.ChallengeOptions.Overrides = make(ContainerOptionsWrapper)
+			metadata.ChallengeOptions.Overrides = make(map[string]ContainerOptions)
 		}
 		metadata.ChallengeOptions.Overrides[dbOpts.Host] = cOpts
 	}
