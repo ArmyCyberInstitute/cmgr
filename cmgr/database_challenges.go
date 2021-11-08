@@ -86,9 +86,9 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 
 	networkOptions := new(NetworkOptions)
 	if err == nil {
-		err = txn.Get(networkOptions, "SELECT internal FROM networkOptions WHERE challenge=?", challenge)
+		err = txn.Get(networkOptions, "SELECT internalnetwork FROM networkOptions WHERE challenge=?", challenge)
 	}
-	metadata.NetworkOptions = *networkOptions
+	metadata.ChallengeOptions.NetworkOptions = *networkOptions
 
 	containerOptions := new([]dbContainerOptions)
 	if err == nil {
@@ -99,11 +99,12 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 		if err != nil {
 			break
 		}
-		if metadata.ContainerOptions == nil {
-			metadata.ContainerOptions = make(ContainerOptionsWrapper)
+		if metadata.ChallengeOptions.Overrides == nil {
+			metadata.ChallengeOptions.Overrides = make(ContainerOptionsWrapper)
 		}
-		metadata.ContainerOptions[dbOpts.Host] = cOpts
+		metadata.ChallengeOptions.Overrides[dbOpts.Host] = cOpts
 	}
+	metadata.ChallengeOptions.ContainerOptions = metadata.ChallengeOptions.Overrides[""]
 
 	if err == nil {
 		err = txn.Commit()
@@ -242,10 +243,10 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 			continue
 		}
 
-		m.log.debugf("%s: %v", metadata.Id, metadata.NetworkOptions)
-		_, err = txn.Exec("INSERT INTO networkOptions(challenge, internal) VALUES (?, ?);",
+		m.log.debugf("%s: %v", metadata.Id, metadata.ChallengeOptions.NetworkOptions)
+		_, err = txn.Exec("INSERT INTO networkOptions(challenge, internalnetwork) VALUES (?, ?);",
 			metadata.Id,
-			metadata.NetworkOptions.Internal)
+			metadata.ChallengeOptions.NetworkOptions.InternalNetwork)
 		if err != nil {
 			m.log.error(err)
 			err = txn.Rollback()
@@ -258,7 +259,7 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 			continue
 		}
 
-		for host, opts := range metadata.ContainerOptions {
+		for host, opts := range metadata.ChallengeOptions.Overrides {
 			host_str := ""
 			if host != "" {
 				host_str = fmt.Sprintf(" (%s)", host)
@@ -498,9 +499,9 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			continue
 		}
 
-		_, err = txn.Exec("INSERT INTO networkOptions(challenge, internal) VALUES (?, ?);",
+		_, err = txn.Exec("INSERT INTO networkOptions(challenge, internalnetwork) VALUES (?, ?);",
 			metadata.Id,
-			metadata.NetworkOptions.Internal)
+			metadata.ChallengeOptions.NetworkOptions.InternalNetwork)
 		if err != nil {
 			m.log.error(err)
 			err = txn.Rollback()
@@ -525,7 +526,7 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			continue
 		}
 
-		for host, opts := range metadata.ContainerOptions {
+		for host, opts := range metadata.ChallengeOptions.Overrides {
 			dbOpts, err := opts.toDbContainerOptions()
 			if err != nil {
 				m.log.error(err)
@@ -629,10 +630,10 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 							err = m.stopNetwork(instance)
 						}
 						if err == nil {
-							err = m.startNetwork(instance, cMeta.NetworkOptions)
+							err = m.startNetwork(instance, cMeta.ChallengeOptions.NetworkOptions)
 						}
 						if err == nil {
-							err = m.startContainers(build, instance, cMeta.ContainerOptions)
+							err = m.startContainers(build, instance, cMeta.ChallengeOptions.Overrides)
 						}
 						if err != nil {
 							errs = append(errs, err)

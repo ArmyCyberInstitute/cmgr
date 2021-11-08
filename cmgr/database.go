@@ -146,7 +146,7 @@ const schemaQuery string = `
 
 	CREATE TABLE IF NOT EXISTS networkOptions (
 		challenge INTEGER NOT NULL,
-		internal INTEGER NOT NULL CHECK(internal == 0 OR internal == 1),
+		internalnetwork INTEGER NOT NULL CHECK(internalnetwork == 0 OR internalnetwork == 1),
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE CASCADE ON DELETE CASCADE
 	);
@@ -251,10 +251,9 @@ func (m *Manager) safeToRefresh(new *ChallengeMetadata) bool {
 	}
 
 	sameType := old.ChallengeType == new.ChallengeType
-	sameNetworkOptions := reflect.DeepEqual(old.NetworkOptions, new.NetworkOptions)
-	sameContainerOptions := reflect.DeepEqual(old.ContainerOptions, new.ContainerOptions)
+	sameOptions := reflect.DeepEqual(old.ChallengeOptions, new.ChallengeOptions)
 
-	safe := sameType && sameNetworkOptions && sameContainerOptions
+	safe := sameType && sameOptions
 
 	return safe
 }

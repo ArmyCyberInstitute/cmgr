@@ -45,6 +45,12 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 	info, err = os.Stat(solverPath)
 	md.SolveScript = err == nil && info.IsDir()
 
+	if md.ChallengeOptions.Overrides == nil {
+		md.ChallengeOptions.Overrides = make(map[string]ContainerOptions)
+	}
+	md.ChallengeOptions.Overrides[""] = md.ChallengeOptions.ContainerOptions
+	m.log.debugf("challenge options: %#v", md.ChallengeOptions)
+
 	err = m.processDockerfile(md)
 	if err != nil {
 		return md, err
@@ -287,7 +293,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	}
 
 	// Validate ContainerOptions
-	for host, opts := range md.ContainerOptions {
+	for host, opts := range md.ChallengeOptions.Overrides {
 		hostStr := ""
 		if host != "" {
 			hostStr = fmt.Sprintf("host %s: ", host)
@@ -599,7 +605,7 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 	}
 
 	// Validate ContainerOptions hosts
-	for opt_host := range md.ContainerOptions {
+	for opt_host := range md.ChallengeOptions.Overrides {
 		if opt_host == "" {
 			continue
 		}

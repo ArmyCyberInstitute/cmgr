@@ -60,20 +60,26 @@ type HostInfo struct {
 }
 
 type NetworkOptions struct {
-	Internal bool `json:"internal"`
+	InternalNetwork bool `json:"internal_network" yaml:"internal_network"`
 }
 
 type ContainerOptions struct {
-	Init            bool     `json:"init,omitempty"`
-	Cpus            string   `json:"cpus,omitempty"`
-	Memory          string   `json:"memory,omitempty"`
-	Ulimits         []string `json:"ulimits,omitempty"`
-	PidsLimit       int64    `json:"pidslimit,omitempty"`
-	ReadonlyRootfs  bool     `json:"readonlyrootfs,omitempty"`
-	DroppedCaps     []string `json:"droppedcaps,omitempty"`
-	NoNewPrivileges bool     `json:"nonewprivileges,omitempty"`
-	DiskQuota       string   `json:"diskquota,omitempty"`
-	CgroupParent    string   `json:"cgroupparent,omitempty"`
+	Init            bool     `json:"init,omitempty"            yaml:"init"`
+	Cpus            string   `json:"cpus,omitempty"            yaml:"cpus"`
+	Memory          string   `json:"memory,omitempty"          yaml:"memory"`
+	Ulimits         []string `json:"ulimits,omitempty"         yaml:"ulimits"`
+	PidsLimit       int64    `json:"pidslimit,omitempty"       yaml:"pidslimit"`
+	ReadonlyRootfs  bool     `json:"readonlyrootfs,omitempty"  yaml:"readonlyrootfs"`
+	DroppedCaps     []string `json:"droppedcaps,omitempty"     yaml:"droppedcaps"`
+	NoNewPrivileges bool     `json:"nonewprivileges,omitempty" yaml:"nonewprivileges"`
+	DiskQuota       string   `json:"diskquota,omitempty"       yaml:"diskquota"`
+	CgroupParent    string   `json:"cgroupparent,omitempty"    yaml:"cgroupparent"`
+}
+
+type ChallengeOptions struct {
+	NetworkOptions   `yaml:",inline"`
+	ContainerOptions `yaml:",inline"`
+	Overrides        ContainerOptionsWrapper `json:"overrides,omitempty" yaml:"overrides"`
 }
 
 // Handle either top-level container options (applies to all containers) or
@@ -106,26 +112,25 @@ func (c *ContainerOptionsWrapper) UnmarshalJSON(b []byte) error {
 
 type ChallengeId string
 type ChallengeMetadata struct {
-	Id               ChallengeId             `json:"id"`
-	Name             string                  `json:"name,omitempty"`
-	Namespace        string                  `json:"namespace"`
-	ChallengeType    string                  `json:"challenge_type"`
-	Description      string                  `json:"description,omitempty"`
-	Details          string                  `json:"details,omitempty"`
-	Hints            []string                `json:"hints,omitempty"`
-	SourceChecksum   uint32                  `json:"source_checksum"`
-	MetadataChecksum uint32                  `json:"metadata_checksum`
-	Path             string                  `json:"path"`
-	Templatable      bool                    `json:"templatable,omitempty"`
-	PortMap          map[string]PortInfo     `json:"port_map,omitempty"`
-	Hosts            []HostInfo              `json:"hosts"`
-	MaxUsers         int                     `json:"max_users,omitempty"`
-	Category         string                  `json:"category,omitempty"`
-	Points           int                     `json:"points,omitempty"`
-	Tags             []string                `json:"tags,omitempty"`
-	Attributes       map[string]string       `json:"attributes,omitempty"`
-	NetworkOptions   NetworkOptions          `json:"network_options,omitempty"`
-	ContainerOptions ContainerOptionsWrapper `json:"container_options,omitempty"`
+	Id               ChallengeId         `json:"id"`
+	Name             string              `json:"name,omitempty"`
+	Namespace        string              `json:"namespace"`
+	ChallengeType    string              `json:"challenge_type"`
+	Description      string              `json:"description,omitempty"`
+	Details          string              `json:"details,omitempty"`
+	Hints            []string            `json:"hints,omitempty"`
+	SourceChecksum   uint32              `json:"source_checksum"`
+	MetadataChecksum uint32              `json:"metadata_checksum`
+	Path             string              `json:"path"`
+	Templatable      bool                `json:"templatable,omitempty"`
+	PortMap          map[string]PortInfo `json:"port_map,omitempty"`
+	Hosts            []HostInfo          `json:"hosts"`
+	MaxUsers         int                 `json:"max_users,omitempty"`
+	Category         string              `json:"category,omitempty"`
+	Points           int                 `json:"points,omitempty"`
+	Tags             []string            `json:"tags,omitempty"`
+	Attributes       map[string]string   `json:"attributes,omitempty"`
+	ChallengeOptions ChallengeOptions    `json:"challenge_options,omitempty"`
 
 	SolveScript bool             `json:"solve_script,omitempty"`
 	Builds      []*BuildMetadata `json:"builds,omitempty"`
@@ -176,11 +181,11 @@ type InstanceMetadata struct {
 }
 
 type Schema struct {
-	Name       string                             `json:"name" yaml:"name"`
+	Name       string                             `json:"name"        yaml:"name"`
 	FlagFormat string                             `json:"flag_format" yaml:"flag_format"`
-	Challenges map[ChallengeId]BuildSpecification `json:"challenges" yaml:"challenges"`
+	Challenges map[ChallengeId]BuildSpecification `json:"challenges"  yaml:"challenges"`
 }
 type BuildSpecification struct {
-	Seeds         []int `json:"seeds" yaml:"seeds"`
+	Seeds         []int `json:"seeds"          yaml:"seeds"`
 	InstanceCount int   `json:"instance_count" yaml:"instance_count"`
 }

@@ -40,6 +40,22 @@ By the end of this challenge, competitors should have a basic understanding of
 how to use package managers for privilege escalation and where to look for easy
 pivot points in a Linux environment.
 
+## Challenge Options
+
+```yaml
+internal_network: true
+
+init: true
+cpus: 0.5
+pidslimit: 5
+
+overrides:
+    work:
+        pidslimit: 10
+    randomDnsName:
+        cpus: 0.25
+```
+
 ## Tags
 
 - privesc
