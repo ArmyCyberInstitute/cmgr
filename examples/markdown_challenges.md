@@ -92,9 +92,8 @@ containers.
   [here](https://docs.docker.com/engine/reference/commandline/run/#for-nproc-usage) (use the
   `pidslimit` option instead). This is equivalent to passing
   [`--ulimit`](https://docs.docker.com/engine/reference/commandline/run/#set-ulimits-in-container---ulimit)
-  options to `docker run`. **However**, unlike in the Docker CLI, separate soft and hard limits are
-  not supported. Specify a list of limit names and hard limits, as shown in the example below. Unset
-  by default.
+  options to `docker run`. Specify a list of limit names and limits, as shown in the example below.
+  Unset by default.
 
 - The `pidslimit` option specifies the maximum number of simultaneous processes inside the
   container. This is useful in order to prevent forkbombs from crashing the Docker host. This is
@@ -155,7 +154,7 @@ init: true
 cpus: 0.5
 memory: 512m
 ulimits:
-    - nofile=512
+    - nofile=512:1024
     - stack=4096
     - fsize=2048
 pidslimit: 5
