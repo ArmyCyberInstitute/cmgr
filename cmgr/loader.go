@@ -302,7 +302,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		if opts.Cpus != "" {
 			_, err := dockeropts.ParseCPUs(opts.Cpus)
 			if err != nil {
-				lastErr = fmt.Errorf("%serror parsing CPUs container option: %v", hostStr, err)
+				lastErr = fmt.Errorf("%serror parsing cpus container option: %v", hostStr, err)
 				m.log.error(lastErr)
 			}
 		}
@@ -318,18 +318,18 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		for _, ulimit := range opts.Ulimits {
 			limit, err := units.ParseUlimit(ulimit)
 			if err != nil {
-				lastErr = fmt.Errorf("%serror parsing ulimit container option: %v", hostStr, err)
+				lastErr = fmt.Errorf("%serror parsing ulimits container option: %v", hostStr, err)
 				m.log.error(lastErr)
 			}
 			// See https://docs.docker.com/engine/reference/commandline/run/#set-ulimits-in-container---ulimit
 			if limit.Name == "nproc" {
-				lastErr = fmt.Errorf("%snproc ulimits are not supported, use the PidsLimit container option instead", hostStr)
+				lastErr = fmt.Errorf("%snproc ulimits are not supported, use the pidslimit container option instead", hostStr)
 				m.log.error(lastErr)
 			}
 		}
 
 		if opts.PidsLimit < -1 {
-			lastErr = fmt.Errorf("%sinvalid PidsLimit container option (must be >= -1)", hostStr)
+			lastErr = fmt.Errorf("%sinvalid pidslimit container option (must be >= -1)", hostStr)
 			m.log.error(lastErr)
 		}
 

@@ -67,7 +67,7 @@ with `sysctl`.  Some programs (e.g., `docker`) will need to be restarted after
 adjusting the kernel parameter.
 
 - *CMGR\_ENABLE\_DISK\_QUOTAS*: enables the [disk
-  quota](examples/markdown_challenges.md#container-options) container option when set. Disk quotas
+  quota](examples/markdown_challenges.md#challenge-options) container option when set. Disk quotas
   are only functional when using the `overlay2` Docker storage driver and
   [pquota-enabled](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/storage_administration_guide/xfsquota)
   XFS backing storage. Otherwise, the creation of containers with disk quotas will fail at runtime.
