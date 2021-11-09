@@ -44,14 +44,14 @@ pivot points in a Linux environment.
 
 ```yaml
 init: true
-cpus: 0.5
-pidslimit: 5
+cpus: 0.25
+pidslimit: 50
 
 overrides:
     work:
-        pidslimit: 10
-    randomDnsName:
-        cpus: 0.25
+        init: true
+        cpus: 0.5
+        pidslimit: 50
 ```
 
 ## Tags
