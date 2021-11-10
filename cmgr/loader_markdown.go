@@ -45,7 +45,6 @@ func parseBool(s string) (bool, error) {
 var sectionRe *regexp.Regexp = regexp.MustCompile(`^##\s*(.+)`)
 var kvLineRe *regexp.Regexp = regexp.MustCompile(`^\s*-\s*(\w+):\s*(.*)`)
 var tagLineRe *regexp.Regexp = regexp.MustCompile(`^\s*-\s*(\w+)\s*$`)
-var optionLineRe *regexp.Regexp = regexp.MustCompile(`^\s*-\s*([\w=]+)\s*$`)
 
 func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*ChallengeMetadata, error) {
 	m.log.debugf("Found challenge Markdown at %s", path)
@@ -156,21 +155,20 @@ func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*Challen
 func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, lines []string, startIdx, endIdx int) error {
 	var err error
 	m.log.debugf("processing markdown: section='%s' start=%d end=%d", section, startIdx, endIdx)
-	sectionLower := strings.ToLower(section)
-	switch {
-	case sectionLower == "description":
+	switch strings.ToLower(section) {
+	case "description":
 		text, tmpErr := m.parseMarkdown(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Description = text
 		err = tmpErr
-	case sectionLower == "details":
+	case "details":
 		text, tmpErr := m.parseMarkdown(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Details = text
 		err = tmpErr
-	case sectionLower == "hints":
+	case "hints":
 		hints, tmpErr := m.parseHints(lines[startIdx:endIdx])
 		md.Hints = hints
 		err = tmpErr
-	case sectionLower == "tags":
+	case "tags":
 		md.Tags = []string{}
 		for i, rawLine := range lines[startIdx:endIdx] {
 			line := strings.TrimSpace(rawLine)
@@ -187,7 +185,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			md.Tags = append(md.Tags, match[1])
 		}
-	case sectionLower == "attributes":
+	case "attributes":
 		for i := startIdx; i < endIdx; i++ {
 			line := strings.TrimSpace(lines[i])
 			if line == "" {
@@ -203,7 +201,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			md.Attributes[match[1]] = match[2]
 		}
-	case strings.HasPrefix(sectionLower, "challenge options"):
+	case "challenge options":
 		yamlStart := 0
 		yamlEnd := 0
 		for i := startIdx; i < endIdx; i++ {
