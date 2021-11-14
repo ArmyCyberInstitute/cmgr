@@ -18,6 +18,7 @@ const (
 	LOGGING_ENV        string = "CMGR_LOGGING"
 	IFACE_ENV          string = "CMGR_INTERFACE"
 	PORTS_ENV          string = "CMGR_PORTS"
+	DISK_QUOTA_ENV     string = "CMGR_ENABLE_DISK_QUOTAS"
 
 	DYNAMIC_INSTANCES int = -1
 	LOCKED            int = -2
@@ -55,6 +56,27 @@ type HostInfo struct {
 	Target string `json:"target,omitempty"`
 }
 
+type NetworkOptions struct{}
+
+type ContainerOptions struct {
+	Init            bool     `json:"init,omitempty"            yaml:"init"`
+	Cpus            string   `json:"cpus,omitempty"            yaml:"cpus"`
+	Memory          string   `json:"memory,omitempty"          yaml:"memory"`
+	Ulimits         []string `json:"ulimits,omitempty"         yaml:"ulimits"`
+	PidsLimit       int64    `json:"pidslimit,omitempty"       yaml:"pidslimit"`
+	ReadonlyRootfs  bool     `json:"readonlyrootfs,omitempty"  yaml:"readonlyrootfs"`
+	DroppedCaps     []string `json:"droppedcaps,omitempty"     yaml:"droppedcaps"`
+	NoNewPrivileges bool     `json:"nonewprivileges,omitempty" yaml:"nonewprivileges"`
+	DiskQuota       string   `json:"diskquota,omitempty"       yaml:"diskquota"`
+	CgroupParent    string   `json:"cgroupparent,omitempty"    yaml:"cgroupparent"`
+}
+
+type ChallengeOptions struct {
+	NetworkOptions   `yaml:",inline"`
+	ContainerOptions `yaml:",inline"`
+	Overrides        map[string]ContainerOptions `json:"overrides,omitempty" yaml:"overrides"`
+}
+
 type ChallengeId string
 type ChallengeMetadata struct {
 	Id               ChallengeId         `json:"id"`
@@ -75,6 +97,7 @@ type ChallengeMetadata struct {
 	Points           int                 `json:"points,omitempty"`
 	Tags             []string            `json:"tags,omitempty"`
 	Attributes       map[string]string   `json:"attributes,omitempty"`
+	ChallengeOptions ChallengeOptions    `json:"challenge_options,omitempty"`
 
 	SolveScript bool             `json:"solve_script,omitempty"`
 	Builds      []*BuildMetadata `json:"builds,omitempty"`
@@ -125,11 +148,11 @@ type InstanceMetadata struct {
 }
 
 type Schema struct {
-	Name       string                             `json:"name" yaml:"name"`
+	Name       string                             `json:"name"        yaml:"name"`
 	FlagFormat string                             `json:"flag_format" yaml:"flag_format"`
-	Challenges map[ChallengeId]BuildSpecification `json:"challenges" yaml:"challenges"`
+	Challenges map[ChallengeId]BuildSpecification `json:"challenges"  yaml:"challenges"`
 }
 type BuildSpecification struct {
-	Seeds         []int `json:"seeds" yaml:"seeds"`
+	Seeds         []int `json:"seeds"          yaml:"seeds"`
 	InstanceCount int   `json:"instance_count" yaml:"instance_count"`
 }

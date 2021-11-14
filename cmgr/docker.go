@@ -21,11 +21,14 @@ import (
 	"sync"
 	"time"
 
+	dockeropts "github.com/docker/cli/opts"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	"github.com/docker/go-units"
 )
 
 //go:embed dockerfiles/seccomp.json
@@ -596,7 +599,7 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 	return err
 }
 
-func (m *Manager) startNetwork(instance *InstanceMetadata) error {
+func (m *Manager) startNetwork(instance *InstanceMetadata, opts NetworkOptions) error {
 	netSpec := types.NetworkCreate{
 		Driver: "bridge",
 	}
@@ -628,7 +631,7 @@ func (m *Manager) stopNetwork(instance *InstanceMetadata) error {
 // with the SQLite database.
 var portLock sync.Mutex
 
-func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetadata) error {
+func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetadata, opts map[string]ContainerOptions) error {
 	revPortMap, err := m.getReversePortMap(build.Challenge)
 	if err != nil {
 		return err
@@ -670,6 +673,66 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			RestartPolicy: container.RestartPolicy{Name: "always"},
 		}
 
+		hasContainerOpts := false
+		cOpts, hasContainerOpts := opts[""]
+		if hostCOpts, ok := opts[strings.ToLower(image.Host)]; ok {
+			cOpts = hostCOpts
+			hasContainerOpts = true
+		}
+		if image.Host == "builder" {
+			hasContainerOpts = false
+		}
+		if hasContainerOpts {
+			hConfig.Init = &cOpts.Init
+			if cOpts.Cpus != "" {
+				nanoCpus, err := dockeropts.ParseCPUs(cOpts.Cpus)
+				if err != nil {
+					return err
+				}
+				hConfig.NanoCPUs = nanoCpus
+			}
+			if cOpts.Memory != "" {
+				memoryBytes, err := units.RAMInBytes(cOpts.Memory)
+				if err != nil {
+					return err
+				}
+				hConfig.Memory = memoryBytes
+			}
+			if len(cOpts.Ulimits) > 0 {
+				limits := make([]*units.Ulimit, len(cOpts.Ulimits))
+				for i, limitStr := range cOpts.Ulimits {
+					limit, err := units.ParseUlimit(limitStr)
+					if err != nil {
+						return err
+					}
+					limits[i] = limit
+				}
+				hConfig.Ulimits = limits
+			}
+			if cOpts.PidsLimit != 0 {
+				hConfig.PidsLimit = &cOpts.PidsLimit
+			}
+			hConfig.ReadonlyRootfs = cOpts.ReadonlyRootfs
+			hConfig.CapDrop = (strslice.StrSlice)(cOpts.DroppedCaps)
+			if cOpts.NoNewPrivileges {
+				hConfig.SecurityOpt = append(hConfig.SecurityOpt, "no-new-privileges:true")
+			}
+			if cOpts.DiskQuota != "" {
+				_, quotas_enabled := os.LookupEnv(DISK_QUOTA_ENV)
+				if quotas_enabled {
+					var storageOpt = map[string]string{
+						"size": cOpts.DiskQuota,
+					}
+					hConfig.StorageOpt = storageOpt
+				} else {
+					m.log.warnf("disk quota for %s container '%s' ignored (disk quotas are not enabled)", build.Challenge, image.Host)
+				}
+			}
+			if cOpts.CgroupParent != "" {
+				hConfig.CgroupParent = cOpts.CgroupParent
+			}
+		}
+
 		hostInfo, err := m.cli.Info(m.ctx)
 		if err != nil {
 			return err
@@ -677,7 +740,7 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 
 		if hostInfo.OSType == "linux" {
 			m.log.debug("inserting custom seccomp profile")
-			hConfig.SecurityOpt = []string{"seccomp:" + seccompPolicy}
+			hConfig.SecurityOpt = append(hConfig.SecurityOpt, "seccomp:"+seccompPolicy)
 		}
 
 		nConfig := network.NetworkingConfig{

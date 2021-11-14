@@ -66,6 +66,13 @@ can be enumerated with `cat /proc/sys/net/ipv4/ip_local_port_range` and adjusted
 with `sysctl`.  Some programs (e.g., `docker`) will need to be restarted after
 adjusting the kernel parameter.
 
+- *CMGR\_ENABLE\_DISK\_QUOTAS*: enables the [disk
+  quota](examples/markdown_challenges.md#challenge-options) container option when set. Disk quotas
+  are only functional when using the `overlay2` Docker storage driver and
+  [pquota-enabled](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/storage_administration_guide/xfsquota)
+  XFS backing storage. Otherwise, the creation of containers with disk quotas will fail at runtime.
+  When unset, any specified quotas are ignored.
+
 Additionally, we rely on the Docker SDK's ability to self-configure base off
 environment variables.  The documentation for those variables can be found at
 [https://docs.docker.com/engine/reference/commandline/cli/](https://docs.docker.com/engine/reference/commandline/cli/).

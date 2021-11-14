@@ -228,12 +228,17 @@ func (m *Manager) newInstance(build *BuildMetadata) (InstanceId, error) {
 		return 0, err
 	}
 
-	err = m.startNetwork(iMeta)
+	cMeta, err := m.GetChallengeMetadata(build.Challenge)
 	if err != nil {
 		return 0, err
 	}
 
-	err = m.startContainers(build, iMeta)
+	err = m.startNetwork(iMeta, cMeta.ChallengeOptions.NetworkOptions)
+	if err != nil {
+		return 0, err
+	}
+
+	err = m.startContainers(build, iMeta, cMeta.ChallengeOptions.Overrides)
 	if err != nil {
 		// It is possible we are in a partially deployed state.  Make sure
 		// we are torn down, but ignore the returned error.

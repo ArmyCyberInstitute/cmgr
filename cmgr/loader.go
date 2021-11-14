@@ -10,6 +10,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	dockeropts "github.com/docker/cli/opts"
+	"github.com/docker/go-units"
 )
 
 func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetadata, error) {
@@ -41,6 +44,12 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 	solverPath := filepath.Join(md.Path, "solver")
 	info, err = os.Stat(solverPath)
 	md.SolveScript = err == nil && info.IsDir()
+
+	if md.ChallengeOptions.Overrides == nil {
+		md.ChallengeOptions.Overrides = make(map[string]ContainerOptions)
+	}
+	md.ChallengeOptions.Overrides[""] = md.ChallengeOptions.ContainerOptions
+	m.log.debugf("challenge options: %#v", md.ChallengeOptions)
 
 	err = m.processDockerfile(md)
 	if err != nil {
@@ -283,6 +292,82 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		}
 	}
 
+	// Validate ContainerOptions
+	for host, opts := range md.ChallengeOptions.Overrides {
+		hostStr := ""
+		if host != "" {
+			hostStr = fmt.Sprintf("host %s: ", host)
+		}
+
+		if opts.Cpus != "" {
+			_, err := dockeropts.ParseCPUs(opts.Cpus)
+			if err != nil {
+				lastErr = fmt.Errorf("%serror parsing cpus container option: %v", hostStr, err)
+				m.log.error(lastErr)
+			}
+		}
+
+		if opts.Memory != "" {
+			_, err = units.RAMInBytes(opts.Memory)
+			if err != nil {
+				lastErr = fmt.Errorf("%serror parsing memory container option: %v", hostStr, err)
+				m.log.error(lastErr)
+			}
+		}
+
+		for _, ulimit := range opts.Ulimits {
+			limit, err := units.ParseUlimit(ulimit)
+			if err != nil {
+				lastErr = fmt.Errorf("%serror parsing ulimits container option: %v", hostStr, err)
+				m.log.error(lastErr)
+			}
+			// See https://docs.docker.com/engine/reference/commandline/run/#set-ulimits-in-container---ulimit
+			if limit.Name == "nproc" {
+				lastErr = fmt.Errorf("%snproc ulimits are not supported, use the pidslimit container option instead", hostStr)
+				m.log.error(lastErr)
+			}
+		}
+
+		if opts.PidsLimit < -1 {
+			lastErr = fmt.Errorf("%sinvalid pidslimit container option (must be >= -1)", hostStr)
+			m.log.error(lastErr)
+		}
+
+		droppable_capabilities := map[string]struct{}{
+			"CAP_ALL":              {},
+			"CAP_AUDIT_WRITE":      {},
+			"CAP_CHOWN":            {},
+			"CAP_DAC_OVERRIDE":     {},
+			"CAP_FOWNER":           {},
+			"CAP_FSETID":           {},
+			"CAP_KILL":             {},
+			"CAP_MKNOD":            {},
+			"CAP_NET_BIND_SERVICE": {},
+			"CAP_NET_RAW":          {},
+			"CAP_SETFCAP":          {},
+			"CAP_SETGID":           {},
+			"CAP_SETPCAP":          {},
+			"CAP_SETUID":           {},
+			"CAP_SYS_CHROOT":       {},
+		}
+		for _, cap := range opts.DroppedCaps {
+			if _, ok := droppable_capabilities[cap]; !ok {
+				if _, ok = droppable_capabilities[fmt.Sprintf("CAP_%s", cap)]; !ok {
+					lastErr = fmt.Errorf("%sinvalid DroppedCaps container option: %s", hostStr, cap)
+					m.log.error(lastErr)
+				}
+			}
+		}
+
+		if opts.DiskQuota != "" {
+			_, err := units.RAMInBytes(opts.DiskQuota) // Despite its name, Docker uses this method to parse the size= storage option.
+			if err != nil {
+				lastErr = fmt.Errorf("%serror parsing DiskQuota container option: %v", hostStr, err)
+				m.log.error(lastErr)
+			}
+		}
+	}
+
 	return lastErr
 }
 
@@ -517,6 +602,25 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 		}
 
 		md.PortMap[portName] = PortInfo{host.Name, port}
+	}
+
+	// Validate ContainerOptions hosts
+	for opt_host := range md.ChallengeOptions.Overrides {
+		if opt_host == "" {
+			continue
+		}
+		found := false
+		for _, host := range hostNames {
+			if host.Name == opt_host {
+				found = true
+				break
+			}
+		}
+		if !found {
+			err = fmt.Errorf("container options are specified for host %s, which is not present in Dockerfile", opt_host)
+			m.log.error(err)
+			return err
+		}
 	}
 
 	return err

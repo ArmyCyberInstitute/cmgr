@@ -1,6 +1,7 @@
 package cmgr
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -82,6 +83,30 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 	for _, attr := range attributes {
 		metadata.Attributes[attr.Key] = attr.Value
 	}
+
+	networkOptions := new(NetworkOptions)
+	// Note: there are currently no network-level challenge options, but they will be loaded here if added in the future.
+
+	// if err == nil {
+	// 	err = txn.Get(networkOptions, "SELECT '' FROM networkOptions WHERE challenge=?", challenge)
+	// }
+	metadata.ChallengeOptions.NetworkOptions = *networkOptions
+
+	containerOptions := new([]dbContainerOptions)
+	if err == nil {
+		err = txn.Select(containerOptions, "SELECT host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, diskquota, cgroupparent FROM containerOptions WHERE challenge=?", challenge)
+	}
+	for _, dbOpts := range *containerOptions {
+		cOpts, err := newFromDbContainerOptions(dbOpts)
+		if err != nil {
+			break
+		}
+		if metadata.ChallengeOptions.Overrides == nil {
+			metadata.ChallengeOptions.Overrides = make(map[string]ContainerOptions)
+		}
+		metadata.ChallengeOptions.Overrides[dbOpts.Host] = cOpts
+	}
+	metadata.ChallengeOptions.ContainerOptions = metadata.ChallengeOptions.Overrides[""]
 
 	if err == nil {
 		err = txn.Commit()
@@ -206,6 +231,67 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 				v.Host,
 				v.Port)
 
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				break
+			}
+		}
+		if err != nil {
+			continue
+		}
+
+		// Note: there are currently no network-level challenge options, but they will be saved here if added in the future.
+
+		// m.log.debugf("%s: %v", metadata.Id, metadata.ChallengeOptions.NetworkOptions)
+		// _, err = txn.Exec("INSERT INTO networkOptions(challenge) VALUES (?);",
+		// 	metadata.Id,
+		// )
+		// if err != nil {
+		// 	m.log.error(err)
+		// 	err = txn.Rollback()
+		// 	if err != nil { // If rollback fails, we're in trouble.
+		// 		m.log.error(err)
+		// 		return append(errs, err)
+		// 	}
+		// }
+		// if err != nil {
+		// 	continue
+		// }
+
+		for host, opts := range metadata.ChallengeOptions.Overrides {
+			host_str := ""
+			if host != "" {
+				host_str = fmt.Sprintf(" (%s)", host)
+			}
+			dbOpts, err := opts.toDbContainerOptions()
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				break
+			}
+			m.log.debugf("%s%s: %v", metadata.Id, host_str, dbOpts)
+			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, diskquota, cgroupparent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+				metadata.Id,
+				host,
+				dbOpts.Init,
+				dbOpts.Cpus,
+				dbOpts.Memory,
+				dbOpts.Ulimits,
+				dbOpts.PidsLimit,
+				dbOpts.ReadonlyRootfs,
+				dbOpts.DroppedCaps,
+				dbOpts.NoNewPrivileges,
+				dbOpts.DiskQuota,
+				dbOpts.CgroupParent)
 			if err != nil {
 				m.log.error(err)
 				err = txn.Rollback()
@@ -405,6 +491,84 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			continue
 		}
 
+		// Note: there are currently no network-level challenge options, but they would be updated here if added in the future.
+
+		// _, err = txn.Exec("DELETE FROM networkOptions WHERE challenge = ?;", metadata.Id)
+
+		// if err != nil {
+		// 	m.log.error(err)
+		// 	err = txn.Rollback()
+		// 	if err != nil { // If rollback fails, we're in trouble.
+		// 		m.log.error(err)
+		// 		return append(errs, err)
+		// 	}
+		// 	continue
+		// }
+
+		// _, err = txn.Exec("INSERT INTO networkOptions(challenge) VALUES (?);",
+		// 	metadata.Id)
+		// if err != nil {
+		// 	m.log.error(err)
+		// 	err = txn.Rollback()
+		// 	if err != nil { // If rollback fails, we're in trouble.
+		// 		m.log.error(err)
+		// 		return append(errs, err)
+		// 	}
+		// }
+		// if err != nil {
+		// 	continue
+		// }
+
+		_, err = txn.Exec("DELETE FROM containerOptions WHERE challenge = ?;", metadata.Id)
+
+		if err != nil {
+			m.log.error(err)
+			err = txn.Rollback()
+			if err != nil { // If rollback fails, we're in trouble.
+				m.log.error(err)
+				return append(errs, err)
+			}
+			continue
+		}
+
+		for host, opts := range metadata.ChallengeOptions.Overrides {
+			dbOpts, err := opts.toDbContainerOptions()
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				break
+			}
+			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, diskquota, cgroupparent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+				metadata.Id,
+				host,
+				dbOpts.Init,
+				dbOpts.Cpus,
+				dbOpts.Memory,
+				dbOpts.Ulimits,
+				dbOpts.PidsLimit,
+				dbOpts.ReadonlyRootfs,
+				dbOpts.DroppedCaps,
+				dbOpts.NoNewPrivileges,
+				dbOpts.DiskQuota,
+				dbOpts.CgroupParent)
+			if err != nil {
+				m.log.error(err)
+				err = txn.Rollback()
+				if err != nil { // If rollback fails, we're in trouble.
+					m.log.error(err)
+					return append(errs, err)
+				}
+				break
+			}
+		}
+		if err != nil {
+			continue
+		}
+
 		if err := txn.Commit(); err != nil { // It's undocumented what this means...
 			m.log.error(err)
 			errs = append(errs, err)
@@ -435,6 +599,11 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 						errs = append(errs, err)
 						continue
 					}
+					cMeta, err := m.lookupChallengeMetadata(build.Challenge)
+					if err != nil {
+						errs = append(errs, err)
+						continue
+					}
 
 					// Resetting the flag signals to rebuild the Dockerfile
 					build.Flag = ""
@@ -450,7 +619,8 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 						errs = append(errs, err)
 						continue
 					}
-					// Restart containers
+
+					// Recreate network and containers
 					instances, err := m.getBuildInstances(build.Id)
 					if err != nil {
 						errs = append(errs, err)
@@ -462,7 +632,13 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 							err = m.stopContainers(instance)
 						}
 						if err == nil {
-							err = m.startContainers(build, instance)
+							err = m.stopNetwork(instance)
+						}
+						if err == nil {
+							err = m.startNetwork(instance, cMeta.ChallengeOptions.NetworkOptions)
+						}
+						if err == nil {
+							err = m.startContainers(build, instance, cMeta.ChallengeOptions.Overrides)
 						}
 						if err != nil {
 							errs = append(errs, err)
@@ -498,6 +674,94 @@ func (m *Manager) removeChallenges(removedChallenges []*ChallengeMetadata) error
 	}
 
 	return nil
+}
+
+// Database representation of ContainerOptions
+// List-based options are serialized as JSON strings
+type dbContainerOptions struct {
+	Host            string
+	Init            bool
+	Cpus            string
+	Memory          string
+	Ulimits         string
+	PidsLimit       int64
+	ReadonlyRootfs  bool
+	DroppedCaps     string
+	NoNewPrivileges bool
+	DiskQuota       string
+	CgroupParent    string
+}
+
+func newFromDbContainerOptions(dbOpts dbContainerOptions) (ContainerOptions, error) {
+	cOpts := ContainerOptions{}
+
+	cOpts.Init = dbOpts.Init
+
+	cOpts.Cpus = dbOpts.Cpus
+
+	cOpts.Memory = dbOpts.Memory
+
+	ulimits := make([]string, 0)
+	err := json.Unmarshal([]byte(dbOpts.Ulimits), &ulimits)
+	if err != nil {
+		return cOpts, err
+	}
+	cOpts.Ulimits = ulimits
+
+	cOpts.PidsLimit = dbOpts.PidsLimit
+
+	cOpts.ReadonlyRootfs = dbOpts.ReadonlyRootfs
+
+	droppedCaps := make([]string, 0)
+	err = json.Unmarshal([]byte(dbOpts.DroppedCaps), &droppedCaps)
+	if err != nil {
+		return cOpts, err
+	}
+	cOpts.DroppedCaps = droppedCaps
+
+	cOpts.NoNewPrivileges = dbOpts.NoNewPrivileges
+
+	cOpts.DiskQuota = dbOpts.DiskQuota
+
+	cOpts.CgroupParent = dbOpts.CgroupParent
+
+	return cOpts, nil
+}
+
+func (cOpts ContainerOptions) toDbContainerOptions() (dbContainerOptions, error) {
+	dbOpts := dbContainerOptions{}
+
+	dbOpts.Init = cOpts.Init
+
+	dbOpts.Cpus = cOpts.Cpus
+
+	dbOpts.Memory = cOpts.Memory
+
+	ulimitsBytes, err := json.Marshal(cOpts.Ulimits)
+	if err != nil {
+		return dbOpts, err
+	}
+	ulimits := string(ulimitsBytes)
+	dbOpts.Ulimits = ulimits
+
+	dbOpts.PidsLimit = cOpts.PidsLimit
+
+	dbOpts.ReadonlyRootfs = cOpts.ReadonlyRootfs
+
+	droppedCapsBytes, err := json.Marshal(cOpts.DroppedCaps)
+	if err != nil {
+		return dbOpts, err
+	}
+	droppedCaps := string(droppedCapsBytes)
+	dbOpts.DroppedCaps = droppedCaps
+
+	dbOpts.NoNewPrivileges = cOpts.NoNewPrivileges
+
+	dbOpts.DiskQuota = cOpts.DiskQuota
+
+	dbOpts.CgroupParent = cOpts.CgroupParent
+
+	return dbOpts, nil
 }
 
 const (

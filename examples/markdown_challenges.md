@@ -52,6 +52,129 @@ an HTML href tag that uses `http_base`.
 - Organization: ACI
 - Created: 2020-06-24
 
+## Challenge Options
+
+This optional section can be used to apply additional restrictions to instances of this challenge
+via a ```` ```yaml```` fenced code block. The available options are listed below, along with an
+example.
+
+For [multi-container](./custom/README.md) challenges, by default any specified options apply to all
+containers. However, it is possible to specify separate options for each host (build stage) via an
+`overrides:` key, as seen in [this example](./multi/problem.md). Note that when an override is
+specified, it serves as a fully distinct set of challenge options for that container and will not be
+merged with any specified top-level options.
+
+Container options are never applied to the ["builder"](./custom/README.md) stage or to solver
+containers.
+
+- The `init` option runs an init process as PID 1 inside the container. This can be useful if your
+  challenge process forks, and will ensure that zombie processes are reaped. This is equivalent to
+  passing the [`--init`](https://docs.docker.com/engine/reference/run/#specify-an-init-process) flag
+  to `docker run`. Specify a boolean value, as shown in the example below. Defaults to `false`.
+
+- The `cpus` option specifies a maximum number of CPU cores that a container can utilize at full
+  capacity. This may be useful in order to prevent computationally-heavy challenge instances from
+  dominating the host. This is equivalent to passing the
+  [`--cpus`](https://docs.docker.com/engine/reference/run/#cpu-period-constraint) option to `docker
+  run`. Specify a floating-point value, as shown in the example below. Unset by default.
+
+- The `memory` option specifies the maximum amount of memory available to a container. Attempting to
+  exceed this limit at runtime may cause the container to restart, depending on how the challenge
+  process handles allocation failures. This is useful in order to put an upper bound on the memory
+  available to each challenge instance, preventing memory leaks from crashing the Docker host. This
+  is equivalent to passing the
+  [`--memory`](https://docs.docker.com/engine/reference/run/#user-memory-constraints) option to
+  `docker run`. Specify an integer value with unit, as shown in the example below. Unset by default.
+
+- The `ulimits` option can be used to specify various [resource
+  limits](https://access.redhat.com/solutions/61334) inside the container. Note that the `nproc`
+  ulimit is not supported, for reasons described
+  [here](https://docs.docker.com/engine/reference/commandline/run/#for-nproc-usage) (use the
+  `pidslimit` option instead). This is equivalent to passing
+  [`--ulimit`](https://docs.docker.com/engine/reference/commandline/run/#set-ulimits-in-container---ulimit)
+  options to `docker run`. Specify a list of limit names and limits, as shown in the example below.
+  Unset by default.
+
+- The `pidslimit` option specifies the maximum number of simultaneous processes inside the
+  container. This is useful in order to prevent forkbombs from crashing the Docker host. This is
+  equivalent to passing the
+  [`--pids-limit`](https://docs.docker.com/engine/reference/commandline/run/) option to `docker
+  run`. Specify an integer value, as shown in the example below. Unset by default.
+
+- The `readonlyrootfs` option can be used to mount the container's root filesystem as read-only. If
+  your challenge does not need to write to disk outside of `/dev/shm`, this is an easy way to
+  improve the security of your challenge containers. This is equivalent to passing the
+  [`--read-only`](https://docs.docker.com/engine/reference/commandline/run/) flag to `docker run`.
+  Specify a boolean value, as shown in the example below. Defaults to `false`.
+
+- The `droppedcaps` option can be used to drop additional Linux capabilities inside the container
+  beyond Docker's
+  [defaults](https://docs.docker.com/engine/reference/run/#runtime-privilege-and-linux-capabilities).
+  This is equivalent to passing
+  [`--cap-drop`](https://docs.docker.com/engine/reference/run/#runtime-privilege-and-linux-capabilities)
+  options to `docker run`. Specify a list of uppercase capability names, as shown in the example
+  below. Unset by default.
+
+- The `nonewprivileges` option can be used to
+  [prevent](https://www.kernel.org/doc/html/latest/userspace-api/no_new_privs.html) processes inside
+  the container from gaining additional privileges via `execve()` calls (by exploiting setuid
+  binaries, etc). This is equivalent to passing the
+  [`--security-opt="no-new-privileges:true"`](https://docs.docker.com/engine/reference/run/#security-configuration)
+  option to `docker run`. Specify a boolean value, as shown in the example below. Defaults to
+  `false`.
+
+- The `diskquota` option can be used to limit the maximum size of the container's writable layer.
+  This is equivalent to passing the [`--storage-opt
+  size`](https://docs.docker.com/engine/reference/commandline/run/#set-storage-driver-options-per-container)
+  option to `docker run`.
+
+  Note that this option is **only supported** when using the `overlay2` Docker storage driver and
+  [pquota-enabled](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/storage_administration_guide/xfsquota)
+  XFS backing storage (see this [Docker Engine PR](https://github.com/moby/moby/pull/24771) for more
+  details.) If these requirements are not met, container creation will fail at runtime.
+
+  To help prevent this issue, the `diskquota` option only takes effect if the
+  `CMGR_ENABLE_DISK_QUOTAS` environment variable is set.
+
+  Specify an integer value with unit, as shown in the example below. Unset by default.
+
+- The `cgroupparent` option can be used to manually specify the cgroup that a container will run in.
+  This is equivalent to passing the
+  [`--cgroup-parent`](https://docs.docker.com/engine/reference/run/#specify-custom-cgroups) flag to
+  `docker run`.
+
+  Note that it is also possible to set a default parent cgroup for all containers at the [daemon
+  level](https://docs.docker.com/engine/reference/commandline/dockerd/#default-cgroup-parent).
+
+  Specify a cgroup name, as shown in the example below. Unset by default.
+
+```yaml
+# sample challenge options:
+init: true
+cpus: 0.5
+memory: 512m
+ulimits:
+    - nofile=512:1024
+    - stack=4096
+    - fsize=2048
+pidslimit: 5
+readonlyrootfs: true
+droppedcaps:
+    - CHOWN
+    - SETPCAP
+    - SETUID
+nonewprivileges: true
+diskquota: 256m
+cgroupparent: customcgroup.slice
+
+# only relevant for multi-container challenges:
+overrides:
+    work:
+        pidslimit: 10
+    randomDnsName:
+        cpus: 0.25
+```
+
 ## Extra Sections
 
 Any `h2` sections (i.e. lines starting with `##`) that don't match one of the

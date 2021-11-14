@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/yuin/goldmark"
+	"gopkg.in/yaml.v2"
 )
 
 func parseBool(s string) (bool, error) {
@@ -177,7 +178,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			match := tagLineRe.FindStringSubmatch(line)
 			if match == nil {
-				err = fmt.Errorf("unexpected text in 'tags' section on line %d: %s", i, md.Path)
+				err = fmt.Errorf("unexpected text in 'tags' section on line %d: %s", i+1, md.Path)
 				m.log.error(err)
 				continue
 			}
@@ -193,13 +194,52 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			match := kvLineRe.FindStringSubmatch(line)
 			if match == nil {
-				err = fmt.Errorf("unexpected text in 'attributes' section on line %d: %s", i, md.Path)
+				err = fmt.Errorf("unexpected text in 'attributes' section on line %d: %s", i+1, md.Path)
 				m.log.error(err)
 				continue
 			}
 
 			md.Attributes[match[1]] = match[2]
 		}
+	case "challenge options":
+		yamlStart := 0
+		yamlEnd := 0
+		for i := startIdx; i < endIdx; i++ {
+			if lines[i] == "```yaml" {
+				if yamlStart != 0 {
+					err = fmt.Errorf("found multiple start markers for yaml at lines %d and %d", yamlStart-1, i)
+					m.log.error(err)
+				}
+				yamlStart = i + 1
+			} else if lines[i] == "```" {
+				if yamlEnd != 0 {
+					err = fmt.Errorf("found multiple end markers for yaml at lines %d and %d", yamlEnd, i)
+					m.log.error(err)
+				}
+				yamlEnd = i
+			}
+		}
+
+		if yamlStart == 0 && yamlEnd == 0 {
+			m.log.debug("addining implicit delimiters for challenge options")
+			yamlStart = startIdx
+			yamlEnd = endIdx
+		} else if (yamlStart == 0) != (yamlEnd == 0) {
+			err = fmt.Errorf("found a start/end marker but missing its pair: startline=%d endline=%d", yamlStart, yamlEnd)
+			m.log.error(err)
+			yamlStart = 0
+			yamlEnd = 0
+		}
+
+		opts := ChallengeOptions{}
+		yamlData := []byte(strings.Join(lines[yamlStart:yamlEnd], "\n"))
+		err = yaml.Unmarshal(yamlData, &opts)
+		if err != nil {
+			m.log.error(err)
+		}
+
+		md.ChallengeOptions = opts
+
 	default:
 		attrVal := strings.TrimSpace(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Attributes[section] = attrVal

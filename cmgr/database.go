@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
@@ -141,6 +142,32 @@ const schemaQuery string = `
 		id TEXT NOT NULL PRIMARY KEY,
 		FOREIGN KEY (instance) REFERENCES instances (id)
 			ON UPDATE RESTRICT ON DELETE CASCADE
+	);
+
+	-- There are currently not any network-level challenge options, so this table is not created.
+	-- However, this is kept as a placeholder in case additional options are added in the future.
+	--
+	-- CREATE TABLE IF NOT EXISTS networkOptions (
+	--	challenge INTEGER NOT NULL,
+	--	FOREIGN KEY (challenge) REFERENCES challenges (id)
+	--		ON UPDATE CASCADE ON DELETE CASCADE
+	--);
+
+	CREATE TABLE IF NOT EXISTS containerOptions (
+		challenge INTEGER NOT NULL,
+		host TEXT NOT NULL,
+		init INTEGER NOT NULL CHECK(init == 0 OR init == 1),
+		cpus TEXT NOT NULL,
+		memory TEXT NOT NULL,
+		ulimits TEXT NOT NULL,
+		pidslimit INTEGER NOT NULL,
+		readonlyrootfs INTEGER NOT NULL CHECK(readonlyrootfs == 0 OR readonlyrootfs == 1),
+		droppedcaps TEXT NOT NULL,
+		nonewprivileges INTEGER NOT NULL CHECK(nonewprivileges == 0 OR nonewprivileges == 1),
+		diskquota TEXT NOT NULL,
+		cgroupparent TEXT NOT NULL,
+		FOREIGN KEY (challenge) REFERENCES challenges (id)
+			ON UPDATE CASCADE ON DELETE CASCADE
 	);`
 
 // Connects to the desired database (creating it if it does not exist) and then
@@ -225,7 +252,10 @@ func (m *Manager) safeToRefresh(new *ChallengeMetadata) bool {
 		return false
 	}
 
-	safe := old.ChallengeType == new.ChallengeType
+	sameType := old.ChallengeType == new.ChallengeType
+	sameOptions := reflect.DeepEqual(old.ChallengeOptions, new.ChallengeOptions)
+
+	safe := sameType && sameOptions
 
 	return safe
 }
