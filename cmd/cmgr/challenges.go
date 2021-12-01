@@ -91,6 +91,11 @@ func updateChallengeInfo(mgr *cmgr.Manager, args []string) int {
 	path := "."
 	if parser.NArg() == 1 {
 		path = parser.Arg(0)
+	} else {
+		chalDir, isSet := os.LookupEnv(cmgr.DIR_ENV)
+		if isSet {
+			path = chalDir
+		}
 	}
 
 	var updates *cmgr.ChallengeUpdates
