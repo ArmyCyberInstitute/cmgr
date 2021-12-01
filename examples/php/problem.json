@@ -5,7 +5,7 @@
   "category": "Web Security",
   "points": 50,
   "description": "We found a new website. Try to see if you can login!",
-  "details": "The website running at {{link('/')}}.",
+  "details": "The website running {{link_as('/', 'here')}}.",
     "tags" : [
         "SQL",
         "sqlite",
