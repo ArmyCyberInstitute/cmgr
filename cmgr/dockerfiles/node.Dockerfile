@@ -1,4 +1,4 @@
-FROM node:12 AS base
+FROM node:16 AS base
 
 RUN groupadd -r app && useradd -r -d /app -g app app
 
@@ -25,13 +25,13 @@ USER root:root
 RUN install -d -m 0700 /challenge && \
     echo "{\"flag\":\"$FLAG\"}" > /challenge/metadata.json
 
-RUN find /app \( -name *.js -o -name *.txt -o -name *.html \) \
-              -exec sed -i -e "s|{{flag}}|$FLAG|g"            \
-                           -e "s|{{seed}}|$SEED|g"            \
+RUN find /app -type f ! -name Dockerfile           \
+              -exec sed -i -e "s|{{flag}}|$FLAG|g" \
+                           -e "s|{{seed}}|$SEED|g" \
                         {} \;
 
 USER app:app
-CMD node server.js
+CMD npm start
 
 EXPOSE 5000
 # PUBLISH 5000 AS http
