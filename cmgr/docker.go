@@ -31,7 +31,7 @@ import (
 	"github.com/docker/go-units"
 )
 
-//go:embed dockerfiles/seccomp.json
+//go:embed seccomp.json
 var seccompPolicy string
 
 func (m *Manager) initDocker() error {
