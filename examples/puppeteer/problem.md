@@ -1,6 +1,6 @@
 # Cookie Monster
 
-- namespace: cy450/lsn10
+- namespace: cmgr/examples
 - type: node
 - category: Web Security
 - points: 200
