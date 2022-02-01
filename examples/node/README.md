@@ -15,12 +15,12 @@ for the port to bind on rather than hard-coding a particular port.
 
 ## Automatic Templating
 
-There are two values that `cmgr` will template into every file that ends in
-`.js`, `.txt`, or `.html`:  `{{flag}}` and `{{seed}}`.  These values are
-provided to minimize the need for boilerplate code that challenge authors
-need.  If there is a need for random values beyond the flag, challenge authors
-should ensure they use `{{seed}}` as the initial seed for any randomization
-functions they use in order to ensure reproducible builds.
+There are two values that `cmgr` will template into every regular file:
+`{{flag}}` and `{{seed}}`.  These values are provided to minimize the need for
+boilerplate code that challenge authors need.  If there is a need for random
+values beyond the flag, challenge authors should ensure they use`{{seed}}` as
+the initial seed for any randomization functions they use in order to ensure
+reproducible builds.
 
 ## Installing Dependencies
 

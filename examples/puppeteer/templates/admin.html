@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block main %}
+
+<div class="album py-5 bg-light">
+<div class="container">
+  <h1>Cookies for me to review</h1>
+{% for uid,cookie in cookies %}
+<ul>
+  <li><a href="/cookie/{{ uid }}">{{ cookie.name }}</a></li>
+</ul>
+{% endfor %}
+</div>
+</div>
+{% endblock %}

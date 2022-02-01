@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block main %}
+<div class="album py-5 bg-light">
+<div class="container">
+  <div class="row">
+    <div class="col-6">
+      <h1 class="page-header">{{ cookie.name }}</h1>
+      {{ cookie.recipe | safe }}
+    </div>
+    <div class="col-6">
+      {% if not cookie.submitted %}
+      <form action="/approve" method="POST">
+        <div class="form-group">
+          <button class="btn btn-info">Submit For Approval by Cookie Monster</button>
+        </div>
+        <input type="hidden" name="cookie" value="{{ uid }}">
+      </form>
+      {% elif cookie.rejected %}
+          <button class="btn btn-danger" disabled>Cookie Monster has rejected this cookie</button>
+      {% else %}
+          <button class="btn btn-warning" disabled>Cookie Monster is viewing this cookie</button>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% endblock %}

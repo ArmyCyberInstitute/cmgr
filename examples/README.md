@@ -74,7 +74,7 @@ This is a shim around the legacy `hacksport` framework.  It should "just work" f
 
 ### node
 
-This is a simple wrapper around the _Node.js_ framework using their published LTS base image.  An example with more details can be found [here](node/).
+This is a simple wrapper around the _Node.js_ framework using their published LTS base image.  An example with more details can be found [here](node/).  Additionally, these challenges do not need to use _Node.js_ to run the server itself.  An example of using Puppeteer (uses _Node_) to enable XSS challenges with a Flask backend can be found [here](puppeteer/).
 
 ### php
 

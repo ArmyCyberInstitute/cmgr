@@ -1,0 +1,15 @@
+{
+  "name": "cookie-monster",
+  "version": "1.0.0",
+  "description": "An XSS challenge",
+  "scripts": {
+    "test": "cmgr test",
+    "preinstall": "pip3 install -r requirements.txt",
+    "start": "FLASK_RUN_PORT=5000 FLASK_RUN_HOST=0.0.0.0 python3 -m flask run"
+  },
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "puppeteer": "^2.1.0"
+  }
+}
