@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math/rand"
 	"time"
+
+	"github.com/ArmyCyberInstitute/cmgr/cmgr/dockerfiles"
 )
 
 const manualSchemaPrefix = "manual-"
@@ -567,4 +569,12 @@ func (m *Manager) DumpState(challenges []ChallengeId) ([]*ChallengeMetadata, err
 	}
 
 	return results, nil
+}
+
+// Returns a byte array with the contents of the Dockerfile associated with
+// `challengeType` (if it exists).  If the challenge type does not exist, then
+// an empty array is returned.
+func (m *Manager) GetDockerfile(challengeType string) []byte {
+	dockerfile, _ := dockerfiles.Get(challengeType)
+	return dockerfile
 }

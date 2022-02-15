@@ -585,7 +585,7 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			}
 
 			if len(buildIds) > 0 {
-				buildCtxFile, err := m.createBuildContext(metadata, m.getDockerfile(metadata.ChallengeType))
+				buildCtxFile, err := m.createBuildContext(metadata, m.GetDockerfile(metadata.ChallengeType))
 				if err != nil {
 					m.log.errorf("failed to create build context: %s", err)
 					errs = append(errs, err)

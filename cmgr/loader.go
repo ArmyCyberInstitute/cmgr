@@ -456,7 +456,7 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 		}
 	} else if customDockerfile {
 		err = fmt.Errorf("invalid challenge (%s): 'Dockerfile' forbidden except for 'custom' challenge type", md.Id)
-	} else if m.getDockerfile(md.ChallengeType) == nil {
+	} else if m.GetDockerfile(md.ChallengeType) == nil {
 		err = fmt.Errorf("invalid challenge (%s): unrecognized type of '%s'", md.Id, md.ChallengeType)
 	}
 
@@ -479,7 +479,7 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 			return err
 		}
 	} else {
-		data = m.getDockerfile(md.ChallengeType)
+		data = m.GetDockerfile(md.ChallengeType)
 	}
 
 	if data == nil || len(data) == 0 {

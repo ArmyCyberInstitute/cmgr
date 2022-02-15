@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/ArmyCyberInstitute/cmgr/cmgr"
@@ -171,6 +173,87 @@ func testChallenges(mgr *cmgr.Manager, args []string) int {
 		}
 	}
 	return retCode
+}
+
+func dockerfile(mgr *cmgr.Manager, args []string) int {
+	parser := flag.NewFlagSet("dockerfile", flag.ExitOnError)
+	updateUsage(parser, "<challenge_type>")
+	outfile := parser.String("output", "", "the file to write the Dockerfile contents to (default: stdout)")
+
+	parser.Parse(args)
+	if parser.NArg() != 1 {
+		parser.Usage()
+		return USAGE_ERROR
+	}
+
+	dockerfile := mgr.GetDockerfile(parser.Arg(0))
+	if len(dockerfile) == 0 {
+		fmt.Fprintf(parser.Output(), "error: unknown challenge type\n")
+		return RUNTIME_ERROR
+	} else if *outfile == "" {
+		fmt.Println(string(dockerfile))
+	} else {
+		out, err := os.Create(*outfile)
+		if err != nil {
+			fmt.Fprintf(parser.Output(), "error: could not open '%s': %s\n", *outfile, err)
+			return RUNTIME_ERROR
+		}
+		defer out.Close()
+
+		_, err = out.Write(dockerfile)
+		if err != nil {
+			fmt.Fprintf(parser.Output(), "error: failed to write to '%s': %s\n", *outfile, err)
+			return RUNTIME_ERROR
+		}
+	}
+	return NO_ERROR
+}
+
+func convertToCustom(mgr *cmgr.Manager, args []string) int {
+	parser := flag.NewFlagSet("convert-to-custom", flag.ExitOnError)
+	updateUsage(parser, "<challenge_directory>")
+
+	parser.Parse(args)
+	if parser.NArg() != 1 {
+		parser.Usage()
+		return USAGE_ERROR
+	}
+	challengeDir := parser.Arg(0)
+
+	problemMdPath := filepath.Join(challengeDir, "problem.md")
+	problemMd, err := ioutil.ReadFile(problemMdPath)
+	if err != nil {
+		fmt.Fprintf(parser.Output(), "error: could not open/read '%s': %s\n", problemMdPath, err)
+		return RUNTIME_ERROR
+	}
+
+	typeRe := regexp.MustCompile(`\n(\s*-\s*type:)\s*(.*)`)
+	cTypeMatch := typeRe.FindSubmatch(problemMd)
+	if cTypeMatch == nil {
+		fmt.Fprintf(parser.Output(), "error: could not find challenge type\n")
+		return RUNTIME_ERROR
+	}
+	cType := string(cTypeMatch[2])
+
+	retCode := dockerfile(mgr, []string{"-output", filepath.Join(challengeDir, "Dockerfile"), cType})
+	if retCode != NO_ERROR {
+		return retCode
+	}
+
+	updatedProblemMd := typeRe.ReplaceAll(problemMd, []byte("\n$1 custom"))
+	out, err := os.OpenFile(problemMdPath, os.O_WRONLY, 0)
+	if err != nil {
+		fmt.Fprintf(parser.Output(), "error: could not open '%s': %s\n", problemMdPath, err)
+		return RUNTIME_ERROR
+	}
+	defer out.Close()
+
+	_, err = out.Write(updatedProblemMd)
+	if err != nil {
+		fmt.Fprintf(parser.Output(), "error: failed to write to '%s': %s\n", problemMdPath, err)
+		return RUNTIME_ERROR
+	}
+	return NO_ERROR
 }
 
 func printChallenges(challenges []*cmgr.ChallengeMetadata, verbose bool) {

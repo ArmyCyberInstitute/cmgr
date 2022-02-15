@@ -243,14 +243,14 @@ func (m *Manager) createSolveContext(meta *BuildMetadata) io.Reader {
 
 		if !customDocker {
 			// Insert the default
-			hdr := tar.Header{Name: "Dockerfile", Mode: 0644, Size: int64(len(m.getDockerfile("solver")))}
+			hdr := tar.Header{Name: "Dockerfile", Mode: 0644, Size: int64(len(m.GetDockerfile("solver")))}
 			err = ctx.WriteHeader(&hdr)
 			if err != nil {
 				w.CloseWithError(err)
 				return
 			}
 
-			_, err = ctx.Write(m.getDockerfile("solver"))
+			_, err = ctx.Write(m.GetDockerfile("solver"))
 			if err != nil {
 				w.CloseWithError(err)
 				return

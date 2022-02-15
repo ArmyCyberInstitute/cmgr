@@ -71,6 +71,10 @@ func main() {
 		exitCode = resetSystemState(mgr, cmdArgs)
 	case "test":
 		exitCode = testChallenges(mgr, cmdArgs)
+	case "dockerfile":
+		exitCode = dockerfile(mgr, cmdArgs)
+	case "convert-to-custom":
+		exitCode = convertToCustom(mgr, cmdArgs)
 	case "system-dump":
 		exitCode = dumpSystemState(mgr, cmdArgs)
 	case "list-schemas":
@@ -195,6 +199,15 @@ Available commands:
   playtest <challenge>
       Creates a build and instance of the challenge and then starts a simple
       http front-end scoped to only that instance.
+
+  dockerfile <type>
+  		Prints out the Dockerfile associated with the given challenge type.
+
+  convert-to-custom <challenge directory>
+  		Converts the given challenge to a custom challenge by saving the
+  		Dockerfile associated with the current challenge type into the directory
+  		and changing the type to "custom".  NOTE: This only works with challenges
+  		in "problem.md" format.
 
   system-dump [<challenge> ...]
       Lists the challenges along with their builds and instances; all

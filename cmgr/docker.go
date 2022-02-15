@@ -199,7 +199,7 @@ func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
 		return err
 	}
 
-	buildCtxFile, err := m.createBuildContext(cMeta, m.getDockerfile(cMeta.ChallengeType))
+	buildCtxFile, err := m.createBuildContext(cMeta, m.GetDockerfile(cMeta.ChallengeType))
 	if err != nil {
 		m.log.errorf("failed to create build context: %s", err)
 		return err
@@ -255,7 +255,7 @@ func (m *Manager) freezeBaseImage(challenge ChallengeId, force bool) error {
 		// Do some check here to see if it already exists
 	}
 
-	buildCtxFile, err := m.createBuildContext(cMeta, m.getDockerfile(cMeta.ChallengeType))
+	buildCtxFile, err := m.createBuildContext(cMeta, m.GetDockerfile(cMeta.ChallengeType))
 	if err != nil {
 		m.log.errorf("failed to create build context: %s", err)
 		return err
