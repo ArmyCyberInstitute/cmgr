@@ -8,6 +8,7 @@ import jinja2
 random.seed(os.environ["SEED"])
 try:
     import build
+
     b = build.Builder()
 except Exception as e:
     print(e)

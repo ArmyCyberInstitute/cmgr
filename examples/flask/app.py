@@ -24,6 +24,7 @@ INSERT INTO users (username, pwHash) VALUES
     ("houdini", "((not a hash))");
 """
 
+
 @app.before_first_request
 def init():
     cur = sqlite3.connect("users.db").cursor()
@@ -33,6 +34,7 @@ def init():
     except Exception as e:
         pass
 
+
 @app.route("/")
 @app.route("/index.html")
 def home():
@@ -40,48 +42,57 @@ def home():
     if "error" in session:
         err = session["error"]
         session.pop("error")
-    return render_template("index.html",
+    return render_template(
+        "index.html",
         challenge_name=app.challenge_name,
         loggedin=("username" in session),
-        error=err)
+        error=err,
+    )
 
-@app.route("/login", methods=['POST'])
+
+@app.route("/login", methods=["POST"])
 def login():
     username = None
     password = None
     pwHash = "INVALID"
-    if 'username' in request.form:
-        username = request.form['username']
-    if 'password' in request.form:
-        password = request.form['password']
+    if "username" in request.form:
+        username = request.form["username"]
+    if "password" in request.form:
+        password = request.form["password"]
         pwHash = hashlib.sha256(password.encode()).hexdigest()
 
     if username:
         cur = sqlite3.connect("users.db").cursor()
         try:
-            result = cur.execute(UNSAFE_QUERY.format(
-                    username, # This is the vulnerable part
-                    pwHash)
-                ).fetchone()
+            result = cur.execute(
+                UNSAFE_QUERY.format(username, pwHash)  # This is the vulnerable part
+            ).fetchone()
             username = result[0] if result else None
         except Exception as e:
-            session["error"] = (UNSAFE_QUERY.format(username, pwHash))
+            session["error"] = UNSAFE_QUERY.format(username, pwHash)
             username = None
 
     if username:
         session["username"] = username
 
-    if username == 'houdini':
+    if username == "houdini":
         flash("Welcome Houdini, here's your flag: {}".format(app.flag))
     elif username:
-        result = cur.execute("SELECT pwHash FROM users WHERE username='houdini'").fetchone()[0]
-        flash("Welcome {}!  The \"hash\" for account 'houdini' is '{}'.".format(username, result))
+        result = cur.execute(
+            "SELECT pwHash FROM users WHERE username='houdini'"
+        ).fetchone()[0]
+        flash(
+            "Welcome {}!  The \"hash\" for account 'houdini' is '{}'.".format(
+                username, result
+            )
+        )
     else:
         flash("Login failed!")
 
     return redirect(url_for("home"))
 
-@app.route("/logout", methods=['POST'])
+
+@app.route("/logout", methods=["POST"])
 def logout():
     if "username" in session:
         session.pop("username")
@@ -90,5 +101,6 @@ def logout():
         flash("Not logged in!")
     return redirect(url_for("home"))
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8000)
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=8000)

@@ -6,7 +6,7 @@ lockbox = subprocess.run(
     ["./lockbox"],
     text=True,
     input="correct horse battery staple\n",
-    capture_output=True
+    capture_output=True,
 )
 
 with open("flag", "w") as f:

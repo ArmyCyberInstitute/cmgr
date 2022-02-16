@@ -3,9 +3,7 @@ import subprocess
 # Note: This validates the correct flag is embedded but uses the password
 #   rather than properly reversing the function call to printf.
 re101 = subprocess.run(
-    ["gdb", "--batch", "-x", "gdb-script", "re101"],
-    text=True,
-    capture_output=True
+    ["gdb", "--batch", "-x", "gdb-script", "re101"], text=True, capture_output=True
 )
 
 # Flag is after the first equal sign...
