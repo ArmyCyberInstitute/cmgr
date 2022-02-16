@@ -4,7 +4,7 @@ import os
 
 TEMPLATE_EXT = ".template"
 
-with open("../support/pybuild.py", "rb") as f:
+with open("../../support/pybuild.py", "rb") as f:
     pybuild_source = b64encode(f.read()).decode()
 
 def generate_dockerfile(target_file):
@@ -14,7 +14,7 @@ def generate_dockerfile(target_file):
     with open(target_file, "w") as f:
         f.write(template)
 
-for (path, _, files) in os.walk("dockerfiles"):
+for (path, _, files) in os.walk("."):
     for f in files:
         basename, extension = os.path.splitext(f)
         if extension == TEMPLATE_EXT and ("pybuild" in path or "pybuild" in basename):

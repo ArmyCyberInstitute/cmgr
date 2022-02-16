@@ -62,8 +62,10 @@ b.dont_template.append("problem.json")
 b.dont_template.append("build.py")
 
 for curr_dir, sub_dirs, files in os.walk("."):
-    if curr_dir in b.dont_template:
-        continue
+    for sub_dir in sub_dirs:
+        if os.path.join(curr_dir, sub_dir)[2:] in b.dont_template:
+            sub_dirs.remove(sub_dir)
+
     for fname in files:
         fpath = os.path.join(curr_dir, fname)
         if fpath[2:] in b.dont_template:
