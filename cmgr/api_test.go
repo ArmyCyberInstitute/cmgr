@@ -5,7 +5,7 @@ import (
 )
 
 // Iterates over all of the discovered challenges
-func ExampleListChallenges() {
+func ExampleManager_ListChallenges() {
 	mgr := NewManager(WARN)
 
 	for _, c := range mgr.ListChallenges() {

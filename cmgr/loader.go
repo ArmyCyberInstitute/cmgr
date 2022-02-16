@@ -418,7 +418,7 @@ func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, fil
 		tmpErr := checkTemplated(hint)
 
 		if tmpErr != nil {
-			err = err
+			err = tmpErr
 		}
 	}
 

@@ -35,6 +35,9 @@ jobs:
     - name: Python format check
       run: find . -name *.py -exec black --check {} +
 
+    - name: Golang linting
+      run: go vet ./...
+
     - name: Build
       run: mkdir bin && go build -v -ldflags "-X github.com/ArmyCyberInstitute/cmgr/cmgr.version=`git describe --tags`" -o bin ./...
 

@@ -87,7 +87,7 @@ type ChallengeMetadata struct {
 	Details          string              `json:"details,omitempty"`
 	Hints            []string            `json:"hints,omitempty"`
 	SourceChecksum   uint32              `json:"source_checksum"`
-	MetadataChecksum uint32              `json:"metadata_checksum`
+	MetadataChecksum uint32              `json:"metadata_checksum"`
 	Path             string              `json:"path"`
 	Templatable      bool                `json:"templatable,omitempty"`
 	PortMap          map[string]PortInfo `json:"port_map,omitempty"`
