@@ -56,7 +56,7 @@ func playtestChallenge(mgr *cmgr.Manager, args []string) int {
 		return RUNTIME_ERROR
 	}
 
-	sigs := make(chan os.Signal)
+	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, os.Kill)
 	go func() {
 		_ = <-sigs
