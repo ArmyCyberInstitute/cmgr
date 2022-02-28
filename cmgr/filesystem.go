@@ -121,7 +121,7 @@ func (m *Manager) findChallenges(challengeMap *map[ChallengeId]*ChallengeMetadat
 		}
 
 		h := crc32.NewIEEE()
-		err = filepath.Walk(filepath.Dir(path), challengeChecksum(h))
+		err = filepath.Walk(filepath.Dir(path), challengeChecksum(filepath.Dir(path), h))
 		if err != nil {
 			m.log.warnf("could not hash source files: %s", err)
 			*errSlice = append(*errSlice, err)
@@ -193,7 +193,7 @@ func pathInDirectory(path, dir string) bool {
 // This is a stable checksum because the Go specification for `Walk` promises
 // a lexicographical traversal of the directory structure.  Files that start
 // with '.' are ignored.
-func challengeChecksum(h hash.Hash) filepath.WalkFunc {
+func challengeChecksum(challDir string, h hash.Hash) filepath.WalkFunc {
 	return func(path string, info os.FileInfo, err error) error {
 		// Consider any error during the walk a fatal problem.
 		if err != nil {
@@ -219,7 +219,19 @@ func challengeChecksum(h hash.Hash) filepath.WalkFunc {
 		}
 
 		// If this is not a directory, add the contents to the checksum
-		if !info.IsDir() {
+		if info.Mode()&os.ModeSymlink == os.ModeSymlink {
+			linkTgt, err := os.Readlink(path)
+			if err != nil {
+				return fmt.Errorf("Invalid link found at %s: %s", path, err)
+			}
+			tgt_path := filepath.Join(filepath.Dir(path), linkTgt)
+
+			if !pathInDirectory(tgt_path, challDir) {
+				return fmt.Errorf("Encountered symlink at '%s' which points to '%s' which is not in '%s'", path, tgt_path, challDir)
+			}
+
+			h.Write([]byte(tgt_path))
+		} else if info.Mode().IsRegular() {
 			f, err := os.Open(path)
 			if err != nil {
 				return err
