@@ -7,7 +7,7 @@ import (
 	"reflect"
 
 	"github.com/jmoiron/sqlx"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 const schemaQuery string = `
@@ -179,7 +179,7 @@ func (m *Manager) initDatabase() error {
 		dbPath = "cmgr.db"
 	}
 
-	db, err := sqlx.Open("sqlite3", dbPath+"?_fk=true")
+	db, err := sqlx.Open("sqlite", dbPath+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		m.log.errorf("could not open database: %s", err)
 		return err
