@@ -7,6 +7,7 @@ on:
 
 env:
   CMGR_LOGGING: debug
+  DOCKER_API_VERSION: 1.41
 
 jobs:
   build:

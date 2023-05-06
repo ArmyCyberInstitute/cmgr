@@ -1,5 +1,24 @@
 # Troubleshooting
 
+## Getting "client version 1.xx is too new" from Docker
+
+**Symptom:** While trying to build an image the server logs the following
+message:
+```
+cmgr: [ERROR:  failed to build base image: Error response from daemon:
+       client version 1.42 is too new. Maximum supported API version is 1.41]
+```
+
+**Cause:** Newer versions of `cmgr` use the latest Docker API which may exceed
+the default version shipped with the distributions package manager.
+
+**Solution:** Configure the package manager to use Docker's repos or configure
+`cmgr` to use older versions of the API through environment variables used by
+the Docker API.  For the latter solution, the following should generally work:
+```
+export DOCKER\_API\_VERSION=1.41
+```
+
 ## Getting Docker working with `firewalld` (Fedora/CentOS/RHEL)
 ```
 firewall-cmd --zone=public --add-masquerade --permanent
