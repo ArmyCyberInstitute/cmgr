@@ -20,7 +20,7 @@ def recv_until(sock, pattern):
     return response
 
 
-target = 2 ** 32 - 1
+target = 2**32 - 1
 # print("target =", target)
 p = 2
 q = 0
