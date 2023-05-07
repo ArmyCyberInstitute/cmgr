@@ -44,6 +44,9 @@ RUN apt-get update && apt-get install -y \
     sudo \
     git
 
+# need to make sure pip is up to date
+RUN sudo pip install -U pip setuptools wheel
+
 FROM base AS hacksport
 # Stage 2. hacksport (git)
 # This stage installs the picoCTF shell_manger/hacksport library from an
