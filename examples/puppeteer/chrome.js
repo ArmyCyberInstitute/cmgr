@@ -10,6 +10,14 @@ const puppeteer = require('puppeteer');
     console.log('[Chrome] Visiting ' + interceptedRequest.url());
     interceptedRequest.continue();
   });
+  page.on('response', async(response) => {
+    console.log('[Chrome] Received ' + response.url());
+    if (response.url().includes('pipedream')) {
+      console.log('[Chrome] Exploit landed!')
+      const text = await response.text();
+      console.log(text);
+    }
+  });
   page.on('console', msg => {
     for (let i = 0; i < msg.args().length; ++i)
       console.log(`[Chrome] ${i}: ${msg.args()[i]}`);

