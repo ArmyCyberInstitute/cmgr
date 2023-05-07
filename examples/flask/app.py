@@ -24,17 +24,6 @@ INSERT INTO users (username, pwHash) VALUES
     ("houdini", "((not a hash))");
 """
 
-
-@app.before_first_request
-def init():
-    cur = sqlite3.connect("users.db").cursor()
-    try:
-        cur.executescript(INITIALIZATION_QUERY)
-        cur.commit()
-    except Exception as e:
-        pass
-
-
 @app.route("/")
 @app.route("/index.html")
 def home():
@@ -101,6 +90,13 @@ def logout():
         flash("Not logged in!")
     return redirect(url_for("home"))
 
+
+cur = sqlite3.connect("users.db").cursor()
+try:
+    cur.executescript(INITIALIZATION_QUERY)
+    cur.commit()
+except Exception as e:
+    pass
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=8000)

