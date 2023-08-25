@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     build-essential \
     python3-pip
-RUN pip3 install flask
+RUN pip3 install flask==2.2.5
 RUN groupadd -r flask && useradd -r -d /app -g flask flask
 
 ENV FLASK_RUN_HOST=0.0.0.0
