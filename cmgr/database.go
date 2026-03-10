@@ -339,20 +339,10 @@ func (m *Manager) dumpState() ([]*ChallengeMetadata, error) {
 				return nil, err
 			}
 
-			bMeta.Instances = []*InstanceMetadata{}
-			err = m.db.Select(&bMeta.Instances, "SELECT id FROM instances WHERE build=?", bMeta.Id)
+			bMeta.Instances, err = m.lookupBuildInstances(bMeta.Id)
 			if err != nil {
 				m.log.errorf("failed to select instances for '%s/%d': %s", challenge.Id, bMeta.Id, err)
 				return nil, err
-			}
-
-			for k, instance := range bMeta.Instances {
-				iMeta, err := m.lookupInstanceMetadata(instance.Id)
-				if err != nil {
-					return nil, err
-				}
-
-				bMeta.Instances[k] = iMeta
 			}
 			meta.Builds[j] = bMeta
 		}
