@@ -517,19 +517,9 @@ func (m *Manager) GetSchemaState(name string) ([]*ChallengeMetadata, error) {
 			return nil, err
 		}
 
-		iids, err := m.getBuildInstances(build.Id)
+		build.Instances, err = m.lookupBuildInstances(build.Id)
 		if err != nil {
 			return nil, err
-		}
-
-		build.Instances = make([]*InstanceMetadata, len(iids))
-		for i, iid := range iids {
-			instance, err := m.lookupInstanceMetadata(iid)
-			if err != nil {
-				return nil, err
-			}
-
-			build.Instances[i] = instance
 		}
 
 		if challenge != nil && challenge.Id != build.Challenge {

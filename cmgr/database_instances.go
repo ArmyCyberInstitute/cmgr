@@ -191,3 +191,65 @@ func (m *Manager) recordSolve(instance *InstanceMetadata) error {
 	}
 	return err
 }
+
+func (m *Manager) lookupBuildInstances(build BuildId) ([]*InstanceMetadata, error) {
+	var instances []*InstanceMetadata
+	err := m.db.Select(&instances, "SELECT * FROM instances WHERE build = ?", build)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(instances) == 0 {
+		return instances, nil
+	}
+
+	// Fetch all ports for these instances
+	ports := []struct {
+		Instance InstanceId `db:"instance"`
+		Name     string     `db:"name"`
+		Port     int        `db:"port"`
+	}{}
+	err = m.db.Select(&ports, "SELECT instance, name, port FROM portAssignments WHERE instance IN (SELECT id FROM instances WHERE build = ?)", build)
+	if err != nil {
+		return nil, err
+	}
+
+	// Map ports to instances
+	portMap := make(map[InstanceId]map[string]int)
+	for _, p := range ports {
+		if _, ok := portMap[p.Instance]; !ok {
+			portMap[p.Instance] = make(map[string]int)
+		}
+		portMap[p.Instance][p.Name] = p.Port
+	}
+
+	// Fetch all containers for these instances
+	containers := []struct {
+		Instance InstanceId `db:"instance"`
+		Id       string     `db:"id"`
+	}{}
+	err = m.db.Select(&containers, "SELECT instance, id FROM containers WHERE instance IN (SELECT id FROM instances WHERE build = ?)", build)
+	if err != nil {
+		return nil, err
+	}
+
+	// Map containers to instances
+	containerMap := make(map[InstanceId][]string)
+	for _, c := range containers {
+		containerMap[c.Instance] = append(containerMap[c.Instance], c.Id)
+	}
+
+	// Combine
+	for _, inst := range instances {
+		inst.Ports = portMap[inst.Id]
+		if inst.Ports == nil {
+			inst.Ports = make(map[string]int)
+		}
+		inst.Containers = containerMap[inst.Id]
+		if inst.Containers == nil {
+			inst.Containers = []string{}
+		}
+	}
+
+	return instances, nil
+}
