@@ -117,9 +117,11 @@ func (m *Manager) getFreePort() (string, error) {
 
 	numPorts := m.portHigh - m.portLow + 1
 
-	// Get currently used ports...
-	ports, err := m.usedPortSet()
+	// Get currently used ports as a bitset for memory efficiency
+	bitset, err := m.usedPortBitset()
 	if err != nil {
+		// Fallback to ephemeral port if we can't get the bitset,
+		// though this shouldn't happen under normal operation.
 		return "", nil
 	}
 
@@ -128,7 +130,8 @@ func (m *Manager) getFreePort() (string, error) {
 
 	// Sweep through ports looking for a free one...
 	for i := 0; i < numPorts; i++ {
-		if _, used := ports[port]; !used {
+		p := port - m.portLow
+		if (bitset[p/64] & (1 << (uint(p) % 64))) == 0 {
 			return fmt.Sprint(port), nil
 		}
 

@@ -270,6 +270,36 @@ func (m *Manager) usedPortSet() (map[int]struct{}, error) {
 	return portSet, err
 }
 
+func (m *Manager) usedPortBitset() ([]uint64, error) {
+	if m.portLow == 0 {
+		return nil, nil
+	}
+
+	numPorts := m.portHigh - m.portLow + 1
+	bitset := make([]uint64, (numPorts/64)+1)
+
+	rows, err := m.db.Query("SELECT port FROM portAssignments WHERE port BETWEEN ? AND ?", m.portLow, m.portHigh)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var port int
+		if err := rows.Scan(&port); err != nil {
+			return nil, err
+		}
+		p := port - m.portLow
+		bitset[p/64] |= (1 << (uint(p) % 64))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return bitset, nil
+}
+
 func (m *Manager) safeToRefresh(new *ChallengeMetadata) bool {
 	old, err := m.lookupChallengeMetadata(new.Id)
 	if err != nil {
