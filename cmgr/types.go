@@ -3,6 +3,7 @@ package cmgr
 import (
 	"context"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/client"
@@ -49,6 +50,8 @@ type Manager struct {
 	lastPruneUnix        int64 // Unix nanoseconds; accessed atomically
 	pruneInterval        time.Duration
 	pruneAge             time.Duration
+	challengeCache       sync.Map
+	buildCache           sync.Map
 }
 
 type PortInfo struct {

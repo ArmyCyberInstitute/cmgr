@@ -36,7 +36,51 @@ func (m *Manager) searchChallenges(tags []string) ([]*ChallengeMetadata, error) 
 	return metadata, err
 }
 
+func copyChallengeMetadata(src *ChallengeMetadata) *ChallengeMetadata {
+	dst := *src // shallow copy of value
+
+	// Deep-copy all mutable slice/map fields
+	if src.Hints != nil {
+		dst.Hints = make([]string, len(src.Hints))
+		copy(dst.Hints, src.Hints)
+	}
+	if src.Tags != nil {
+		dst.Tags = make([]string, len(src.Tags))
+		copy(dst.Tags, src.Tags)
+	}
+	if src.Hosts != nil {
+		dst.Hosts = make([]HostInfo, len(src.Hosts))
+		copy(dst.Hosts, src.Hosts)
+	}
+	if src.PortMap != nil {
+		dst.PortMap = make(map[string]PortInfo, len(src.PortMap))
+		for k, v := range src.PortMap {
+			dst.PortMap[k] = v
+		}
+	}
+	if src.Attributes != nil {
+		dst.Attributes = make(map[string]string, len(src.Attributes))
+		for k, v := range src.Attributes {
+			dst.Attributes[k] = v
+		}
+	}
+	if src.ChallengeOptions.Overrides != nil {
+		dst.ChallengeOptions.Overrides = make(map[string]ContainerOptions, len(src.ChallengeOptions.Overrides))
+		for k, v := range src.ChallengeOptions.Overrides {
+			dst.ChallengeOptions.Overrides[k] = v
+		}
+	}
+	// Builds is intentionally not copied: it is populated by callers, not cached.
+	dst.Builds = nil
+
+	return &dst
+}
+
 func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMetadata, error) {
+	if val, ok := m.challengeCache.Load(challenge); ok {
+		return copyChallengeMetadata(val.(*ChallengeMetadata)), nil
+	}
+
 	metadata := new(ChallengeMetadata)
 	txn := m.db.MustBegin()
 
@@ -122,6 +166,10 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 		}
 	}
 
+	if err == nil {
+		m.challengeCache.Store(challenge, metadata)
+	}
+
 	return metadata, err
 }
 
@@ -131,6 +179,7 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 	for _, metadata := range addedChallenges {
 		txn := m.db.MustBegin()
 
+		m.challengeCache.Delete(metadata.Id)
 		_, err := txn.NamedExec(challengeInsertQuery, metadata)
 		if err != nil {
 			m.log.error(err)
@@ -319,6 +368,7 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 	for _, metadata := range updatedChallenges {
 		txn := m.db.MustBegin()
 
+		m.challengeCache.Delete(metadata.Id)
 		_, err := txn.NamedExec(challengeUpdateQuery, metadata)
 		if err != nil {
 			m.log.error(err)
@@ -659,6 +709,7 @@ func (m *Manager) removeChallenges(removedChallenges []*ChallengeMetadata) error
 	for _, metadata := range removedChallenges {
 		// This should throw an error and cause a rollback when builds exist for
 		// a challenge we are removing.
+		m.challengeCache.Delete(metadata.Id)
 		_, err := txn.Exec("DELETE FROM challenges WHERE id = ?;", metadata.Id)
 		if err != nil {
 			m.log.error(err)

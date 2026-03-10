@@ -29,6 +29,7 @@ const openBuildQuery string = `
     	instancecount = excluded.instancecount;`
 
 func (m *Manager) openBuild(build *BuildMetadata) error {
+	m.buildCache.Delete(build.Id)
 	_, err := m.db.NamedExec(openBuildQuery, build)
 	m.log.debugf("Opening %v", build)
 
@@ -66,6 +67,7 @@ const finalizeBuildQuery string = `
 	WHERE id = :id;`
 
 func (m *Manager) finalizeBuild(build *BuildMetadata) error {
+	m.buildCache.Delete(build.Id)
 	txn := m.db.MustBegin()
 	res, err := txn.NamedExec(finalizeBuildQuery, build)
 
@@ -192,6 +194,7 @@ func (m *Manager) finalizeBuild(build *BuildMetadata) error {
 }
 
 func (m *Manager) removeBuildMetadata(build BuildId) error {
+	m.buildCache.Delete(build)
 	txn := m.db.MustBegin()
 	_, err := txn.Exec("DELETE FROM images WHERE build=?", build)
 
@@ -225,7 +228,36 @@ func (m *Manager) removeBuildMetadata(build BuildId) error {
 	return err
 }
 
+func copyBuildMetadata(src *BuildMetadata) *BuildMetadata {
+	dst := *src // shallow copy
+
+	if src.LookupData != nil {
+		dst.LookupData = make(map[string]string, len(src.LookupData))
+		for k, v := range src.LookupData {
+			dst.LookupData[k] = v
+		}
+	}
+	if src.Images != nil {
+		dst.Images = make([]Image, len(src.Images))
+		for i, img := range src.Images {
+			dst.Images[i] = img
+			if img.Ports != nil {
+				dst.Images[i].Ports = make([]string, len(img.Ports))
+				copy(dst.Images[i].Ports, img.Ports)
+			}
+		}
+	}
+	// Instances is intentionally not copied: it is populated by callers, not cached.
+	dst.Instances = nil
+
+	return &dst
+}
+
 func (m *Manager) lookupBuildMetadata(build BuildId) (*BuildMetadata, error) {
+	if val, ok := m.buildCache.Load(build); ok {
+		return copyBuildMetadata(val.(*BuildMetadata)), nil
+	}
+
 	metadata := new(BuildMetadata)
 	txn := m.db.MustBegin()
 
@@ -271,6 +303,10 @@ func (m *Manager) lookupBuildMetadata(build BuildId) (*BuildMetadata, error) {
 		}
 	}
 
+	if err == nil {
+		m.buildCache.Store(build, metadata)
+	}
+
 	return metadata, err
 }
 
@@ -287,6 +323,14 @@ func (m *Manager) removedSchemaBuilds(schema string) ([]BuildId, error) {
 }
 
 func (m *Manager) lockSchema(schema string) error {
+	// Invalidate cache for all builds in this schema before updating instancecount.
+	// This closes the window where a concurrent reader could see a stale InstanceCount.
+	var ids []BuildId
+	_ = m.db.Select(&ids, "SELECT id FROM builds WHERE schema = ?;", schema)
+	for _, id := range ids {
+		m.buildCache.Delete(id)
+	}
+
 	_, err := m.db.Exec("UPDATE builds SET instancecount = ? WHERE schema = ?;", LOCKED, schema)
 	return err
 }
