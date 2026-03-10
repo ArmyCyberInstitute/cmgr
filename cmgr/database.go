@@ -130,7 +130,7 @@ const schemaQuery string = `
 			ON UPDATE RESTRICT ON DELETE RESTRICT
 	);
 
-	CREATE INDEX IF NOT EXISTS instanceCreatedAtIndex ON instances(created_at);
+
 
 	CREATE TABLE IF NOT EXISTS portAssignments (
 		instance INTEGER NOT NULL,
@@ -139,6 +139,8 @@ const schemaQuery string = `
 		FOREIGN KEY (instance) REFERENCES instances (id)
 			ON UPDATE RESTRICT ON DELETE CASCADE
 	);
+
+
 
 	CREATE TABLE IF NOT EXISTS containers (
 		instance INTEGER NOT NULL,
@@ -171,7 +173,16 @@ const schemaQuery string = `
 		cgroupparent TEXT NOT NULL,
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE CASCADE ON DELETE CASCADE
-	);`
+	);
+
+	CREATE INDEX IF NOT EXISTS instanceCreatedAtIndex ON instances(created_at);
+	CREATE INDEX IF NOT EXISTS instanceBuildIndex ON instances(build);
+	CREATE INDEX IF NOT EXISTS portAssignmentInstanceIndex ON portAssignments(instance);
+	CREATE INDEX IF NOT EXISTS containerInstanceIndex ON containers(instance);
+	CREATE INDEX IF NOT EXISTS imageBuildIndex ON images(build);
+	CREATE INDEX IF NOT EXISTS imagePortImageIndex ON imagePorts(image);
+	CREATE INDEX IF NOT EXISTS lookupDataBuildIndex ON lookupData(build);
+`
 
 // Connects to the desired database (creating it if it does not exist) and then
 // ensures that the necessary tables and indexes exist and that the sqlite
@@ -200,6 +211,12 @@ func (m *Manager) initDatabase() error {
 	// Handle migration for existing databases (idempotent: errors silently ignored)
 	_, _ = db.Exec("ALTER TABLE instances ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP;")
 	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS instanceCreatedAtIndex ON instances(created_at);")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS instanceBuildIndex ON instances(build);")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS portAssignmentInstanceIndex ON portAssignments(instance);")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS containerInstanceIndex ON containers(instance);")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS imageBuildIndex ON images(build);")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS imagePortImageIndex ON imagePorts(image);")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS lookupDataBuildIndex ON lookupData(build);")
 
 	var fkeysEnforced bool
 	err = db.QueryRow("PRAGMA foreign_keys;").Scan(&fkeysEnforced)
