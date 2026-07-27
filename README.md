@@ -216,11 +216,11 @@ go build -trimpath -o bin/ ./cmd/...
 go test -v ./...
 ```
 
-## Generative AI Notice
+## Generative AI Disclosure
 
 Please note that the release starting at v0.14.0 was 
 modernized with the assistance of generative AI. Each commit message
-in which generative AI describes the model, harness, and configuration
+in which generative AI is used describes the model, harness, and configuration
 used in the process. Additionally, generative AI is used to run deterministic
 regression tests across a suite of challenges.
 
