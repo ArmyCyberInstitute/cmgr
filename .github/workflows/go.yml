@@ -110,7 +110,7 @@ jobs:
             check ./cmd/... --include_tests
 
   integration:
-    name: Example integration tests
+    name: Example integration tests (runner Docker)
     runs-on: ubuntu-24.04
     needs:
       - test
@@ -147,3 +147,127 @@ jobs:
           CMGR_DIR: examples
           CMGR_ARTIFACT_DIR: artifacts
         run: bin/cmgr test --require-solve examples
+
+  engine-integration:
+    name: Example integration tests (Docker ${{ matrix.engine }})
+    runs-on: ubuntu-24.04
+    needs:
+      - test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: 28.5.2
+            image: docker@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac
+          - engine: 29.6.2
+            image: docker@sha256:bfec1f5159c63a81ca6fdedbd81404d2c0e16378ed0feec3bb3fbf3998847659
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+          cache: true
+
+      - name: Verify dependencies
+        run: bash support/verify_go_modules.sh
+
+      - name: Build cmgr
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p bin artifacts
+          go build -trimpath \
+            -ldflags "-X github.com/ArmyCyberInstitute/cmgr/cmgr.version=$(git describe --tags --always)" \
+            -o bin/ ./cmd/...
+
+      - name: Start Docker Engine ${{ matrix.engine }}
+        env:
+          ENGINE_IMAGE: ${{ matrix.image }}
+          ENGINE_VERSION: ${{ matrix.engine }}
+          INNER_DOCKER_HOST: tcp://127.0.0.1:23750
+        run: |
+          sudo docker run \
+            --privileged \
+            --detach \
+            --name cmgr-ci-engine \
+            --restart=no \
+            --env DOCKER_TLS_CERTDIR= \
+            --publish 127.0.0.1:23750:2375 \
+            "${ENGINE_IMAGE}" \
+            --host=tcp://0.0.0.0:2375 \
+            --host=unix:///var/run/docker.sock \
+            --storage-driver=overlay2
+
+          ready=
+          for attempt in $(seq 1 60); do
+            if docker --host "${INNER_DOCKER_HOST}" info >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "${ready}" = 1
+
+          actual_version="$(
+            docker --host "${INNER_DOCKER_HOST}" version \
+              --format '{{.Server.Version}}'
+          )"
+          test "${actual_version}" = "${ENGINE_VERSION}"
+
+      - name: Register seccomp tweak runtime
+        env:
+          INNER_DOCKER_HOST: tcp://127.0.0.1:23750
+        run: |
+          sudo docker exec cmgr-ci-engine \
+            install -d -o root -g root -m 0755 /usr/lib/cmgr
+          sudo docker cp \
+            bin/cmgr-oci-interceptor \
+            cmgr-ci-engine:/usr/lib/cmgr/cmgr-oci-interceptor
+          sudo docker exec cmgr-ci-engine \
+            chown root:root /usr/lib/cmgr/cmgr-oci-interceptor
+          sudo docker exec cmgr-ci-engine \
+            chmod 0755 /usr/lib/cmgr/cmgr-oci-interceptor
+
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'if [ "${1:-}" != "reload" ] || [ "${2:-}" != "docker" ]; then exit 2; fi' \
+            'dockerd_pid="$(pidof dockerd)"' \
+            '[ -n "${dockerd_pid}" ] || exit 3' \
+            'kill -HUP "${dockerd_pid}"' |
+            sudo docker exec -i cmgr-ci-engine sh -c \
+              'umask 022; cat > /usr/bin/systemctl; chmod 0755 /usr/bin/systemctl'
+
+          sudo docker exec cmgr-ci-engine \
+            /usr/lib/cmgr/cmgr-oci-interceptor register
+
+          ready=
+          for attempt in $(seq 1 30); do
+            if docker --host "${INNER_DOCKER_HOST}" info \
+              --format '{{json .Runtimes}}' |
+              grep -Fq '"cmgr-oci-interceptor"'; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "${ready}" = 1
+
+      - name: Run example solvers
+        env:
+          DOCKER_HOST: tcp://127.0.0.1:23750
+          CMGR_DIR: examples
+          CMGR_ARTIFACT_DIR: artifacts
+          CMGR_INTERFACE: 0.0.0.0
+          CMGR_PORTS: 24750-25249
+        run: bin/cmgr test --require-solve examples
+
+      - name: Show nested Docker logs
+        if: failure()
+        run: sudo docker logs cmgr-ci-engine
+
+      - name: Remove nested Docker daemon
+        if: always()
+        run: sudo docker rm --force cmgr-ci-engine
