@@ -136,10 +136,11 @@ jobs:
 
       - name: Register seccomp tweak runtime
         run: |
+          sudo install -d -o root -g root -m 0755 /opt/cmgr/bin
           sudo install -o root -g root -m 0755 \
             bin/cmgr-oci-interceptor \
-            /usr/local/bin/cmgr-oci-interceptor
-          sudo /usr/local/bin/cmgr-oci-interceptor register
+            /opt/cmgr/bin/cmgr-oci-interceptor
+          sudo /opt/cmgr/bin/cmgr-oci-interceptor register
 
       - name: Run example solvers
         env:
