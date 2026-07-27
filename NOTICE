@@ -44,3 +44,13 @@ adapted from picoCTF/oci-interceptor:
 
 picoCTF/oci-interceptor is dual-licensed under the MIT License or the Apache
 License, Version 2.0. cmgr uses it under the Apache License, Version 2.0.
+
+The cmgr hacksport compatibility API and build lifecycle are adapted from the
+picoCTF/picoCTF hacksport implementation:
+
+    https://github.com/picoCTF/picoCTF
+    Release v19.2.10, commit fb09fa2cb745c2db007dc4be8f95e37a1788c830
+
+Those portions are Copyright (c) 2013-2016 Carnegie Mellon University and are
+used under the MIT License. The license is bundled with the compatibility
+source at cmgr/dockerfiles/hacksport_compat/LICENSE.picoCTF.

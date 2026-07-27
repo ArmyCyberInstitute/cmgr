@@ -38,19 +38,46 @@ func (m *Manager) openBuild(build *BuildMetadata) error {
 	}
 
 	m.log.debug("Running select...")
-	rows, err := m.db.NamedQuery("SELECT id, flag, hasartifacts, lastsolved FROM builds WHERE schema=:schema AND format=:format AND challenge=:challenge AND seed=:seed;", build)
+	rows, err := m.db.NamedQuery(
+		"SELECT id, flag, hasartifacts, lastsolved FROM builds WHERE schema=:schema AND format=:format AND challenge=:challenge AND seed=:seed;",
+		build,
+	)
 	if err != nil {
 		m.log.errorf("failed to find build: %s", err)
-	} else if !rows.Next() {
-		m.log.error("found no rows when exactly one expected")
+		return err
+	}
+	if !rows.Next() {
+		rows.Close()
+		err = fmt.Errorf("found no builds when exactly one was expected")
+		m.log.error(err)
+		return err
 	}
 	err = rows.Scan(&build.Id, &build.Flag, &build.HasArtifacts, &build.LastSolved)
 	if err != nil {
 		m.log.errorf("failed to read build ID: %s", err)
+		rows.Close()
+		return err
 	}
-	defer rows.Close()
 	if rows.Next() {
-		m.log.error("found more rows than expected")
+		rows.Close()
+		err = fmt.Errorf("found more than one build when exactly one was expected")
+		m.log.error(err)
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		m.log.errorf("failed to close build query: %s", err)
+		return err
+	}
+
+	// ON CONFLICT can reopen an already-completed build. Load its related
+	// images, lookups, and build-discovered runtime requirements so schema
+	// convergence behaves the same as a fresh build.
+	if build.Flag != "" {
+		persisted, lookupErr := m.lookupBuildMetadata(build.Id)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		*build = *persisted
 	}
 
 	m.log.debugf("Build of %s has ID %d", build.Challenge, build.Id)
@@ -62,6 +89,7 @@ const finalizeBuildQuery string = `
 	SET
 		flag = :flag,
 		hasartifacts = :hasartifacts,
+		requiredseccomptweaks = :requiredseccomptweaks,
 		lastsolved = 0
 	WHERE id = :id;`
 

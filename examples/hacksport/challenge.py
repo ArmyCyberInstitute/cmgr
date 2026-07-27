@@ -15,8 +15,10 @@ class Problem(Remote):
             self.random.choice(string.digits + "abcdef") for _ in range(32)
         )
 
-        self.welcome_message = "Welcome to Secure Encryption Service version 1.{}".format(
-            self.random.randint(0, 10)
+        self.welcome_message = (
+            "Welcome to Secure Encryption Service version 1.{}".format(
+                self.random.randint(0, 10)
+            )
         )
 
     # flag length must be a multiple of 16

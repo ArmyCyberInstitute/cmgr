@@ -34,8 +34,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 
-This work uses the Docker SDK for Go (github.com/moby/moby) which contains the
-following NOTICE and is licensed under the Apache 2.0 license (see LICENSE):
+This work uses the split Docker SDK for Go modules github.com/moby/moby/api and
+github.com/moby/moby/client. The Moby project contains the following NOTICE and
+is licensed under the Apache 2.0 license (see LICENSE):
 
     Docker
     Copyright 2012-2017 Docker, Inc.
@@ -144,8 +145,62 @@ SOFTWARE.
 
 ------------------------------------------------------------------------------
 
-This work uses the 'gopkg.in/yaml.v2' module for Go
-(https://github.com/go-yaml/yaml) which contains the following NOTICE and is
+This work includes a hacksport compatibility API and build lifecycle adapted
+from picoCTF/picoCTF release v19.2.10, commit
+fb09fa2cb745c2db007dc4be8f95e37a1788c830:
+
+The MIT License (MIT)
+
+Copyright (c) 2013-2016 Carnegie Mellon University
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------------
+
+The Cookie Monster example includes Bootstrap v5.3.8:
+
+The MIT License (MIT)
+
+Copyright (c) 2011-2025 The Bootstrap Authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------------
+
+This work uses the 'go.yaml.in/yaml/v3' module for Go
+(https://github.com/yaml/go-yaml) which contains the following NOTICE and is
 licensed under the Apache 2.0 license (see LICENSE):
 
     Copyright 2011-2016 Canonical Ltd.
@@ -165,7 +220,7 @@ licensed under the Apache 2.0 license (see LICENSE):
 ------------------------------------------------------------------------------
 
 This work includes works derived from the libyaml project as part of the
-'gopkg.in/yaml.v2' module for Go:
+'go.yaml.in/yaml/v3' module for Go:
 
 Copyright (c) 2006 Kirill Simonov
 

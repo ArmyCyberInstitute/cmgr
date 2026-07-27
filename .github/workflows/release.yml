@@ -1,92 +1,127 @@
+name: Release
+
 on:
   push:
     tags:
-    - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+      - "v*"
 
-name: Upload Release Asset
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
 
 jobs:
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create-release.outputs.upload_url }}
-    steps:
-      - name: Create Release
-        id: create-release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
-
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Collect examples
-        run: |
-          tar czvf examples.tar.gz examples
-
-      - name: Upload Examples
-        id: upload-examples
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create-release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
-          asset_path: ./examples.tar.gz
-          asset_name: examples.tar.gz
-          asset_content_type: application/octet-stream
   build:
-    name: Build Release Binaries
+    name: ${{ matrix.os }} ${{ matrix.goos }}/${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
-    needs: create-release
     strategy:
+      fail-fast: false
       matrix:
-        os:
-          - ubuntu-20.04
-          - macos-11
-        arch:
-          - amd64
-          - arm64
+        include:
+          - os: ubuntu-24.04
+            goos: linux
+            arch: amd64
+          - os: ubuntu-24.04
+            goos: linux
+            arch: arm64
+          - os: macos-26
+            goos: darwin
+            arch: amd64
+          - os: macos-26
+            goos: darwin
+            arch: arm64
     steps:
-      - name: Set up Go 1.x
-        uses: actions/setup-go@v2
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ^1.16
-        id: go
+          go-version: 1.26.5
+          cache: true
 
-      - name: Checkout code
-        uses: actions/checkout@v2
+      - name: Verify dependencies
+        run: bash support/verify_go_modules.sh
 
-      - name: Build project # This would actually build your project, using zip for an example artifact
+      - name: Build release binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
         run: |
-          go get -v -t -d ./...
-          mkdir bin
-          GOARCH=${arch} go build -v -ldflags "-X github.com/ArmyCyberInstitute/cmgr/cmgr.version=`git describe --tags`" -o bin ./...
-          cp LICENSE bin/LICENSE
-          cat NOTICE NOTICE.release > bin/NOTICE
-          cd bin && tar czvf cmgr.tar.gz cmgr cmgrd cmgr-oci-interceptor LICENSE NOTICE
-        env:
-          arch: ${{ matrix.arch }}
+          mkdir -p "dist/cmgr_${GOOS}_${GOARCH}"
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/ArmyCyberInstitute/cmgr/cmgr.version=${GITHUB_REF_NAME}" \
+            -o "dist/cmgr_${GOOS}_${GOARCH}/" ./cmd/...
+          cp LICENSE "dist/cmgr_${GOOS}_${GOARCH}/LICENSE"
+          {
+            cat NOTICE
+            cat NOTICE.release
+          } > "dist/cmgr_${GOOS}_${GOARCH}/NOTICE"
 
-      - name: Get OS/architecture suffix
-        id: suffix
+      - name: Collect dependency licenses
         run: |
-          echo "::set-output name=arch_suffix::`go version | cut -d ' ' -f 4,4 | cut -d '/' -f 1,1`_${arch}"
-        env:
-          arch: ${{ matrix.arch }}
+          go run github.com/google/go-licenses/v2@v2.0.1 save ./cmd/... \
+            --ignore github.com/ArmyCyberInstitute/cmgr \
+            --save_path "dist/cmgr_${{ matrix.goos }}_${{ matrix.arch }}/third_party_licenses"
 
-      - name: Upload Binaries
-        id: upload-binaries
-        uses: actions/upload-release-asset@v1
+      - name: Create release archive
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          tar -C "dist/cmgr_${GOOS}_${GOARCH}" \
+            -czf "cmgr_${GOOS}_${GOARCH}.tar.gz" .
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./bin/cmgr.tar.gz
-          asset_name: cmgr_${{ steps.suffix.outputs.arch_suffix }}.tar.gz
-          asset_content_type: application/octet-stream
+          name: cmgr_${{ matrix.goos }}_${{ matrix.arch }}
+          path: cmgr_${{ matrix.goos }}_${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    runs-on: ubuntu-24.04
+    needs:
+      - build
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+          cache: true
+
+      - name: Download release archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate Go module SBOM
+        run: |
+          bash support/verify_go_modules.sh
+          go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0 \
+            mod -json -output release-assets/cmgr-go-modules.cdx.json
+
+      - name: Package examples
+        run: |
+          tar -czf release-assets/examples.tar.gz \
+            examples LICENSE NOTICE NOTICE.release
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            release-assets/*.tar.gz \
+            release-assets/*.cdx.json \
+            --verify-tag \
+            --title "Release ${GITHUB_REF_NAME}" \
+            --generate-notes

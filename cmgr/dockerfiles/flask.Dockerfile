@@ -1,10 +1,14 @@
-FROM ubuntu:20.04 AS base
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS base
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    python3-pip
-RUN pip3 install flask
+    python3 \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/cmgr-venv \
+    && /opt/cmgr-venv/bin/pip install --disable-pip-version-check Flask==3.1.3
+ENV PATH="/opt/cmgr-venv/bin:${PATH}"
 RUN groupadd -r flask && useradd -r -d /app -g flask flask
 
 ENV FLASK_RUN_HOST=0.0.0.0
@@ -13,10 +17,16 @@ ENV FLASK_RUN_PORT=5000
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then \
+        apt-get update \
+        && xargs -r -a packages.txt apt-get install -y --no-install-recommends \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 COPY Dockerfile requirements.txt* ./
-RUN if [ -f requirements.txt ]; then pip3 install -r requirements.txt; fi
+RUN if [ -f requirements.txt ]; then \
+        pip install --disable-pip-version-check -r requirements.txt; \
+    fi
 
 COPY --chown=flask:flask . /app
 

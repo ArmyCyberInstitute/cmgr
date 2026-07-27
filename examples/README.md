@@ -2,11 +2,15 @@
 
 ## Supported Specification Formats
 
-As an evolution on the original `hacksport` library, we provide two formats for specifying a challenge:  JSON and Markdown.
+As an evolution of the original `hacksport` library, cmgr provides two formats
+for specifying a challenge: JSON and Markdown.
 
 ### problem.json
 
-We attempt to support backwards compatability with the previous `hacksport` JSON format and will use the compatability mode for any `problem.json` file that has a `challenge.py` file in the same directory.  However, these challenge definitions are unable to take full advantage of new challenge types and metadata control.  So it is preferred to use the newer format if you want to use JSON for specifying the metadata.
+cmgr recognizes the previous `hacksport` JSON format when `problem.json` and
+`challenge.py` are in the same directory. It runs these challenges through the
+modern compatibility layer by default. New JSON challenges can use the native
+metadata shape to access all current challenge types and options.
 
 ### problem.md
 
@@ -20,7 +24,19 @@ In an effort to make it easier to develop content, we've implemented a Markdown 
 
 One of the primary goals of _cmgr_ is to make it easier to implement new challenge types.  One notable lack of support right now, however, is the inability to mount and manipulate block devices.  This is currently a limitation of the underlying container system (i.e. Docker and containerd).  Unless otherwise specified, challenge types that expose a port have the associated service running as a non-root user inside the container who does not have permission to read `/challenge` (and hence a known location of the flag).
 
-As a general rule, all challenge types (except "custom" and "hacksport") support two mechanisms for installing dependencies.  First, they will look for a `packages.txt` file in the challenge's root directory.  This file should have a single "apt" package per line (versioning not supported) and will be installed before any other code is run.  Additionally, challenges that require/support Python (e.g. "flask") will also look for the standard `requirements.txt` file and install those dependencies with "pip".
+As a general rule, all challenge types except `custom` support two mechanisms
+for installing dependencies. First, they look for a `packages.txt` file in the
+challenge root. This file contains one `apt` package per line and is installed
+before the challenge runs. Python-capable types also install the standard
+`requirements.txt` file into a challenge-specific virtual environment. Pin
+Python requirements when reproducible rebuilds are important.
+
+The default embedded Linux build environment is Ubuntu 24.04. Challenge types
+based on that environment also accept an `-ubuntu26` suffix (for example,
+`flask-ubuntu26` or `remote-pybuild-ubuntu26`) when a challenge intentionally
+targets Ubuntu 26.04. The Node type uses the current Node 24 LTS line. Changing
+these types affects only new builds; already-built instances retain their
+existing images.
 
 If you are interested in the underlying mechanics for a challenge type, all of the associated Dockerfiles can be found [here](../cmgr/dockerfiles/).
 
@@ -70,7 +86,32 @@ This is a simple wrapper around the "flask" web framework designed to require mi
 
 ### hacksport
 
-This is a shim around the legacy `hacksport` framework.  It should "just work" for those challenges, but is also likely to be fragile on more complicated ones.  In particular, the "docker" challenges are not supported (but should be easily portable to a new "custom" one) and calls to "mount" are not supported.
+The `hacksport` type is a centralized Python 3 compatibility implementation of
+the public APIs and build lifecycle from picoCTF's v19.2.10 hacksport release.
+Both legacy `problem.json` challenges and Markdown challenges with
+`Type: hacksport` use it. `hacksport-ubuntu26` selects the newer Ubuntu base.
+The compatibility source records the exact upstream release and license.
+
+The runner supports the common `Challenge`, compiled-binary, remote, service,
+Flask, PHP, templating, artifact, lookup, dependency, and file-deployment APIs.
+It maps exact `pycrypto` requirement names to PyCryptodome explicitly. A
+challenge using `DockerChallenge`, Python 2-only dependencies, complex Debian
+package expressions, or another unsupported custom deployment hook fails with
+a conversion-oriented error instead of silently omitting behavior.
+
+For challenges that cannot reasonably move to the compatibility runner,
+`Type: hacksport-legacy` retains the original Python 2/PHP 7 shell-manager
+path. Its historical base must be built separately:
+
+```sh
+docker build -f support/cmgr-hacksport-base.Dockerfile -t cmgr/hacksport .
+```
+
+Legacy-format challenges using the modern compatibility runner that request
+`remove_aslr=True` automatically require the `allow-disable-aslr` seccomp tweak
+in their runtime build metadata. The build still succeeds without the OCI
+interceptor, but starting that challenge fails closed until the interceptor is
+registered as described in the main README.
 
 ### node
 

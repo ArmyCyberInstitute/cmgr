@@ -3,52 +3,146 @@ name: Go
 on:
   push:
   pull_request:
-    branches: [ master ]
+    branches:
+      - master
+      - dev
+      - 2026-refactor
+
+permissions:
+  contents: read
 
 env:
   CMGR_LOGGING: debug
+  GOFLAGS: -mod=readonly
 
 jobs:
-  build:
-    name: Build
-    runs-on: ${{ matrix.os }}
+  test:
+    name: Go ${{ matrix.go }}
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - ubuntu-20.04
+        go:
+          - 1.25.12
+          - 1.26.5
     steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    - name: Set up Go 1.x
-      uses: actions/setup-go@v2
-      with:
-        go-version: ^1.16
-      id: go
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
 
-    - name: Install black
-      run: sudo apt-get install -y black
+      - name: Verify dependencies
+        run: bash support/verify_go_modules.sh
 
-    - name: Check out code into the Go module directory
-      uses: actions/checkout@v2
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
 
-    - name: Python format check
-      run: find . -name *.py -exec black --check {} +
+      - name: Vet
+        run: go vet ./...
 
-    - name: Get dependencies
-      run: go get -v -t -d ./...
+      - name: Unit tests
+        run: go test -race -count=1 ./...
 
-    - name: Golang linting
-      run: go vet ./...
+      - name: Build
+        run: |
+          mkdir -p bin
+          go build -trimpath \
+            -ldflags "-X github.com/ArmyCyberInstitute/cmgr/cmgr.version=$(git describe --tags --always)" \
+            -o bin/ ./cmd/...
 
-    - name: Build
-      run: mkdir bin && go build -v -ldflags "-X github.com/ArmyCyberInstitute/cmgr/cmgr.version=`git describe --tags`" -o bin ./...
+  python-format:
+    name: Python formatting
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    - name: Unit Tests
-      run: go test -v ./...
+      - name: Install Black
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/black"
+          "${RUNNER_TEMP}/black/bin/pip" install --disable-pip-version-check black==26.5.1
 
-    - name: Prepare Integration Tests
-      run:  mkdir artifacts
+      - name: Check formatting
+        run: find . -name '*.py' -print0 | xargs -0 "${RUNNER_TEMP}/black/bin/black" --check
 
-    - name: Integration Tests
-      run: CMGR_DIR=examples CMGR_ARTIFACT_DIR=artifacts bin/cmgr test --require-solve examples
+  vulnerability-scan:
+    name: Reachable Go vulnerabilities
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+          cache: true
+
+      - name: Verify dependencies
+        run: bash support/verify_go_modules.sh
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+  license-check:
+    name: Go dependency licenses
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+          cache: true
+
+      - name: Verify dependencies
+        run: bash support/verify_go_modules.sh
+
+      - name: Check dependency licenses
+        run: |
+          go run github.com/google/go-licenses/v2@v2.0.1 \
+            check ./cmd/... --include_tests
+
+  integration:
+    name: Example integration tests
+    runs-on: ubuntu-24.04
+    needs:
+      - test
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+          cache: true
+
+      - name: Verify dependencies
+        run: bash support/verify_go_modules.sh
+
+      - name: Build cmgr
+        run: |
+          mkdir -p bin artifacts
+          go build -trimpath \
+            -ldflags "-X github.com/ArmyCyberInstitute/cmgr/cmgr.version=$(git describe --tags --always)" \
+            -o bin/ ./cmd/...
+
+      - name: Register seccomp tweak runtime
+        run: |
+          sudo install -o root -g root -m 0755 \
+            bin/cmgr-oci-interceptor \
+            /usr/local/bin/cmgr-oci-interceptor
+          sudo /usr/local/bin/cmgr-oci-interceptor register
+
+      - name: Run example solvers
+        env:
+          CMGR_DIR: examples
+          CMGR_ARTIFACT_DIR: artifacts
+        run: bin/cmgr test --require-solve examples

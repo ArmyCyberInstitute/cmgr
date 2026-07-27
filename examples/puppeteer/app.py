@@ -22,7 +22,6 @@ from flask import (
 
 ADMIN_KEY = "{{seed}}"
 
-NODE_PATH = "/usr/bin/node"
 NODE_PATH = "/usr/local/bin/node"
 
 
@@ -129,6 +128,7 @@ def new_cookie():
 
 procs = {}
 
+
 # Clean up any child procs and update the session
 @app.before_request
 def before_request():
@@ -168,12 +168,7 @@ def admin_landing():
 
 class FakeRequest:
     def __init__(self, session):
-        self.cookies = {app.session_cookie_name: session}
-
-
-class FakeResponse:
-    def set_cookie(*args, **kwargs):
-        pass
+        self.cookies = {app.config["SESSION_COOKIE_NAME"]: session}
 
 
 def get_session(sid):
@@ -181,11 +176,12 @@ def get_session(sid):
 
 
 def save_session(ses):
-    app.session_interface.save_session(app, ses, FakeResponse())
+    response = app.response_class()
+    app.session_interface.save_session(app, ses, response)
 
 
 def get_session_id():
-    return request.cookies.get(app.session_cookie_name, None)
+    return request.cookies.get(app.config["SESSION_COOKIE_NAME"], None)
 
 
 def save_session_to_file():

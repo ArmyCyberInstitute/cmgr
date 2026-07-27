@@ -39,6 +39,17 @@ func TestInitDatabase(t *testing.T) {
 		t.Fatalf("database does not contain the seccomp options column")
 	}
 
+	var requiredSeccompTweaksColumns int
+	err = mgr.db.Get(
+		&requiredSeccompTweaksColumns,
+		"SELECT COUNT(*) FROM pragma_table_info('builds') WHERE name = 'requiredseccomptweaks';",
+	)
+	if err != nil {
+		t.Fatalf("failed to inspect database schema: %s", err)
+	}
+	if requiredSeccompTweaksColumns != 1 {
+		t.Fatalf("database does not contain the build seccomp requirements column")
+	}
 }
 
 func TestSeccompDatabaseMigration(t *testing.T) {
@@ -82,6 +93,71 @@ func TestSeccompDatabaseMigration(t *testing.T) {
 	}
 	if seccompColumns != 1 {
 		t.Fatalf("legacy database was not migrated")
+	}
+}
+
+func TestBuildSeccompRequirementsDatabaseMigration(t *testing.T) {
+	dbFile, err := ioutil.TempFile("", "*.db")
+	if err != nil {
+		t.Fatalf("failed to make temporary file: %s", err)
+	}
+	dbPath := dbFile.Name()
+	dbFile.Close()
+	defer os.Remove(dbPath)
+
+	db, err := sqlx.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open temporary database: %s", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE builds (
+			id INTEGER PRIMARY KEY,
+			flag TEXT NOT NULL,
+			format TEXT NOT NULL,
+			seed INTEGER NOT NULL,
+			hasartifacts INTEGER NOT NULL,
+			lastsolved INTEGER,
+			challenge TEXT NOT NULL,
+			schema TEXT NOT NULL,
+			instancecount INT NOT NULL
+		);
+	`)
+	db.Close()
+	if err != nil {
+		t.Fatalf("failed to create legacy database schema: %s", err)
+	}
+
+	mgr := new(Manager)
+	mgr.log = newLogger(DISABLED)
+	os.Setenv(DB_ENV, dbPath)
+	defer os.Unsetenv(DB_ENV)
+
+	if err = mgr.initDatabase(); err != nil {
+		t.Fatalf("failed to migrate database: %s", err)
+	}
+	defer mgr.db.Close()
+
+	var columns int
+	err = mgr.db.Get(
+		&columns,
+		"SELECT COUNT(*) FROM pragma_table_info('builds') WHERE name = 'requiredseccomptweaks';",
+	)
+	if err != nil {
+		t.Fatalf("failed to inspect migrated database schema: %s", err)
+	}
+	if columns != 1 {
+		t.Fatalf("legacy database was not migrated")
+	}
+
+	var defaultValue string
+	if err = mgr.db.Get(
+		&defaultValue,
+		"SELECT dflt_value FROM pragma_table_info('builds') WHERE name = 'requiredseccomptweaks';",
+	); err != nil {
+		t.Fatalf("failed to inspect migrated column default: %s", err)
+	}
+	if defaultValue != "'[]'" {
+		t.Fatalf("unexpected migrated column default %q", defaultValue)
 	}
 }
 
@@ -151,5 +227,66 @@ func TestReplaceInstanceRuntimeMetadataPreservesAssignedPorts(t *testing.T) {
 	}
 	if !reflect.DeepEqual(containers, []string{"new-container"}) {
 		t.Fatalf("unexpected replacement containers: %#v", containers)
+	}
+}
+
+func TestOpenCompletedBuildRestoresRuntimeMetadata(t *testing.T) {
+	manager := newSchemaTestManager(t)
+	insertConstraintChallenge(t, manager.db)
+
+	build := &BuildMetadata{
+		Seed:          58,
+		Format:        "flag{%s}",
+		Challenge:     "challenge",
+		Schema:        "schema",
+		InstanceCount: 1,
+	}
+	if err := manager.openBuild(build); err != nil {
+		t.Fatalf("failed to open new build: %s", err)
+	}
+	build.Flag = "flag{persisted}"
+	build.RequiredSeccompTweaks = SeccompTweakList{
+		seccompTweakAllowDisableASLR,
+	}
+	build.LookupData = map[string]string{"lookup": "value"}
+	build.Images = []Image{
+		{Host: "challenge", Ports: []string{"5000/tcp"}},
+	}
+	if err := manager.finalizeBuild(build); err != nil {
+		t.Fatalf("failed to finalize build: %s", err)
+	}
+
+	reopened := &BuildMetadata{
+		Seed:          build.Seed,
+		Format:        build.Format,
+		Challenge:     build.Challenge,
+		Schema:        build.Schema,
+		InstanceCount: 2,
+	}
+	if err := manager.openBuild(reopened); err != nil {
+		t.Fatalf("failed to reopen completed build: %s", err)
+	}
+	if !reflect.DeepEqual(
+		reopened.RequiredSeccompTweaks,
+		build.RequiredSeccompTweaks,
+	) {
+		t.Fatalf(
+			"required seccomp tweaks were not restored: %#v",
+			reopened.RequiredSeccompTweaks,
+		)
+	}
+	if !reflect.DeepEqual(reopened.LookupData, build.LookupData) {
+		t.Fatalf("lookup data was not restored: %#v", reopened.LookupData)
+	}
+	if len(reopened.Images) != 1 ||
+		reopened.Images[0].Host != build.Images[0].Host ||
+		!reflect.DeepEqual(reopened.Images[0].Ports, build.Images[0].Ports) {
+		t.Fatalf("images were not restored: %#v", reopened.Images)
+	}
+	if reopened.InstanceCount != 2 {
+		t.Fatalf(
+			"reopened build did not retain updated instance count: %d",
+			reopened.InstanceCount,
+		)
 	}
 }

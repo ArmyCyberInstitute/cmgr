@@ -1,3 +1,4 @@
+#include <openssl/evp.h>
 #include <openssl/sha.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,13 +34,15 @@ int main(int argc, char **argv) {
         buf[--len] = 0;
     }
 
-    uint8_t hash[SHA256_DIGEST_LENGTH];
-    SHA256_CTX hash_ctx;
-    SHA256_Init(&hash_ctx);
-    SHA256_Update(&hash_ctx, buf, len);
-    SHA256_Final(hash, &hash_ctx);
+    uint8_t hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    if (EVP_Digest(buf, len, hash, &hash_len, EVP_sha256(), NULL) != 1 ||
+            hash_len != sizeof(password_hash)) {
+        fputs("Could not hash password\n", stderr);
+        return -1;
+    }
 
-    if (memcmp(hash, password_hash, SHA256_DIGEST_LENGTH)) {
+    if (memcmp(hash, password_hash, sizeof(password_hash))) {
         puts("Wrong password so no flag for you!");
         return -1;
     }

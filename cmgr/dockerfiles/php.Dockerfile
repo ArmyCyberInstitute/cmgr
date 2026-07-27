@@ -1,14 +1,19 @@
-FROM ubuntu:20.04 AS base
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS base
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
-    php
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    php \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd -r php && useradd -r -d /app -g php php
 
 # End of shared layers for all php challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then \
+        apt-get update \
+        && xargs -r -a packages.txt apt-get install -y --no-install-recommends \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 COPY --chown=php:php . /app
 

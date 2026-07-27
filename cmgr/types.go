@@ -4,8 +4,8 @@ import (
 	"context"
 	"math/rand"
 
-	"github.com/docker/docker/client"
 	"github.com/jmoiron/sqlx"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -125,8 +125,9 @@ type BuildId int64
 type BuildMetadata struct {
 	Id BuildId `json:"id"`
 
-	Flag       string            `json:"flag"`
-	LookupData map[string]string `json:"lookup_data,omitempty"`
+	Flag                  string            `json:"flag"`
+	LookupData            map[string]string `json:"lookup_data,omitempty"`
+	RequiredSeccompTweaks SeccompTweakList  `json:"required_seccomp_tweaks,omitempty"`
 
 	Seed         int                 `json:"seed"`
 	Format       string              `json:"format"`

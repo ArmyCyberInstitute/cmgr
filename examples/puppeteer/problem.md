@@ -19,18 +19,19 @@ Lets make some yummy cookies! Maybe you can even find some extra tasty ones.
 
 - You can control the value so `select` all you want.
 
-- If you need an endpoint for a callback, [requestbin.io](https://requestbin.io)
-  is a useful resource.  You could also run a simple server on your tools VM
-  using a command like `python -m SimpleHTTPServer`
+- If you need an endpoint for a callback, use a webhook collector you trust or
+  run a simple server on your tools VM with `python3 -m http.server`.
 
 ## Example Overview
 
 This challenge shows how to extend the `node` challenge type for usecases
 where the underlying server may not use Node, but that Node is used for other
 functionality (such as [Puppeteer](https://puppeteer.github.io/puppeteer/)).
-In this example, the `preinstall` and `start` scripts for _npm_ are overridden
-in `package.json` to install and run a Flask server which then uses Puppeteer
-to simulate an admin browsing an XSS-vulnerable site.
+In this example, the Node image installs the Python requirements into its
+managed virtual environment, and the `start` script runs a Flask server which
+uses Puppeteer to simulate an admin browsing an XSS-vulnerable site.
+It installs Debian's architecture-native Chromium package and configures
+Puppeteer not to download a separate x86-only browser bundle.
 
 ## Solution
 

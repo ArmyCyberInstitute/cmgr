@@ -202,16 +202,17 @@ the `cmgr` directory.  You can view the API documentation on
 Additionally, the _SQLite3_ database is intended to function as a read-only
 API and its schema can be found [here](cmgr/database.go).
 
-In order to work on the back-end, you will need to have _Go_ installed and
-_cgo_ enabled for at least the initial build where the _sqlite3_ driver is
-built and installed.  To get started, you can run:
+Back-end development requires Go 1.25 or newer; releases are built with Go
+1.26. The SQLite driver is pure Go, so a C toolchain is not required. cmgr's
+supported Docker daemon floor is Engine 25. To get started, run:
 
 ```sh
 git clone https://github.com/ArmyCyberInstitute/cmgr
 cd cmgr
-go get -v -t -d ./...
+go mod download
+go mod verify
 mkdir bin
-go build -v -o bin ./...
+go build -trimpath -o bin/ ./cmd/...
 go test -v ./...
 ```
 
@@ -224,7 +225,7 @@ in its style.
 
 ## Contributing
 
-Please carefully read the [NOTICE](Notice), [CONTRIBUTING](CONTRIBUTING.md),
+Please carefully read the [NOTICE](NOTICE), [CONTRIBUTING](CONTRIBUTING.md),
 [DISCLAIMER](DISCLAIMER.md), and [LICENSE](LICENSE) files for details on how
 to contribute as well as the copyright and licensing situations when
 contributing to the project.

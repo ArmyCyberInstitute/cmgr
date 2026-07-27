@@ -97,6 +97,7 @@ const schemaQuery string = `
 		challenge TEXT NOT NULL,
 		schema TEXT NOT NULL,
 		instancecount INT NOT NULL,
+		requiredseccomptweaks TEXT NOT NULL DEFAULT '[]',
 		UNIQUE(schema, format, challenge, seed),
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -227,6 +228,25 @@ func (m *Manager) initDatabase() error {
 		}
 	}
 
+	var requiredSeccompTweaksColumnCount int
+	err = db.Get(
+		&requiredSeccompTweaksColumnCount,
+		"SELECT COUNT(*) FROM pragma_table_info('builds') WHERE name = 'requiredseccomptweaks';",
+	)
+	if err != nil {
+		m.log.errorf("could not inspect database schema: %s", err)
+		return err
+	}
+	if requiredSeccompTweaksColumnCount == 0 {
+		_, err = db.Exec(
+			"ALTER TABLE builds ADD COLUMN requiredseccomptweaks TEXT NOT NULL DEFAULT '[]';",
+		)
+		if err != nil {
+			m.log.errorf("could not migrate database schema: %s", err)
+			return err
+		}
+	}
+
 	var fkeysEnforced bool
 	err = db.QueryRow("PRAGMA foreign_keys;").Scan(&fkeysEnforced)
 	if err != nil {
@@ -298,7 +318,13 @@ func (m *Manager) safeToRefresh(new *ChallengeMetadata) bool {
 	sameType := old.ChallengeType == new.ChallengeType
 	sameOptions := reflect.DeepEqual(old.ChallengeOptions, new.ChallengeOptions)
 
-	safe := sameType && sameOptions
+	// Hacksport metadata is also build input: it supplies class attributes,
+	// package dependencies, flag-generation context, and artifact templates.
+	// Treat any metadata edit as requiring a rebuild rather than a database-only
+	// refresh.
+	safe := sameType &&
+		sameOptions &&
+		!isHacksportChallengeType(new.ChallengeType)
 
 	return safe
 }

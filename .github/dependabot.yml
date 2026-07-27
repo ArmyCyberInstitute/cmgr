@@ -1,0 +1,112 @@
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      moby-sdk:
+        applies-to: version-updates
+        patterns:
+          - "github.com/moby/moby/api"
+          - "github.com/moby/moby/client"
+      modernc-sqlite:
+        applies-to: version-updates
+        patterns:
+          - "modernc.org/sqlite"
+          - "modernc.org/libc"
+      go-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github.com/moby/moby/api"
+          - "github.com/moby/moby/client"
+          - "modernc.org/sqlite"
+          - "modernc.org/libc"
+      moby-sdk-security:
+        applies-to: security-updates
+        patterns:
+          - "github.com/moby/moby/api"
+          - "github.com/moby/moby/client"
+      modernc-sqlite-security:
+        applies-to: security-updates
+        patterns:
+          - "modernc.org/sqlite"
+          - "modernc.org/libc"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /examples/node
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /examples/puppeteer
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /examples/puppeteer
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /examples/flask/solver
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /examples/hacksport/solver
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /examples/multi/solver
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /examples/node/solver
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /examples/php/solver
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /examples/puppeteer/solver
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /examples/remote/pybuild/solver
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /cmgr/dockerfiles
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /examples/custom
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /examples/multi
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /support
+    schedule:
+      interval: weekly

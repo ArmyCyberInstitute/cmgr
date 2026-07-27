@@ -4,11 +4,11 @@
 <div class="album py-5 bg-light">
 <div class="container">
 <form action="/cookie/new" method="POST">
-  <div class="form-group">
+  <div class="mb-3">
   <label>Cookie Name</label>
   <input class="form-control" name="name" placeholder="Cookie Name" required>
   </div>
-  <div class="form-group">
+  <div class="mb-3">
   <label>Ingredients</label>
   <div id="ingredients">
     <select class="form-control" name="ingredients">
@@ -18,7 +18,7 @@
     </select>
   </div>
   </div>
-  <button class="btn btn-info btn-block">Bake!</button>
+  <button class="btn btn-info w-100">Bake!</button>
 </form>
 </div>
 </div>
@@ -26,16 +26,17 @@
 
 {% block scripts %}
 <script>
-let div = $('#ingredients');
-let first = $(div.children()[0]);
-function make_new() {
-  let clone = first.clone();
-  div.append(clone);
-  $(this).off('change');
-  clone.on('change', make_new);
-}
-first.on('change', make_new);
+const ingredients = document.querySelector('#ingredients');
+const first = ingredients.firstElementChild;
 
+function makeNew() {
+  const clone = first.cloneNode(true);
+  ingredients.appendChild(clone);
+  this.removeEventListener('change', makeNew);
+  clone.addEventListener('change', makeNew, {once: true});
+}
+
+first.addEventListener('change', makeNew, {once: true});
 </script>
 
 {% endblock %}

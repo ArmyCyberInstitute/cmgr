@@ -1,13 +1,18 @@
-FROM ubuntu:20.04 AS base
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS base
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
-    build-essential
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 RUN install -d -m 0700 /challenge
 # End of shared layers for all flask challenges
 
 COPY Dockerfile packages.txt* ./
-RUN if [ -f packages.txt ]; then apt-get update && xargs -a packages.txt apt-get install -y; fi
+RUN if [ -f packages.txt ]; then \
+        apt-get update \
+        && xargs -r -a packages.txt apt-get install -y --no-install-recommends \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 COPY . /app
 WORKDIR /app

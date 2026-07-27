@@ -1,6 +1,10 @@
 package cmgr
 
-import "testing"
+import (
+	"io"
+	"strings"
+	"testing"
+)
 
 func TestBuildImageNamePreservesCanonicalConvention(t *testing.T) {
 	build := &BuildMetadata{Id: 42}
@@ -42,5 +46,36 @@ func TestSelectHostPortRejectsInvalidPreferredAssignment(t *testing.T) {
 		map[string]int{"http": 65536},
 	); err == nil {
 		t.Fatal("invalid preferred host port was accepted")
+	}
+}
+
+func TestConsumeDockerProgressAcceptsSuccessfulStream(t *testing.T) {
+	response := io.NopCloser(strings.NewReader(
+		"{\"stream\":\"step one\\n\"}\n" +
+			"{\"aux\":{\"ID\":\"sha256:abc\"}}\n",
+	))
+	if err := consumeDockerProgress(response, "test build"); err != nil {
+		t.Fatalf("successful Docker response was rejected: %s", err)
+	}
+}
+
+func TestConsumeDockerProgressReturnsStructuredError(t *testing.T) {
+	response := io.NopCloser(strings.NewReader(
+		"{\"stream\":\"Traceback: useful context\\n\"}\n" +
+			"{\"error\":\"executor failed\",\"errorDetail\":{\"message\":\"specific failure\"}}\n",
+	))
+	err := consumeDockerProgress(response, "test build")
+	if err == nil ||
+		!strings.Contains(err.Error(), "specific failure") ||
+		!strings.Contains(err.Error(), "Traceback: useful context") {
+		t.Fatalf("expected structured Docker error, got %v", err)
+	}
+}
+
+func TestConsumeDockerProgressRejectsMalformedResponse(t *testing.T) {
+	response := io.NopCloser(strings.NewReader("{not-json}\n"))
+	err := consumeDockerProgress(response, "test build")
+	if err == nil || !strings.Contains(err.Error(), "failed to decode") {
+		t.Fatalf("expected malformed-response error, got %v", err)
 	}
 }

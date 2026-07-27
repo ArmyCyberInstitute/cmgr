@@ -1,7 +1,10 @@
 const puppeteer = require('puppeteer');
 
 (async () => {
-  const browser = await puppeteer.launch({args: ['--no-sandbox']});
+  const browser = await puppeteer.launch({
+    executablePath: '/usr/bin/chromium',
+    args: ['--no-sandbox'],
+  });
   const page = await browser.newPage();
 
   //*
@@ -24,7 +27,7 @@ const puppeteer = require('puppeteer');
   let url = process.argv[2];
   console.log('[Chrome] ' + url);
   await page.goto(url);
-  await page.waitFor(5000);
+  await new Promise(resolve => setTimeout(resolve, 5000));
   console.log('[Chrome] Shutting down');
   /*
   let c = await page.cookies()

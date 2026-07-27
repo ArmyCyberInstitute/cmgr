@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types"
+	"github.com/moby/moby/api/types/system"
 )
 
 func TestRegisterRuntimeMergesDockerConfiguration(t *testing.T) {
@@ -213,18 +213,22 @@ func TestRunRegisterCommandRegistersExplicitInterceptor(t *testing.T) {
 func TestRuntimeRegistrationMatchesProtocolAndPath(t *testing.T) {
 	expectedPath := "/usr/local/bin/cmgr-oci-interceptor"
 	expectedArguments := runtimeArguments("/usr/bin/runc")
-	info := types.Info{
-		Runtimes: map[string]types.Runtime{
+	info := system.Info{
+		Runtimes: map[string]system.RuntimeWithStatus{
 			RuntimeName: {
-				Path: expectedPath,
-				Args: expectedArguments,
+				Runtime: system.Runtime{
+					Path: expectedPath,
+					Args: expectedArguments,
+				},
 			},
 		},
 	}
 	if !runtimeRegistrationMatches(info, expectedPath, expectedArguments) {
 		t.Fatal("matching runtime registration was rejected")
 	}
-	info.Runtimes[RuntimeName] = types.Runtime{Path: expectedPath}
+	info.Runtimes[RuntimeName] = system.RuntimeWithStatus{
+		Runtime: system.Runtime{Path: expectedPath},
+	}
 	if runtimeRegistrationMatches(info, expectedPath, expectedArguments) {
 		t.Fatal("registration without protocol arguments was accepted")
 	}

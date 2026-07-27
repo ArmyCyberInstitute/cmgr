@@ -25,7 +25,7 @@ def solve(host, port):
     cipher = AES.new(base64.b16decode(key, casefold=True), AES.MODE_ECB)
     flag = cipher.decrypt(base64.b16decode(msg)).decode("utf-8")
 
-    # sabe result
+    # save result
     write_flag(flag)
 
 

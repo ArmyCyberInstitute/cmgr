@@ -1,11 +1,11 @@
 # LAUNCH work randomDnsName
 
-FROM ubuntu:20.04 AS builder
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssh-client \
     python3 \
-    ssh \
-    sudo
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir /challenge
 COPY finalize.py .
@@ -23,12 +23,13 @@ RUN python3 finalize.py
 ####################
 #### Host: work ####
 ####################
-FROM ubuntu:20.04 AS work
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS work
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssh-server \
     python3 \
-    ssh \
-    sudo
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /run/sshd
 
 RUN useradd -m -s /bin/bash asmith
@@ -45,7 +46,7 @@ RUN chmod 0600 /home/asmith/.ssh/id_rsa
 COPY ssh_config /home/asmith/.ssh/config
 RUN chown -R asmith:asmith /home/asmith
 
-CMD /usr/sbin/sshd -D
+CMD ["/usr/sbin/sshd", "-D"]
 
 EXPOSE 22
 # PUBLISH 22 AS ssh
@@ -58,12 +59,13 @@ EXPOSE 22
 ###############################
 #### Host: random-dns-name ####
 ###############################
-FROM ubuntu:20.04 AS randomDnsName
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS randomDnsName
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssh-server \
     python3 \
-    ssh \
-    sudo
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /run/sshd
 
 RUN useradd -m -s /bin/bash alice
@@ -74,5 +76,4 @@ COPY --from=builder id_rsa.pub /home/alice/.ssh/authorized_keys
 RUN chmod 0644 /home/alice/.ssh/authorized_keys
 RUN chown -R alice:alice /home/alice
 
-CMD /usr/sbin/sshd -D
-
+CMD ["/usr/sbin/sshd", "-D"]

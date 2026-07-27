@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	"github.com/ArmyCyberInstitute/cmgr/internal/ociinterceptor"
 )
@@ -18,6 +19,8 @@ const (
 	seccompTweakAllowDisableASLR = ociinterceptor.TweakAllowDisableASLR
 	maxSeccompProfileSize        = 1024 * 1024
 )
+
+const buildMetadataSeccompTweaksKey = "__cmgr_seccomp_tweaks"
 
 // seccompPolicy is the profile historically applied to every Linux container.
 // It is retained only for challenges that explicitly select legacy behavior.
@@ -286,6 +289,67 @@ func validatePersistedSeccompOptions(options *SeccompOptions) error {
 		}
 	}
 	return nil
+}
+
+// withRequiredSeccompTweaks overlays requirements discovered while building a
+// challenge on the challenge author's selected base policy. The interceptor
+// therefore sees Docker's generated default profile (or the configured legacy
+// or custom profile) and makes only the requested OCI-level changes.
+func withRequiredSeccompTweaks(
+	configured *SeccompOptions,
+	required []string,
+) (*SeccompOptions, error) {
+	if configured == nil && len(required) == 0 {
+		return nil, nil
+	}
+
+	combined := new(SeccompOptions)
+	if configured != nil {
+		*combined = *configured
+		combined.Tweaks = append([]string(nil), configured.Tweaks...)
+	}
+
+	unique := make(map[string]struct{}, len(combined.Tweaks)+len(required))
+	for _, tweak := range combined.Tweaks {
+		unique[tweak] = struct{}{}
+	}
+	for _, tweak := range required {
+		unique[tweak] = struct{}{}
+	}
+	combined.Tweaks = combined.Tweaks[:0]
+	for tweak := range unique {
+		combined.Tweaks = append(combined.Tweaks, tweak)
+	}
+
+	var err error
+	combined.Tweaks, err = ociinterceptor.NormalizeTweaks(combined.Tweaks)
+	if err != nil {
+		return nil, err
+	}
+	return combined, nil
+}
+
+func consumeBuildSeccompTweaks(
+	metadata map[string]string,
+) (SeccompTweakList, error) {
+	encoded, present := metadata[buildMetadataSeccompTweaksKey]
+	if !present {
+		return nil, nil
+	}
+	delete(metadata, buildMetadataSeccompTweaksKey)
+
+	if strings.TrimSpace(encoded) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(encoded, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	normalized, err := ociinterceptor.NormalizeTweaks(parts)
+	if err != nil {
+		return nil, fmt.Errorf("invalid build-required seccomp tweaks: %v", err)
+	}
+	return SeccompTweakList(normalized), nil
 }
 
 type seccompPolicyFingerprint struct {

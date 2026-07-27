@@ -10,13 +10,12 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 func (m *Manager) runSolver(instance InstanceId) error {
@@ -42,7 +41,7 @@ func (m *Manager) runSolver(instance InstanceId) error {
 	solveCtx := m.createSolveContext(bMeta)
 
 	imageName := fmt.Sprintf("%s/%s:%d", bMeta.Challenge, "solver", bMeta.Id)
-	opts := types.ImageBuildOptions{Remove: true, Tags: []string{imageName}}
+	opts := client.ImageBuildOptions{Remove: true, Tags: []string{imageName}}
 
 	// Build the base image (will run the solver)
 	resp, err := m.cli.ImageBuild(m.ctx, solveCtx, opts)
@@ -51,27 +50,12 @@ func (m *Manager) runSolver(instance InstanceId) error {
 		return err
 	}
 
-	messages, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		m.log.errorf("failed to read build response from docker: %s", err)
-		return err
-	}
-
-	re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
-	errMsg := re.Find(messages)
-	if errMsg != nil {
-		var dMsg dockerError
-		err = json.Unmarshal(errMsg, &dMsg)
-		if err == nil {
-			errMsg = []byte(dMsg.Error)
-		}
-		err = fmt.Errorf("failed to build image: %s", errMsg)
+	if err := consumeDockerProgress(resp.Body, "solver image build"); err != nil {
 		m.log.error(err)
 		return err
 	}
 
-	iro := types.ImageRemoveOptions{Force: false, PruneChildren: true}
+	iro := client.ImageRemoveOptions{Force: false, PruneChildren: true}
 	// Defer the image deletion
 	defer m.cli.ImageRemove(m.ctx, imageName, iro)
 
@@ -94,35 +78,50 @@ func (m *Manager) runSolver(instance InstanceId) error {
 		},
 	}
 
-	respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, nil, "")
+	respCC, err := m.cli.ContainerCreate(
+		m.ctx,
+		client.ContainerCreateOptions{
+			Config:           &cConfig,
+			HostConfig:       &hConfig,
+			NetworkingConfig: &nConfig,
+		},
+	)
 	if err != nil {
 		m.log.errorf("failed to create solve container: %s", err)
 		return err
 	}
 	cid := respCC.ID
 
-	cro := types.ContainerRemoveOptions{RemoveVolumes: true, Force: true}
+	cro := client.ContainerRemoveOptions{RemoveVolumes: true, Force: true}
 	defer m.cli.ContainerRemove(m.ctx, cid, cro)
 
-	err = m.cli.ContainerStart(m.ctx, cid, types.ContainerStartOptions{})
+	_, err = m.cli.ContainerStart(m.ctx, cid, client.ContainerStartOptions{})
 	if err != nil {
 		m.log.errorf("failed to start solve container: %s", err)
 		return err
 	}
 
-	okChan, eChan := m.cli.ContainerWait(m.ctx, cid, container.WaitConditionNotRunning)
+	waitResult := m.cli.ContainerWait(
+		m.ctx,
+		cid,
+		client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning},
+	)
 	select {
-	case err := <-eChan:
+	case err := <-waitResult.Error:
 		m.log.errorf("failed to wait on solve container: %s", err)
 		return err
-	case _ = <-okChan:
+	case _ = <-waitResult.Result:
 	}
 
 	// Copy out the flag & compare
-	flagFileTar, _, err := m.cli.CopyFromContainer(m.ctx, cid, "/solve/flag")
+	copyResult, err := m.cli.CopyFromContainer(
+		m.ctx,
+		cid,
+		client.CopyFromContainerOptions{SourcePath: "/solve/flag"},
+	)
 	if err != nil {
 		m.log.errorf("could not find flag file: %s", err)
-		clo := types.ContainerLogsOptions{
+		clo := client.ContainerLogsOptions{
 			ShowStdout: true,
 			ShowStderr: true,
 		}
@@ -131,6 +130,7 @@ func (m *Manager) runSolver(instance InstanceId) error {
 			m.log.errorf("could not access error logs: %s", lerr)
 			err = lerr
 		} else {
+			defer logs.Close()
 			s, lerr := ioutil.ReadAll(logs)
 			if lerr != nil {
 				m.log.errorf("could not read logs: %s", lerr)
@@ -142,6 +142,7 @@ func (m *Manager) runSolver(instance InstanceId) error {
 
 		return err
 	}
+	flagFileTar := copyResult.Content
 	defer flagFileTar.Close()
 
 	fTar := tar.NewReader(flagFileTar)

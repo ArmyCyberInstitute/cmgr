@@ -12,27 +12,26 @@ import (
 	"io"
 	"io/ioutil"
 	"math/rand"
+	"net/netip"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ArmyCyberInstitute/cmgr/internal/ociinterceptor"
-	dockeropts "github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/strslice"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/containerd/errdefs"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/strslice"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 )
 
 func (m *Manager) initDocker() error {
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		m.log.errorf("could not create docker client: %s", err)
 		return err
@@ -41,7 +40,10 @@ func (m *Manager) initDocker() error {
 	m.cli = cli
 	m.ctx = context.Background()
 
-	ping, err := cli.Ping(m.ctx)
+	ping, err := cli.Ping(
+		m.ctx,
+		client.PingOptions{NegotiateAPIVersion: true},
+	)
 	if err != nil {
 		m.log.errorf("could not connect to docker engine: %s", err)
 		return err
@@ -49,13 +51,13 @@ func (m *Manager) initDocker() error {
 
 	m.log.infof("connected to docker (API v%s)", ping.APIVersion)
 
-	hostInfo, infoErr := cli.Info(m.ctx)
+	hostInfoResult, infoErr := cli.Info(m.ctx, client.InfoOptions{})
 	if infoErr != nil {
 		m.log.warnf(
 			"could not determine whether seccomp tweaks are available: %s",
 			infoErr,
 		)
-	} else if warning := seccompRuntimeWarning(hostInfo); warning != "" {
+	} else if warning := seccompRuntimeWarning(hostInfoResult.Info); warning != "" {
 		m.log.warn(warning)
 	}
 
@@ -245,8 +247,65 @@ func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
 	return nil
 }
 
-type dockerError struct {
-	Error string `json:"error"`
+type dockerProgressMessage struct {
+	Error       string `json:"error"`
+	ErrorDetail *struct {
+		Message string `json:"message"`
+	} `json:"errorDetail"`
+	Stream string `json:"stream"`
+	Status string `json:"status"`
+}
+
+func consumeDockerProgress(response io.ReadCloser, operation string) error {
+	defer response.Close()
+
+	const outputTailLimit = 8 * 1024
+	var outputTail string
+	appendOutput := func(output string) {
+		if output == "" {
+			return
+		}
+		outputTail += output
+		if len(outputTail) > outputTailLimit {
+			outputTail = outputTail[len(outputTail)-outputTailLimit:]
+		}
+	}
+	responseError := func(message string) error {
+		message = strings.TrimSpace(message)
+		outputTail = strings.TrimSpace(outputTail)
+		if outputTail == "" {
+			return fmt.Errorf("Docker %s failed: %s", operation, message)
+		}
+		return fmt.Errorf(
+			"Docker %s failed: %s\nDocker output (tail):\n%s",
+			operation,
+			message,
+			outputTail,
+		)
+	}
+
+	decoder := json.NewDecoder(response)
+	for {
+		var message dockerProgressMessage
+		err := decoder.Decode(&message)
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to decode Docker %s response: %w", operation, err)
+		}
+
+		appendOutput(message.Stream)
+		if message.Status != "" {
+			appendOutput(message.Status + "\n")
+		}
+		if message.ErrorDetail != nil && message.ErrorDetail.Message != "" {
+			return responseError(message.ErrorDetail.Message)
+		}
+		if message.Error != "" {
+			return responseError(message.Error)
+		}
+	}
 }
 
 func (bMeta *BuildMetadata) dockerId(image Image) string {
@@ -283,7 +342,7 @@ func (m *Manager) freezeBaseImage(challenge ChallengeId, force bool) error {
 	defer buildCtx.Close()
 
 	// Setup build options
-	opts := types.ImageBuildOptions{
+	opts := client.ImageBuildOptions{
 		Remove:     true,
 		Tags:       []string{imageName},
 		Target:     "base",
@@ -299,53 +358,20 @@ func (m *Manager) freezeBaseImage(challenge ChallengeId, force bool) error {
 		return err
 	}
 
-	// Read the response because errors aren't propagated.
-	messages, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		m.log.errorf("failed to read build response from docker: %s", err)
-		return err
-	}
-
-	// Search the response for an error message
-	re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
-	errMsg := re.Find(messages)
-	if errMsg != nil {
-		var dMsg dockerError
-		err = json.Unmarshal(errMsg, &dMsg)
-		if err == nil {
-			errMsg = []byte(dMsg.Error)
-		}
-		err = fmt.Errorf("failed to build image: %s", errMsg)
+	if err := consumeDockerProgress(resp.Body, "base image build"); err != nil {
 		m.log.error(err)
 		return err
 	}
 
 	// Push the image
-	pushOpts := types.ImagePushOptions{RegistryAuth: m.authString}
+	pushOpts := client.ImagePushOptions{RegistryAuth: m.authString}
 	pushResp, err := m.cli.ImagePush(m.ctx, imageName, pushOpts)
 	if err != nil {
 		m.log.errorf("failed to push base image: %s", err)
 		return err
 	}
 
-	// Read the response because errors aren't propagated.
-	messages, err = ioutil.ReadAll(pushResp)
-	resp.Body.Close()
-	if err != nil {
-		m.log.errorf("failed to read push response from docker: %s", err)
-		return err
-	}
-
-	// Search the response for an error message
-	errMsg = re.Find(messages)
-	if errMsg != nil {
-		var dMsg dockerError
-		err = json.Unmarshal(errMsg, &dMsg)
-		if err == nil {
-			errMsg = []byte(dMsg.Error)
-		}
-		err = fmt.Errorf("failed to push image: %s", errMsg)
+	if err := consumeDockerProgress(pushResp, "base image push"); err != nil {
 		m.log.error(err)
 		return err
 	}
@@ -369,6 +395,10 @@ func buildImageName(
 func cloneBuildMetadata(build *BuildMetadata) *BuildMetadata {
 	cloned := *build
 	cloned.Images = append([]Image(nil), build.Images...)
+	cloned.RequiredSeccompTweaks = append(
+		SeccompTweakList(nil),
+		build.RequiredSeccompTweaks...,
+	)
 	for i := range cloned.Images {
 		cloned.Images[i].Ports = append([]string(nil), build.Images[i].Ports...)
 	}
@@ -441,7 +471,7 @@ func (m *Manager) finishBuildUpdate(update *stagedBuildUpdate) []error {
 	for _, image := range update.candidate.Images {
 		candidateHosts[image.Host] = struct{}{}
 	}
-	removeOptions := types.ImageRemoveOptions{PruneChildren: true}
+	removeOptions := client.ImageRemoveOptions{PruneChildren: true}
 	for _, image := range update.previous.Images {
 		if _, retained := candidateHosts[image.Host]; retained {
 			continue
@@ -456,7 +486,7 @@ func (m *Manager) finishBuildUpdate(update *stagedBuildUpdate) []error {
 			m.ctx,
 			imageName,
 			removeOptions,
-		); err != nil && !client.IsErrNotFound(err) {
+		); err != nil && !errdefs.IsNotFound(err) {
 			errs = append(
 				errs,
 				fmt.Errorf("could not remove obsolete image %s: %v", imageName, err),
@@ -478,10 +508,10 @@ func (m *Manager) promoteStagedBuild(
 	for _, image := range build.Images {
 		canonical := buildImageName(build.Challenge, build, image, "")
 		staged := buildImageName(build.Challenge, build, image, qualifier)
-		inspection, _, err := m.cli.ImageInspectWithRaw(m.ctx, canonical)
+		inspection, err := m.cli.ImageInspect(m.ctx, canonical)
 		if err == nil {
 			promotion.canonicalImageIDs[canonical] = inspection.ID
-		} else if client.IsErrNotFound(err) {
+		} else if errdefs.IsNotFound(err) {
 			// A new challenge host has no canonical tag to preserve.
 			promotion.canonicalImageIDs[canonical] = ""
 		} else {
@@ -493,7 +523,10 @@ func (m *Manager) promoteStagedBuild(
 	for _, image := range build.Images {
 		canonical := buildImageName(build.Challenge, build, image, "")
 		staged := buildImageName(build.Challenge, build, image, qualifier)
-		if err := m.cli.ImageTag(m.ctx, staged, canonical); err != nil {
+		if _, err := m.cli.ImageTag(
+			m.ctx,
+			client.ImageTagOptions{Source: staged, Target: canonical},
+		); err != nil {
 			_ = m.rollbackStagedBuild(promotion)
 			return nil, fmt.Errorf("could not promote image %s to %s: %v", staged, canonical, err)
 		}
@@ -535,18 +568,17 @@ func (m *Manager) rollbackStagedBuild(promotion *stagedBuildPromotion) error {
 	var firstErr error
 	for canonical, imageID := range promotion.canonicalImageIDs {
 		if imageID == "" {
-			removeOptions := types.ImageRemoveOptions{PruneChildren: true}
+			removeOptions := client.ImageRemoveOptions{PruneChildren: true}
 			if _, err := m.cli.ImageRemove(
 				m.ctx,
 				canonical,
 				removeOptions,
-			); err != nil && !client.IsErrNotFound(err) && firstErr == nil {
+			); err != nil && !errdefs.IsNotFound(err) && firstErr == nil {
 				firstErr = err
 			}
-		} else if err := m.cli.ImageTag(
+		} else if _, err := m.cli.ImageTag(
 			m.ctx,
-			imageID,
-			canonical,
+			client.ImageTagOptions{Source: imageID, Target: canonical},
 		); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -570,10 +602,10 @@ func (m *Manager) rollbackStagedBuild(promotion *stagedBuildPromotion) error {
 
 func (m *Manager) finishStagedBuild(promotion *stagedBuildPromotion) error {
 	var firstErr error
-	removeOptions := types.ImageRemoveOptions{PruneChildren: false}
+	removeOptions := client.ImageRemoveOptions{PruneChildren: false}
 	for _, imageName := range promotion.stagedImageNames {
 		if _, err := m.cli.ImageRemove(m.ctx, imageName, removeOptions); err != nil &&
-			!client.IsErrNotFound(err) && firstErr == nil {
+			!errdefs.IsNotFound(err) && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -591,7 +623,7 @@ func (m *Manager) discardStagedBuild(
 	build *BuildMetadata,
 	qualifier string,
 ) {
-	removeOptions := types.ImageRemoveOptions{PruneChildren: true}
+	removeOptions := client.ImageRemoveOptions{PruneChildren: true}
 	for _, host := range metadata.Hosts {
 		image := Image{Host: host.Name}
 		imageName := buildImageName(metadata.Id, build, image, qualifier)
@@ -613,21 +645,13 @@ func (m *Manager) executeBuild(
 	seedStr := fmt.Sprintf("%d", bMeta.Seed)
 
 	baseName := fmt.Sprintf("%s/%s:%x", m.challengeRegistry, challengeToFreezeName(cMeta.Id), cMeta.SourceChecksum)
-	pullOpts := types.ImagePullOptions{RegistryAuth: m.authString}
+	pullOpts := client.ImagePullOptions{RegistryAuth: m.authString}
 	var buildCache []string
 	pullResp, err := m.cli.ImagePull(m.ctx, baseName, pullOpts)
 	if err == nil {
-		// Read the response because errors aren't propagated.
-		messages, err := ioutil.ReadAll(pullResp)
-		pullResp.Close()
-		if err == nil {
-			// Search the response for an error message
-			re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
-			errMsg := re.Find(messages)
-			if errMsg == nil {
-				m.log.infof("Successfully pulled base image '%s'", baseName)
-				buildCache = append(buildCache, baseName)
-			}
+		if err := consumeDockerProgress(pullResp, "base image pull"); err == nil {
+			m.log.infof("Successfully pulled base image '%s'", baseName)
+			buildCache = append(buildCache, baseName)
 		}
 	}
 
@@ -648,7 +672,7 @@ func (m *Manager) executeBuild(
 		}
 
 		// Setup build options
-		opts := types.ImageBuildOptions{
+		opts := client.ImageBuildOptions{
 			BuildArgs: map[string]*string{
 				"FLAG_FORMAT": &bMeta.Format,
 				"SEED":        &seedStr,
@@ -675,26 +699,15 @@ func (m *Manager) executeBuild(
 			return err
 		}
 
-		messages, err := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			m.log.errorf("failed to read build response from docker: %s", err)
-			return err
-		}
-
-		re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
-		errMsg := re.Find(messages)
-		if errMsg != nil {
-			var dMsg dockerError
-			err = json.Unmarshal(errMsg, &dMsg)
-			if err == nil {
-				errMsg = []byte(dMsg.Error)
-			}
-			err = fmt.Errorf("failed to build image: %s", errMsg)
+		if err := consumeDockerProgress(resp.Body, "challenge image build"); err != nil {
 			m.log.error(err)
 			return err
 		}
 		images = append(images, image)
+		// Multi-container and builder/challenge targets share the same context.
+		// Explicitly offer each completed target to the next build so daemon
+		// cache behavior does not cause common stages to be rebuilt.
+		buildCache = append(buildCache, imageName)
 	}
 
 	if buildImage == "" {
@@ -707,23 +720,35 @@ func (m *Manager) executeBuild(
 	hConfig := container.HostConfig{}
 	nConfig := network.NetworkingConfig{}
 
-	respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, nil, "")
+	respCC, err := m.cli.ContainerCreate(
+		m.ctx,
+		client.ContainerCreateOptions{
+			Config:           &cConfig,
+			HostConfig:       &hConfig,
+			NetworkingConfig: &nConfig,
+		},
+	)
 	if err != nil {
 		m.log.errorf("failed to create artifacts container: %s", err)
 		return err
 	}
 
 	cid := respCC.ID
-	crOpts := types.ContainerRemoveOptions{RemoveVolumes: true, RemoveLinks: false, Force: true}
+	crOpts := client.ContainerRemoveOptions{RemoveVolumes: true, RemoveLinks: false, Force: true}
 	defer m.cli.ContainerRemove(m.ctx, cid, crOpts)
 
 	m.log.infof("created container %s", cid)
 
-	metaFile, _, err := m.cli.CopyFromContainer(m.ctx, cid, "/challenge")
+	copyResult, err := m.cli.CopyFromContainer(
+		m.ctx,
+		cid,
+		client.CopyFromContainerOptions{SourcePath: "/challenge"},
+	)
 	if err != nil {
 		m.log.errorf("could not find '/challenge' in container: %s", err)
 		return err
 	}
+	metaFile := copyResult.Content
 	defer metaFile.Close()
 
 	cTar := tar.NewReader(metaFile)
@@ -756,6 +781,12 @@ func (m *Manager) executeBuild(
 			}
 
 			delete(lookups, "flag")
+
+			bMeta.RequiredSeccompTweaks, err = consumeBuildSeccompTweaks(lookups)
+			if err != nil {
+				m.log.error(err)
+				return err
+			}
 		} else if hdr.Name == "challenge/artifacts.tar.gz" {
 			artifactsFileName := bMeta.getArtifactsFilenameForQualifier(qualifier)
 			// Iterate through reading filenames and copying over the tarball
@@ -849,7 +880,7 @@ func (m *Manager) executeBuild(
 			bMeta.getArtifactsFilenameForQualifier(qualifier),
 		))
 
-		iro := types.ImageRemoveOptions{Force: false, PruneChildren: true}
+		iro := client.ImageRemoveOptions{Force: false, PruneChildren: true}
 		for _, image := range bMeta.Images {
 			imageName := buildImageName(bMeta.Challenge, bMeta, image, qualifier)
 			m.cli.ImageRemove(m.ctx, imageName, iro)
@@ -862,7 +893,7 @@ func (m *Manager) executeBuild(
 }
 
 func (m *Manager) startNetwork(instance *InstanceMetadata, opts NetworkOptions) error {
-	netSpec := types.NetworkCreate{
+	netSpec := client.NetworkCreateOptions{
 		Driver: "bridge",
 	}
 	netname := instance.getNetworkName()
@@ -875,9 +906,13 @@ func (m *Manager) startNetwork(instance *InstanceMetadata, opts NetworkOptions) 
 
 func (m *Manager) stopNetwork(instance *InstanceMetadata) error {
 	networkName := instance.getNetworkName()
-	err := m.cli.NetworkRemove(m.ctx, networkName)
+	_, err := m.cli.NetworkRemove(
+		m.ctx,
+		networkName,
+		client.NetworkRemoveOptions{},
+	)
 	if err != nil {
-		if client.IsErrNotFound(err) {
+		if errdefs.IsNotFound(err) {
 			m.log.warnf("skipped removing network (not found): %s", networkName)
 			err = nil
 		} else {
@@ -918,16 +953,23 @@ func (m *Manager) startContainersWithPersistence(
 		portLock.Lock()
 		defer portLock.Unlock()
 	}
+	hostIP, err := netip.ParseAddr(m.challengeInterface)
+	if err != nil {
+		return fmt.Errorf("invalid challenge interface %q: %v", m.challengeInterface, err)
+	}
 	// Call create in docker
 	netname := instance.getNetworkName()
 	for _, image := range build.Images {
 		if image.Host == "builder" {
 			continue
 		}
-		exposedPorts := nat.PortSet{}
-		publishedPorts := nat.PortMap{}
+		exposedPorts := network.PortSet{}
+		publishedPorts := network.PortMap{}
 		for _, portStr := range image.Ports {
-			port := nat.Port(portStr)
+			port, err := network.ParsePort(portStr)
+			if err != nil {
+				return fmt.Errorf("invalid image port %q: %v", portStr, err)
+			}
 			endpoint := challengePortEndpoint{
 				Host: image.Host,
 				Port: portStr,
@@ -945,8 +987,8 @@ func (m *Manager) startContainersWithPersistence(
 				return err
 			}
 			exposedPorts[port] = struct{}{}
-			publishedPorts[port] = []nat.PortBinding{
-				{HostIP: m.challengeInterface, HostPort: hostPort},
+			publishedPorts[port] = []network.PortBinding{
+				{HostIP: hostIP, HostPort: hostPort},
 			}
 		}
 
@@ -971,7 +1013,7 @@ func (m *Manager) startContainersWithPersistence(
 		if hasContainerOpts {
 			hConfig.Init = &cOpts.Init
 			if cOpts.Cpus != "" {
-				nanoCpus, err := dockeropts.ParseCPUs(cOpts.Cpus)
+				nanoCpus, err := parseNanoCPUs(cOpts.Cpus)
 				if err != nil {
 					return err
 				}
@@ -1019,18 +1061,43 @@ func (m *Manager) startContainersWithPersistence(
 			}
 		}
 
-		if cOpts.Seccomp != nil &&
-			(len(cOpts.Seccomp.Tweaks) != 0 || cOpts.Seccomp.effectiveProfile != "") {
-			hostInfo, err := m.cli.Info(m.ctx)
+		effectiveSeccomp, err := withRequiredSeccompTweaks(
+			cOpts.Seccomp,
+			build.RequiredSeccompTweaks,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"invalid seccomp requirements for challenge %q container %q: %v",
+				build.Challenge,
+				image.Host,
+				err,
+			)
+		}
+		if effectiveSeccomp != nil &&
+			(len(effectiveSeccomp.Tweaks) != 0 ||
+				effectiveSeccomp.effectiveProfile != "") {
+			hostInfoResult, err := m.cli.Info(m.ctx, client.InfoOptions{})
 			if err != nil {
 				return err
 			}
-			if len(cOpts.Seccomp.Tweaks) != 0 {
-				m.log.debugf("requesting OCI seccomp tweaks: %s", strings.Join(cOpts.Seccomp.Tweaks, ","))
-			} else {
-				m.log.debugf("inserting custom seccomp profile (%s)", cOpts.Seccomp.ProfileHash)
+			if effectiveSeccomp.effectiveProfile != "" {
+				m.log.debugf(
+					"inserting custom seccomp profile (%s)",
+					effectiveSeccomp.ProfileHash,
+				)
 			}
-			if err = configureContainerSeccomp(&cConfig, &hConfig, cOpts.Seccomp, hostInfo); err != nil {
+			if len(effectiveSeccomp.Tweaks) != 0 {
+				m.log.debugf(
+					"requesting OCI seccomp tweaks: %s",
+					strings.Join(effectiveSeccomp.Tweaks, ","),
+				)
+			}
+			if err = configureContainerSeccomp(
+				&cConfig,
+				&hConfig,
+				effectiveSeccomp,
+				hostInfoResult.Info,
+			); err != nil {
 				return err
 			}
 		}
@@ -1044,7 +1111,14 @@ func (m *Manager) startContainersWithPersistence(
 			},
 		}
 
-		respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, nil, "")
+		respCC, err := m.cli.ContainerCreate(
+			m.ctx,
+			client.ContainerCreateOptions{
+				Config:           &cConfig,
+				HostConfig:       &hConfig,
+				NetworkingConfig: &nConfig,
+			},
+		)
 		if err != nil {
 			m.log.errorf("failed to create instance container: %s", err)
 			return err
@@ -1054,7 +1128,7 @@ func (m *Manager) startContainersWithPersistence(
 		instance.Containers = append(instance.Containers, cid)
 		m.log.infof("created new image: %s", cid)
 
-		err = m.cli.ContainerStart(m.ctx, cid, types.ContainerStartOptions{})
+		_, err = m.cli.ContainerStart(m.ctx, cid, client.ContainerStartOptions{})
 		if err != nil {
 			m.log.errorf("failed to start container: %s", err)
 			return err
@@ -1065,14 +1139,18 @@ func (m *Manager) startContainersWithPersistence(
 		for !done && backoff < time.Second {
 			m.log.debug("Querying docker for port info...")
 
-			cInfo, err := m.cli.ContainerInspect(m.ctx, cid)
+			cInfo, err := m.cli.ContainerInspect(
+				m.ctx,
+				cid,
+				client.ContainerInspectOptions{},
+			)
 			if err != nil {
 				m.log.errorf("failed to get container info: %s", err)
 				return err
 			}
 			done = true
 
-			for cPort, hPortInfo := range cInfo.NetworkSettings.Ports {
+			for cPort, hPortInfo := range cInfo.Container.NetworkSettings.Ports {
 				if len(hPortInfo) == 0 {
 					done = false
 					time.Sleep(backoff)
@@ -1086,7 +1164,7 @@ func (m *Manager) startContainersWithPersistence(
 				}
 				endpoint := challengePortEndpoint{
 					Host: image.Host,
-					Port: string(cPort),
+					Port: cPort.String(),
 				}
 				portName, ok := revPortMap[endpoint]
 				if !ok {
@@ -1272,10 +1350,14 @@ func (m *Manager) finishInstanceCutover(cutover *instanceCutover) error {
 func (m *Manager) pauseContainerProcesses(
 	containerIDs []string,
 ) ([]string, error) {
-	timeout := 10 * time.Second
+	timeout := 10
 	paused := make([]string, 0, len(containerIDs))
 	for _, containerID := range containerIDs {
-		if err := m.cli.ContainerStop(m.ctx, containerID, &timeout); err != nil {
+		if _, err := m.cli.ContainerStop(
+			m.ctx,
+			containerID,
+			client.ContainerStopOptions{Timeout: &timeout},
+		); err != nil {
 			return paused, fmt.Errorf("could not stop container %s: %v", containerID, err)
 		}
 		paused = append(paused, containerID)
@@ -1286,10 +1368,10 @@ func (m *Manager) pauseContainerProcesses(
 func (m *Manager) resumeContainerProcesses(containerIDs []string) error {
 	var problems []string
 	for _, containerID := range containerIDs {
-		if err := m.cli.ContainerStart(
+		if _, err := m.cli.ContainerStart(
 			m.ctx,
 			containerID,
-			types.ContainerStartOptions{},
+			client.ContainerStartOptions{},
 		); err != nil {
 			problems = append(
 				problems,
@@ -1306,12 +1388,12 @@ func (m *Manager) resumeContainerProcesses(containerIDs []string) error {
 func (m *Manager) removeContainerIDs(containerIDs []string) error {
 	var firstErr error
 	for _, containerID := range containerIDs {
-		err := m.cli.ContainerRemove(
+		_, err := m.cli.ContainerRemove(
 			m.ctx,
 			containerID,
-			types.ContainerRemoveOptions{RemoveVolumes: true, Force: true},
+			client.ContainerRemoveOptions{RemoveVolumes: true, Force: true},
 		)
-		if err != nil && !client.IsErrNotFound(err) && firstErr == nil {
+		if err != nil && !errdefs.IsNotFound(err) && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -1323,10 +1405,10 @@ func (m *Manager) removeContainerIDs(containerIDs []string) error {
 func (m *Manager) stopContainers(instance *InstanceMetadata) error {
 	var err error
 	for _, cid := range instance.Containers {
-		opts := types.ContainerRemoveOptions{RemoveVolumes: true, Force: true}
-		err = m.cli.ContainerRemove(m.ctx, cid, opts)
+		opts := client.ContainerRemoveOptions{RemoveVolumes: true, Force: true}
+		_, err = m.cli.ContainerRemove(m.ctx, cid, opts)
 		if err != nil {
-			if client.IsErrNotFound(err) {
+			if errdefs.IsNotFound(err) {
 				m.log.warnf("skipped removing container (not found): %s", cid)
 				err = nil
 			} else {
@@ -1369,13 +1451,13 @@ func (m *Manager) destroyImages(build BuildId) error {
 		}
 	}
 
-	iro := types.ImageRemoveOptions{Force: true, PruneChildren: true}
+	iro := client.ImageRemoveOptions{Force: true, PruneChildren: true}
 	for _, image := range bMeta.Images {
 
 		imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, bMeta.dockerId(image))
 		_, err := m.cli.ImageRemove(m.ctx, imageName, iro)
 		if err != nil {
-			if client.IsErrNotFound(err) {
+			if errdefs.IsNotFound(err) {
 				m.log.warnf("skipped removing image (not found): %s", imageName)
 			} else {
 				m.log.errorf("failed to remove image: %s", err)
@@ -1391,13 +1473,19 @@ func configureContainerSeccomp(
 	cConfig *container.Config,
 	hConfig *container.HostConfig,
 	options *SeccompOptions,
-	hostInfo types.Info,
+	hostInfo system.Info,
 ) error {
 	if options == nil {
 		return nil
 	}
 	if hostInfo.OSType != "linux" {
 		return fmt.Errorf("seccomp configuration is only supported by Linux Docker hosts")
+	}
+	if options.effectiveProfile != "" {
+		hConfig.SecurityOpt = append(
+			hConfig.SecurityOpt,
+			"seccomp="+options.effectiveProfile,
+		)
 	}
 	if len(options.Tweaks) != 0 {
 		if !seccompRuntimeReady(hostInfo) {
@@ -1412,10 +1500,6 @@ func configureContainerSeccomp(
 			cConfig.Env,
 			ociinterceptor.TweakEnvironmentVariable+"="+strings.Join(options.Tweaks, ","),
 		)
-		return nil
-	}
-	if options.effectiveProfile != "" {
-		hConfig.SecurityOpt = append(hConfig.SecurityOpt, "seccomp="+options.effectiveProfile)
 	}
 	return nil
 }
@@ -1437,7 +1521,7 @@ func (m *Manager) preflightChallengeSeccomp(metadata *ChallengeMetadata) error {
 		return nil
 	}
 
-	hostInfo, err := m.cli.Info(m.ctx)
+	hostInfoResult, err := m.cli.Info(m.ctx, client.InfoOptions{})
 	if err != nil {
 		return fmt.Errorf("could not preflight seccomp configuration: %v", err)
 	}
@@ -1458,7 +1542,7 @@ func (m *Manager) preflightChallengeSeccomp(metadata *ChallengeMetadata) error {
 			&config,
 			&hostConfig,
 			options.Seccomp,
-			hostInfo,
+			hostInfoResult.Info,
 		); err != nil {
 			return fmt.Errorf(
 				"seccomp preflight failed for challenge %q container %q: %v",
@@ -1471,7 +1555,7 @@ func (m *Manager) preflightChallengeSeccomp(metadata *ChallengeMetadata) error {
 	return nil
 }
 
-func seccompRuntimeReady(hostInfo types.Info) bool {
+func seccompRuntimeReady(hostInfo system.Info) bool {
 	runtimeConfig, ok := hostInfo.Runtimes[ociinterceptor.RuntimeName]
 	return ok && ociinterceptor.RuntimeRegistrationCompatible(
 		runtimeConfig.Path,
@@ -1479,7 +1563,7 @@ func seccompRuntimeReady(hostInfo types.Info) bool {
 	)
 }
 
-func seccompRuntimeWarning(hostInfo types.Info) string {
+func seccompRuntimeWarning(hostInfo system.Info) string {
 	if hostInfo.OSType != "linux" {
 		return ""
 	}

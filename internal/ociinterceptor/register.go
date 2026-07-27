@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -681,7 +681,7 @@ func waitForRuntimeRegistration(
 	expectedArguments []string,
 	timeout time.Duration,
 ) error {
-	cli, err := client.NewClientWithOpts(
+	cli, err := client.New(
 		client.WithHost("unix:///var/run/docker.sock"),
 		client.WithAPIVersionNegotiation(),
 	)
@@ -694,10 +694,10 @@ func waitForRuntimeRegistration(
 	var lastErr error
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		info, infoErr := cli.Info(ctx)
+		info, infoErr := cli.Info(ctx, client.InfoOptions{})
 		cancel()
 		if infoErr == nil {
-			if runtimeRegistrationMatches(info, expectedPath, expectedArguments) {
+			if runtimeRegistrationMatches(info.Info, expectedPath, expectedArguments) {
 				return nil
 			}
 			lastErr = fmt.Errorf("Docker reports a different or incomplete runtime entry")
@@ -712,7 +712,7 @@ func waitForRuntimeRegistration(
 }
 
 func runtimeRegistrationMatches(
-	info types.Info,
+	info system.Info,
 	expectedPath string,
 	expectedArguments []string,
 ) bool {

@@ -15,7 +15,7 @@ welcome = """
 
 def encrypt():
     cipher = AES.new(base64.b16decode(key, casefold=True), AES.MODE_ECB)
-    return base64.b16encode(cipher.encrypt(flag))
+    return base64.b16encode(cipher.encrypt(flag.encode("utf-8")))
 
 
 # flush output immediately

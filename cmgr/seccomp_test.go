@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	"github.com/ArmyCyberInstitute/cmgr/internal/ociinterceptor"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"gopkg.in/yaml.v2"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/system"
+	"go.yaml.in/yaml/v3"
 )
 
 func TestSeccompOptionsYAML(t *testing.T) {
@@ -229,14 +229,16 @@ func TestConfigureContainerSeccompTweaks(t *testing.T) {
 	cConfig := container.Config{}
 	hConfig := container.HostConfig{}
 	options := &SeccompOptions{Tweaks: []string{seccompTweakAllowDisableASLR}}
-	hostInfo := types.Info{
+	hostInfo := system.Info{
 		OSType: "linux",
-		Runtimes: map[string]types.Runtime{
+		Runtimes: map[string]system.RuntimeWithStatus{
 			ociinterceptor.RuntimeName: {
-				Path: "/usr/local/bin/cmgr-oci-interceptor",
-				Args: []string{
-					ociinterceptor.RuntimeProtocolArgument,
-					"--cmgr-runtime-path=/usr/bin/runc",
+				Runtime: system.Runtime{
+					Path: "/usr/local/bin/cmgr-oci-interceptor",
+					Args: []string{
+						ociinterceptor.RuntimeProtocolArgument,
+						"--cmgr-runtime-path=/usr/bin/runc",
+					},
 				},
 			},
 		},
@@ -266,7 +268,7 @@ func TestConfigureContainerSeccompRequiresInterceptor(t *testing.T) {
 		&cConfig,
 		&hConfig,
 		options,
-		types.Info{OSType: "linux", Runtimes: map[string]types.Runtime{}},
+		system.Info{OSType: "linux", Runtimes: map[string]system.RuntimeWithStatus{}},
 	)
 	if err == nil || !strings.Contains(err.Error(), ociinterceptor.RuntimeName) {
 		t.Fatalf("expected missing interceptor runtime error, got: %v", err)
@@ -278,7 +280,7 @@ func TestConfigureContainerSeccompRequiresInterceptor(t *testing.T) {
 
 func TestSeccompRuntimeWarning(t *testing.T) {
 	warning := seccompRuntimeWarning(
-		types.Info{OSType: "linux", Runtimes: map[string]types.Runtime{}},
+		system.Info{OSType: "linux", Runtimes: map[string]system.RuntimeWithStatus{}},
 	)
 	if !strings.Contains(warning, "seccomp tweaks are unavailable") {
 		t.Fatalf("warning did not explain the unavailable capability: %q", warning)
@@ -287,12 +289,14 @@ func TestSeccompRuntimeWarning(t *testing.T) {
 		t.Fatalf("warning did not include the registration command: %q", warning)
 	}
 
-	stale := seccompRuntimeWarning(types.Info{
+	stale := seccompRuntimeWarning(system.Info{
 		OSType: "linux",
-		Runtimes: map[string]types.Runtime{
+		Runtimes: map[string]system.RuntimeWithStatus{
 			ociinterceptor.RuntimeName: {
-				Path: "/usr/local/bin/cmgr-oci-interceptor",
-				Args: []string{ociinterceptor.RuntimeProtocolArgument},
+				Runtime: system.Runtime{
+					Path: "/usr/local/bin/cmgr-oci-interceptor",
+					Args: []string{ociinterceptor.RuntimeProtocolArgument},
+				},
 			},
 		},
 	})
@@ -300,14 +304,16 @@ func TestSeccompRuntimeWarning(t *testing.T) {
 		t.Fatal("incomplete interceptor registration did not produce a warning")
 	}
 
-	available := seccompRuntimeWarning(types.Info{
+	available := seccompRuntimeWarning(system.Info{
 		OSType: "linux",
-		Runtimes: map[string]types.Runtime{
+		Runtimes: map[string]system.RuntimeWithStatus{
 			ociinterceptor.RuntimeName: {
-				Path: "/usr/local/bin/cmgr-oci-interceptor",
-				Args: []string{
-					ociinterceptor.RuntimeProtocolArgument,
-					"--cmgr-runtime-path=/usr/bin/runc",
+				Runtime: system.Runtime{
+					Path: "/usr/local/bin/cmgr-oci-interceptor",
+					Args: []string{
+						ociinterceptor.RuntimeProtocolArgument,
+						"--cmgr-runtime-path=/usr/bin/runc",
+					},
 				},
 			},
 		},
@@ -315,7 +321,7 @@ func TestSeccompRuntimeWarning(t *testing.T) {
 	if available != "" {
 		t.Fatalf("registered runtime produced warning: %q", available)
 	}
-	if warning := seccompRuntimeWarning(types.Info{OSType: "darwin"}); warning != "" {
+	if warning := seccompRuntimeWarning(system.Info{OSType: "darwin"}); warning != "" {
 		t.Fatalf("non-Linux daemon produced warning: %q", warning)
 	}
 }
@@ -329,7 +335,7 @@ func TestConfigureContainerSeccompCustomProfile(t *testing.T) {
 		&cConfig,
 		&hConfig,
 		options,
-		types.Info{OSType: "linux"},
+		system.Info{OSType: "linux"},
 	); err != nil {
 		t.Fatalf("could not configure custom seccomp profile: %s", err)
 	}
@@ -339,6 +345,94 @@ func TestConfigureContainerSeccompCustomProfile(t *testing.T) {
 	}
 	if hConfig.Runtime != "" {
 		t.Fatalf("custom profile unexpectedly selected runtime %q", hConfig.Runtime)
+	}
+}
+
+func TestRequiredSeccompTweakOverlaysCustomProfile(t *testing.T) {
+	base := &SeccompOptions{
+		Profile:          "challenge-seccomp.json",
+		ProfileHash:      "profile-hash",
+		effectiveProfile: `{"defaultAction":"SCMP_ACT_ALLOW"}`,
+	}
+	combined, err := withRequiredSeccompTweaks(
+		base,
+		[]string{seccompTweakAllowDisableASLR},
+	)
+	if err != nil {
+		t.Fatalf("could not merge required seccomp tweak: %s", err)
+	}
+	if combined == base {
+		t.Fatal("required tweak merge mutated the configured options")
+	}
+	if combined.effectiveProfile != base.effectiveProfile {
+		t.Fatal("required tweak merge discarded the configured profile")
+	}
+	if !reflect.DeepEqual(
+		combined.Tweaks,
+		[]string{seccompTweakAllowDisableASLR},
+	) {
+		t.Fatalf("unexpected merged tweaks: %#v", combined.Tweaks)
+	}
+
+	cConfig := container.Config{}
+	hConfig := container.HostConfig{}
+	hostInfo := system.Info{
+		OSType: "linux",
+		Runtimes: map[string]system.RuntimeWithStatus{
+			ociinterceptor.RuntimeName: {
+				Runtime: system.Runtime{
+					Path: "/usr/local/bin/cmgr-oci-interceptor",
+					Args: []string{
+						ociinterceptor.RuntimeProtocolArgument,
+						"--cmgr-runtime-path=/usr/bin/runc",
+					},
+				},
+			},
+		},
+	}
+	if err = configureContainerSeccomp(
+		&cConfig,
+		&hConfig,
+		combined,
+		hostInfo,
+	); err != nil {
+		t.Fatalf("could not configure overlaid profile: %s", err)
+	}
+	if hConfig.Runtime != ociinterceptor.RuntimeName {
+		t.Fatalf("unexpected runtime %q", hConfig.Runtime)
+	}
+	if !reflect.DeepEqual(
+		hConfig.SecurityOpt,
+		[]string{"seccomp=" + base.effectiveProfile},
+	) {
+		t.Fatalf("configured profile was not retained: %#v", hConfig.SecurityOpt)
+	}
+}
+
+func TestConsumeBuildSeccompTweaks(t *testing.T) {
+	metadata := map[string]string{
+		"flag":                        "flag{test}",
+		buildMetadataSeccompTweaksKey: seccompTweakAllowDisableASLR,
+	}
+	tweaks, err := consumeBuildSeccompTweaks(metadata)
+	if err != nil {
+		t.Fatalf("could not consume build seccomp tweaks: %s", err)
+	}
+	if !reflect.DeepEqual(
+		tweaks,
+		SeccompTweakList{seccompTweakAllowDisableASLR},
+	) {
+		t.Fatalf("unexpected build seccomp tweaks: %#v", tweaks)
+	}
+	if _, present := metadata[buildMetadataSeccompTweaksKey]; present {
+		t.Fatal("reserved build metadata was retained as lookup data")
+	}
+
+	invalid := map[string]string{
+		buildMetadataSeccompTweaksKey: "unsupported",
+	}
+	if _, err = consumeBuildSeccompTweaks(invalid); err == nil {
+		t.Fatal("unsupported build seccomp tweak was accepted")
 	}
 }
 
