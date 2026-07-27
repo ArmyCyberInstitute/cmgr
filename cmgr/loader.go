@@ -299,6 +299,15 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			hostStr = fmt.Sprintf("host %s: ", host)
 		}
 
+		if opts.Seccomp != nil {
+			err := opts.Seccomp.resolve(md.Path)
+			if err != nil {
+				lastErr = fmt.Errorf("%serror resolving seccomp container option: %v", hostStr, err)
+				m.log.error(lastErr)
+			}
+			md.ChallengeOptions.Overrides[host] = opts
+		}
+
 		if opts.Cpus != "" {
 			_, err := dockeropts.ParseCPUs(opts.Cpus)
 			if err != nil {
@@ -367,6 +376,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			}
 		}
 	}
+	md.ChallengeOptions.ContainerOptions = md.ChallengeOptions.Overrides[""]
 
 	return lastErr
 }

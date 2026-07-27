@@ -61,6 +61,52 @@ func (m *Manager) finalizeInstance(meta *InstanceMetadata) error {
 	return err
 }
 
+// replaceInstanceRuntimeMetadata atomically swaps the ephemeral container IDs
+// and host-port assignments for an existing instance. It does not change the
+// instance row or the challenge's logical port definitions in portNames.
+func (m *Manager) replaceInstanceRuntimeMetadata(meta *InstanceMetadata) error {
+	txn := m.db.MustBegin()
+	rollback := func(err error) error {
+		if rollbackErr := txn.Rollback(); rollbackErr != nil {
+			return rollbackErr
+		}
+		return err
+	}
+
+	if _, err := txn.Exec(
+		"DELETE FROM portAssignments WHERE instance=?;",
+		meta.Id,
+	); err != nil {
+		return rollback(err)
+	}
+	if _, err := txn.Exec(
+		"DELETE FROM containers WHERE instance=?;",
+		meta.Id,
+	); err != nil {
+		return rollback(err)
+	}
+	for name, port := range meta.Ports {
+		if _, err := txn.Exec(
+			"INSERT INTO portAssignments(instance, name, port) VALUES (?, ?, ?);",
+			meta.Id,
+			name,
+			port,
+		); err != nil {
+			return rollback(err)
+		}
+	}
+	for _, containerID := range meta.Containers {
+		if _, err := txn.Exec(
+			"INSERT INTO containers(instance, id) VALUES (?, ?);",
+			meta.Id,
+			containerID,
+		); err != nil {
+			return rollback(err)
+		}
+	}
+	return txn.Commit()
+}
+
 func (m *Manager) lookupInstanceMetadata(instance InstanceId) (*InstanceMetadata, error) {
 	metadata := new(InstanceMetadata)
 	txn := m.db.MustBegin()

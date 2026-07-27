@@ -35,3 +35,12 @@ The cmgr software is released under the Apache License, Version 2.0 ("Apache
 Consistent with the inbound=outbound model, contributions to any module must
 be made available, by the contributor, under the applicable license(s). Please
 read the Legal section of the CONTRIBUTING.md guide.
+
+The cmgr OCI runtime interceptor design and portions of its implementation are
+adapted from picoCTF/oci-interceptor:
+
+    https://github.com/picoCTF/oci-interceptor
+    Version 0.2.2, commit bcba3ad4a6f31be57659a9554a79fa5ad5efc7a6
+
+picoCTF/oci-interceptor is dual-licensed under the MIT License or the Apache
+License, Version 2.0. cmgr uses it under the Apache License, Version 2.0.

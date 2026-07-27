@@ -69,7 +69,7 @@ jobs:
           GOARCH=${arch} go build -v -ldflags "-X github.com/ArmyCyberInstitute/cmgr/cmgr.version=`git describe --tags`" -o bin ./...
           cp LICENSE bin/LICENSE
           cat NOTICE NOTICE.release > bin/NOTICE
-          cd bin && tar czvf cmgr.tar.gz cmgr cmgrd LICENSE NOTICE
+          cd bin && tar czvf cmgr.tar.gz cmgr cmgrd cmgr-oci-interceptor LICENSE NOTICE
         env:
           arch: ${{ matrix.arch }}
 
@@ -90,4 +90,3 @@ jobs:
           asset_path: ./bin/cmgr.tar.gz
           asset_name: cmgr_${{ steps.suffix.outputs.arch_suffix }}.tar.gz
           asset_content_type: application/octet-stream
-

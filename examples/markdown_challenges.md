@@ -54,9 +54,9 @@ an HTML href tag that uses `http_base`.
 
 ## Challenge Options
 
-This optional section can be used to apply additional restrictions to instances of this challenge
-via a ```` ```yaml```` fenced code block. The available options are listed below, along with an
-example.
+This optional section can be used to configure runtime constraints and security settings for
+instances of this challenge via a ```` ```yaml```` fenced code block. The available options are
+listed below, along with an example.
 
 For [multi-container](./custom/README.md) challenges, by default any specified options apply to all
 containers. However, it is possible to specify separate options for each host (build stage) via an
@@ -122,6 +122,75 @@ containers.
   [`--security-opt="no-new-privileges:true"`](https://docs.docker.com/engine/reference/run/#security-configuration)
   option to `docker run`. Specify a boolean value, as shown in the example below. Defaults to
   `false`.
+
+- The `seccomp` option controls the seccomp profile used by challenge runtime containers. When it is
+  omitted, cmgr does not supply a profile and Docker applies the daemon's default. Builder, artifact,
+  and solver containers never inherit a challenge's seccomp configuration.
+
+  Three mutually exclusive modes are supported:
+
+  - `legacy: true` applies the historical profile that cmgr used for every container before
+    per-challenge profiles were supported. It is provided only for backwards compatibility and may
+    not work with newer system libraries.
+  - `tweaks` retains the Docker daemon's current default profile and applies named, narrowly-scoped
+    changes to the generated OCI configuration immediately before the container runtime starts.
+    The currently supported tweak is `allow-disable-aslr`, which permits the `personality` flags
+    commonly used by `setarch -R` and debuggers to disable ASLR. This mode requires the
+    [`cmgr-oci-interceptor`](../README.md#seccomp-oci-interceptor) runtime to be installed on the
+    Docker host.
+  - `profile` names a complete seccomp JSON profile stored directly in the challenge directory,
+    alongside `problem.md` or `problem.json`. The filename must end in `.json`, must not start with
+    `.`, and may contain ASCII letters, digits, dots, underscores, and hyphens. `problem.json` is
+    reserved for challenge metadata. Subdirectories and symbolic links are rejected. These rules
+    ensure the profile is included in the challenge source checksum, so changing it triggers a
+    rebuild. cmgr validates and snapshots the profile during `update`.
+
+  Challenges without seccomp configuration continue to use the live daemon default without the
+  interceptor.
+
+  A top-level `seccomp` setting is inherited by every runtime container. A setting under
+  `overrides.<host>.seccomp` applies only to that named container. If only host-specific settings
+  are present, every other container uses Docker's default policy. A host-specific setting also
+  replaces an inherited challenge-level policy for that host.
+
+  ```yaml
+  seccomp:
+      tweaks:
+          - allow-disable-aslr
+
+  # To use a complete challenge-provided profile instead:
+  # seccomp:
+  #     profile: seccomp.json
+
+  # To retain the exact pre-customization behavior instead:
+  # seccomp:
+  #     legacy: true
+
+  # To give only the "worker" container a complete profile, while all other
+  # containers retain Docker's default:
+  # overrides:
+  #     worker:
+  #         seccomp:
+  #             profile: worker-seccomp.json
+  ```
+
+  The same modes and inheritance rules are available to JSON challenges under
+  `challenge_options`. For example, a profile that applies only to the
+  `worker` container is:
+
+  ```json
+  {
+    "challenge_options": {
+      "overrides": {
+        "worker": {
+          "seccomp": {
+            "profile": "worker-seccomp.json"
+          }
+        }
+      }
+    }
+  }
+  ```
 
 - The `diskquota` option can be used to limit the maximum size of the container's writable layer.
   This is equivalent to passing the [`--storage-opt
