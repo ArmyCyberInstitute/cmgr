@@ -216,6 +216,19 @@ go build -trimpath -o bin/ ./cmd/...
 go test -v ./...
 ```
 
+## Generative AI Notice
+
+Please note that the release starting at v0.14.0 was 
+modernized with the assistance of generative AI. Each commit message
+in which generative AI describes the model, harness, and configuration
+used in the process. Additionally, generative AI is used to run deterministic
+regression tests across a suite of challenges.
+
+Specificially in v0.14.0, generative AI enabled a modification to 
+support custom seccomp profiles per individual container and to
+default to the docker runtime seccomp profile. Further, this release
+features a version bump to 2026 across libraries and example challenges.
+
 ## Acknowledgments
 
 This project is heavily inspired by the
