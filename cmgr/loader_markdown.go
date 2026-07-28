@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/yuin/goldmark"
-	"gopkg.in/yaml.v2"
+	"go.yaml.in/yaml/v3"
 )
 
 func parseBool(s string) (bool, error) {

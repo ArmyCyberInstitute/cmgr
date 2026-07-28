@@ -1,1 +1,1 @@
-pycrypto
+pycryptodome==3.23.0

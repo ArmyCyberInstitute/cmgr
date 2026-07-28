@@ -69,6 +69,8 @@ const schemaQuery string = `
 	);
 
 	CREATE INDEX IF NOT EXISTS hostsIndex ON hosts(challenge);
+	CREATE UNIQUE INDEX IF NOT EXISTS hostsOrderIndex
+		ON hosts(challenge, idx);
 
 	CREATE TABLE IF NOT EXISTS portNames (
 		challenge TEXT NOT NULL,
@@ -80,6 +82,10 @@ const schemaQuery string = `
 		FOREIGN KEY (challenge, host) REFERENCES hosts (challenge, name)
 		    ON UPDATE CASCADE ON DELETE CASCADE
 	);
+	CREATE UNIQUE INDEX IF NOT EXISTS portNamesNameIndex
+		ON portNames(challenge, name);
+	CREATE UNIQUE INDEX IF NOT EXISTS portNamesEndpointIndex
+		ON portNames(challenge, host, port);
 
 	CREATE TABLE IF NOT EXISTS builds (
 		id INTEGER PRIMARY KEY,
@@ -91,6 +97,7 @@ const schemaQuery string = `
 		challenge TEXT NOT NULL,
 		schema TEXT NOT NULL,
 		instancecount INT NOT NULL,
+		requiredseccomptweaks TEXT NOT NULL DEFAULT '[]',
 		UNIQUE(schema, format, challenge, seed),
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -105,6 +112,8 @@ const schemaQuery string = `
 		FOREIGN KEY (build) REFERENCES builds (id)
 		    ON UPDATE RESTRICT ON DELETE CASCADE
 	);
+	CREATE UNIQUE INDEX IF NOT EXISTS imagesHostIndex
+		ON images(build, host);
 
 	CREATE TABLE IF NOT EXISTS imagePorts (
 		image INTEGER NOT NULL,
@@ -112,6 +121,8 @@ const schemaQuery string = `
 		FOREIGN KEY (image) REFERENCES images (id)
 			ON UPDATE CASCADE ON DELETE CASCADE
 	);
+	CREATE UNIQUE INDEX IF NOT EXISTS imagePortsPortIndex
+		ON imagePorts(image, port);
 
 	CREATE TABLE IF NOT EXISTS lookupData (
 		build INTEGER NOT NULL,
@@ -120,6 +131,8 @@ const schemaQuery string = `
 		FOREIGN KEY (build) REFERENCES builds (id)
 			ON UPDATE RESTRICT ON DELETE CASCADE
 	);
+	CREATE UNIQUE INDEX IF NOT EXISTS lookupDataKeyIndex
+		ON lookupData(build, key);
 
 	CREATE TABLE IF NOT EXISTS instances (
 		id INTEGER PRIMARY KEY,
@@ -136,6 +149,10 @@ const schemaQuery string = `
 		FOREIGN KEY (instance) REFERENCES instances (id)
 			ON UPDATE RESTRICT ON DELETE CASCADE
 	);
+	CREATE UNIQUE INDEX IF NOT EXISTS portAssignmentsNameIndex
+		ON portAssignments(instance, name);
+	CREATE UNIQUE INDEX IF NOT EXISTS portAssignmentsPortIndex
+		ON portAssignments(port);
 
 	CREATE TABLE IF NOT EXISTS containers (
 		instance INTEGER NOT NULL,
@@ -166,9 +183,12 @@ const schemaQuery string = `
 		nonewprivileges INTEGER NOT NULL CHECK(nonewprivileges == 0 OR nonewprivileges == 1),
 		diskquota TEXT NOT NULL,
 		cgroupparent TEXT NOT NULL,
+		seccomp TEXT NOT NULL DEFAULT '',
 		FOREIGN KEY (challenge) REFERENCES challenges (id)
 			ON UPDATE CASCADE ON DELETE CASCADE
-	);`
+	);
+	CREATE UNIQUE INDEX IF NOT EXISTS containerOptionsHostIndex
+		ON containerOptions(challenge, host);`
 
 // Connects to the desired database (creating it if it does not exist) and then
 // ensures that the necessary tables and indexes exist and that the sqlite
@@ -194,6 +214,39 @@ func (m *Manager) initDatabase() error {
 		return err
 	}
 
+	var seccompColumnCount int
+	err = db.Get(&seccompColumnCount, "SELECT COUNT(*) FROM pragma_table_info('containerOptions') WHERE name = 'seccomp';")
+	if err != nil {
+		m.log.errorf("could not inspect database schema: %s", err)
+		return err
+	}
+	if seccompColumnCount == 0 {
+		_, err = db.Exec("ALTER TABLE containerOptions ADD COLUMN seccomp TEXT NOT NULL DEFAULT '';")
+		if err != nil {
+			m.log.errorf("could not migrate database schema: %s", err)
+			return err
+		}
+	}
+
+	var requiredSeccompTweaksColumnCount int
+	err = db.Get(
+		&requiredSeccompTweaksColumnCount,
+		"SELECT COUNT(*) FROM pragma_table_info('builds') WHERE name = 'requiredseccomptweaks';",
+	)
+	if err != nil {
+		m.log.errorf("could not inspect database schema: %s", err)
+		return err
+	}
+	if requiredSeccompTweaksColumnCount == 0 {
+		_, err = db.Exec(
+			"ALTER TABLE builds ADD COLUMN requiredseccomptweaks TEXT NOT NULL DEFAULT '[]';",
+		)
+		if err != nil {
+			m.log.errorf("could not migrate database schema: %s", err)
+			return err
+		}
+	}
+
 	var fkeysEnforced bool
 	err = db.QueryRow("PRAGMA foreign_keys;").Scan(&fkeysEnforced)
 	if err != nil {
@@ -211,22 +264,32 @@ func (m *Manager) initDatabase() error {
 	return nil
 }
 
-func (m *Manager) getReversePortMap(id ChallengeId) (map[string]string, error) {
-	rpm := make(map[string]string)
+type challengePortEndpoint struct {
+	Host string
+	Port string
+}
+
+func (m *Manager) getReversePortMap(id ChallengeId) (map[challengePortEndpoint]string, error) {
+	rpm := make(map[challengePortEndpoint]string)
 
 	res := []struct {
 		Name string
+		Host string
 		Port int
 	}{}
 
-	err := m.db.Select(&res, `SELECT name, port FROM portNames WHERE challenge=?;`, id)
+	err := m.db.Select(&res, `SELECT name, host, port FROM portNames WHERE challenge=?;`, id)
 	if err != nil {
 		m.log.errorf("could not get challenge ports: %s", err)
 		return nil, err
 	}
 
 	for _, entry := range res {
-		rpm[fmt.Sprintf("%d/tcp", entry.Port)] = entry.Name
+		endpoint := challengePortEndpoint{
+			Host: entry.Host,
+			Port: fmt.Sprintf("%d/tcp", entry.Port),
+		}
+		rpm[endpoint] = entry.Name
 	}
 
 	m.log.debugf("reverse port map for %s: %v", id, rpm)
@@ -255,7 +318,13 @@ func (m *Manager) safeToRefresh(new *ChallengeMetadata) bool {
 	sameType := old.ChallengeType == new.ChallengeType
 	sameOptions := reflect.DeepEqual(old.ChallengeOptions, new.ChallengeOptions)
 
-	safe := sameType && sameOptions
+	// Hacksport metadata is also build input: it supplies class attributes,
+	// package dependencies, flag-generation context, and artifact templates.
+	// Treat any metadata edit as requiring a rebuild rather than a database-only
+	// refresh.
+	safe := sameType &&
+		sameOptions &&
+		!isHacksportChallengeType(new.ChallengeType)
 
 	return safe
 }

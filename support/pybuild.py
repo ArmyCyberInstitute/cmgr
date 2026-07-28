@@ -115,6 +115,13 @@ if not hasattr(b, "lookups"):
 elif "flag" not in b.lookups:
     b.lookups["flag"] = b.flag
 
+if (
+    os.environ.get("CMGR_PYBUILD_RUNTIME") == "true"
+    and hasattr(b, "aslr")
+    and not b.aslr
+):
+    b.lookups["__cmgr_seccomp_tweaks"] = "allow-disable-aslr"
+
 with open("metadata.json", "w") as f:
     f.write(json.dumps(b.lookups))
 

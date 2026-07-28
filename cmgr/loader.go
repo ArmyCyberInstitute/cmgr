@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	dockeropts "github.com/docker/cli/opts"
 	"github.com/docker/go-units"
 )
 
@@ -286,7 +285,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	}
 
 	for port, used := range refPort {
-		if !used && md.ChallengeType != "hacksport" {
+		if !used && !isHacksportChallengeType(md.ChallengeType) {
 			lastErr = fmt.Errorf("port '%s' published but not referenced: %s", port, md.Path)
 			m.log.error(lastErr)
 		}
@@ -299,8 +298,17 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			hostStr = fmt.Sprintf("host %s: ", host)
 		}
 
+		if opts.Seccomp != nil {
+			err := opts.Seccomp.resolve(md.Path)
+			if err != nil {
+				lastErr = fmt.Errorf("%serror resolving seccomp container option: %v", hostStr, err)
+				m.log.error(lastErr)
+			}
+			md.ChallengeOptions.Overrides[host] = opts
+		}
+
 		if opts.Cpus != "" {
-			_, err := dockeropts.ParseCPUs(opts.Cpus)
+			_, err := parseNanoCPUs(opts.Cpus)
 			if err != nil {
 				lastErr = fmt.Errorf("%serror parsing cpus container option: %v", hostStr, err)
 				m.log.error(lastErr)
@@ -367,6 +375,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			}
 		}
 	}
+	md.ChallengeOptions.ContainerOptions = md.ChallengeOptions.Overrides[""]
 
 	return lastErr
 }
@@ -441,6 +450,24 @@ func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, fil
 
 // Validates the challenge metadata for compliance with expectations
 func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
+	if isHacksportChallengeType(md.ChallengeType) {
+		challengePath := filepath.Join(md.Path, "challenge.py")
+		challengeInfo, err := os.Stat(challengePath)
+		if err != nil {
+			return fmt.Errorf(
+				"invalid hacksport challenge (%s): could not read challenge.py: %v",
+				md.Id,
+				err,
+			)
+		}
+		if !challengeInfo.Mode().IsRegular() {
+			return fmt.Errorf(
+				"invalid hacksport challenge (%s): challenge.py is not a regular file",
+				md.Id,
+			)
+		}
+	}
+
 	dfPath := filepath.Join(md.Path, "Dockerfile")
 	_, err := os.Stat(dfPath)
 	customDockerfile := err == nil
@@ -638,6 +665,12 @@ type hacksportAttrs struct {
 	Score        int    `json:"score"`
 }
 
+func isHacksportChallengeType(challengeType string) bool {
+	return challengeType == "hacksport" ||
+		challengeType == "hacksport-ubuntu26" ||
+		challengeType == "hacksport-legacy"
+}
+
 // Loads the JSON information using the built-in encoding format.  This works
 // but results in a less-than-desireable end-user experience because of opaque
 // error codes.  It may be worth implementing a custom implementation that
@@ -662,11 +695,28 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 		return nil, err
 	}
 
-	// Indicates that this is a legacy hacksport challenge that needs lifting
-	if metadata.ChallengeType == "" {
-		_, err := os.Stat(filepath.Join(filepath.Dir(path), "challenge.py"))
+	// A missing type is the historical hacksport JSON format. Explicit
+	// hacksport types use the same lifting rules when old fields are present,
+	// while also allowing modern cmgr options such as seccomp configuration.
+	implicitHacksport := metadata.ChallengeType == ""
+	if implicitHacksport || isHacksportChallengeType(metadata.ChallengeType) {
+		challengePath := filepath.Join(filepath.Dir(path), "challenge.py")
+		challengeInfo, statErr := os.Stat(challengePath)
+		err = statErr
 		if err != nil {
-			err := fmt.Errorf("could not stat 'challenge.py' on implicit hacksport challenge: %s", path)
+			err = fmt.Errorf(
+				"could not stat 'challenge.py' on hacksport challenge %s: %v",
+				path,
+				err,
+			)
+			m.log.error(err)
+			return nil, err
+		}
+		if !challengeInfo.Mode().IsRegular() {
+			err = fmt.Errorf(
+				"'challenge.py' on hacksport challenge is not a regular file: %s",
+				path,
+			)
 			m.log.error(err)
 			return nil, err
 		}
@@ -678,15 +728,25 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 			return nil, err
 		}
 
-		metadata.ChallengeType = "hacksport"
-		metadata.Namespace = "hacksport"
-		metadata.Details = metadata.Description
-		metadata.Description = ""
+		if implicitHacksport {
+			metadata.ChallengeType = "hacksport"
+		}
+		if metadata.Namespace == "" {
+			metadata.Namespace = "hacksport"
+		}
+		if metadata.Details == "" {
+			metadata.Details = metadata.Description
+			metadata.Description = ""
+		}
 		metadata.SolveScript = false
 
-		metadata.Points = attrs.Score
+		if metadata.Points == 0 {
+			metadata.Points = attrs.Score
+		}
 
-		metadata.Attributes = make(map[string]string)
+		if metadata.Attributes == nil {
+			metadata.Attributes = make(map[string]string)
+		}
 		if attrs.Author != "" {
 			metadata.Attributes["author"] = attrs.Author
 		}
@@ -695,7 +755,7 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 			metadata.Attributes["event"] = attrs.Event
 		}
 
-		if attrs.Author != "" {
+		if attrs.Organization != "" {
 			metadata.Attributes["organization"] = attrs.Organization
 		}
 

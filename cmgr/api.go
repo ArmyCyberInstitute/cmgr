@@ -91,9 +91,19 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 		sourceChanged := curr.SourceChecksum != newMeta.SourceChecksum
 		metadataChanged := curr.MetadataChecksum != newMeta.MetadataChecksum
 		solvescriptChanged := curr.SolveScript != newMeta.SolveScript
-		if !sourceChanged && !metadataChanged && !solvescriptChanged {
+		currentMetadata, err := m.lookupChallengeMetadata(curr.Id)
+		if err != nil {
+			cu.Errors = append(cu.Errors, err)
+			delete(challenges, curr.Id)
+			continue
+		}
+		seccompChanged := !seccompPoliciesEqual(
+			currentMetadata.ChallengeOptions,
+			newMeta.ChallengeOptions,
+		)
+		if !sourceChanged && !metadataChanged && !solvescriptChanged && !seccompChanged {
 			cu.Unmodified = append(cu.Unmodified, curr)
-		} else if !sourceChanged && m.safeToRefresh(newMeta) {
+		} else if !sourceChanged && !seccompChanged && m.safeToRefresh(newMeta) {
 			m.log.debugf("Marking %s as refresh", newMeta.Id)
 			cu.Refreshed = append(cu.Refreshed, newMeta)
 		} else {
@@ -106,7 +116,7 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 		cu.Added = append(cu.Added, metadata)
 	}
 
-	cu.Errors = errs
+	cu.Errors = append(cu.Errors, errs...)
 	return cu
 }
 

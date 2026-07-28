@@ -2,6 +2,7 @@ package cmgr
 
 import (
 	"archive/tar"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -12,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/ArmyCyberInstitute/cmgr/cmgr/dockerfiles"
 )
 
 // Reads the environment variable CMGR_CHALLENGE_DIR and then normalizes it
@@ -272,21 +275,45 @@ func (m *Manager) createBuildContext(cm *ChallengeMetadata, dockerfile []byte) (
 	if err != nil {
 		return "", err
 	}
+	defer tmpFile.Close()
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			os.Remove(tmpFile.Name())
+		}
+	}()
 	m.log.debug(tmpFile.Name())
 
 	newCtx := tar.NewWriter(tmpFile)
-	defer newCtx.Close()
 
 	if dockerfile != nil {
-		hdr := tar.Header{Name: "Dockerfile", Mode: 0644, Size: int64(len(dockerfile))}
-
-		err = newCtx.WriteHeader(&hdr)
-		if err != nil {
+		if err = writeBuildContextFile(
+			newCtx,
+			"Dockerfile",
+			0644,
+			dockerfile,
+		); err != nil {
 			return "", err
 		}
+	}
 
-		_, err = newCtx.Write(dockerfile)
-		if err != nil {
+	supportFiles, err := dockerfiles.SupportFiles(cm.ChallengeType)
+	if err != nil {
+		return "", fmt.Errorf("could not load embedded build support files: %v", err)
+	}
+	for _, supportFile := range supportFiles {
+		if err = writeBuildContextFile(
+			newCtx,
+			supportFile.Name,
+			supportFile.Mode,
+			supportFile.Data,
+		); err != nil {
+			return "", err
+		}
+	}
+
+	if len(supportFiles) != 0 {
+		if err = m.writeHacksportContextFiles(newCtx, cm); err != nil {
 			return "", err
 		}
 	}
@@ -345,5 +372,115 @@ func (m *Manager) createBuildContext(cm *ChallengeMetadata, dockerfile []byte) (
 		return "", err
 	}
 
+	if err = newCtx.Close(); err != nil {
+		return "", err
+	}
+	succeeded = true
 	return tmpFile.Name(), nil
+}
+
+func writeBuildContextFile(
+	writer *tar.Writer,
+	name string,
+	mode int64,
+	data []byte,
+) error {
+	header := tar.Header{
+		Name: name,
+		Mode: mode,
+		Size: int64(len(data)),
+	}
+	if err := writer.WriteHeader(&header); err != nil {
+		return err
+	}
+	_, err := writer.Write(data)
+	return err
+}
+
+func (m *Manager) writeHacksportContextFiles(
+	writer *tar.Writer,
+	metadata *ChallengeMetadata,
+) error {
+	challengeDir := filepath.Dir(metadata.Path)
+	problemData := map[string]interface{}{}
+	problemPath := filepath.Join(challengeDir, "problem.json")
+	if data, err := ioutil.ReadFile(problemPath); err == nil {
+		if err = json.Unmarshal(data, &problemData); err != nil {
+			return fmt.Errorf("could not prepare hacksport problem metadata: %v", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("could not read hacksport problem metadata: %v", err)
+	}
+
+	if attributes, ok := problemData["attributes"].(map[string]interface{}); ok {
+		for key, value := range attributes {
+			if _, present := problemData[key]; !present {
+				problemData[key] = value
+			}
+		}
+	}
+	problemData["name"] = metadata.Name
+	problemData["category"] = metadata.Category
+	problemData["details"] = metadata.Details
+	if metadata.Hints != nil {
+		problemData["hints"] = metadata.Hints
+	} else if _, present := problemData["hints"]; !present {
+		problemData["hints"] = []string{}
+	}
+	problemData["score"] = metadata.Points
+	problemData["unique_name"] = string(metadata.Id)
+	if description, ok := problemData["description"].(string); !ok ||
+		description == "" {
+		problemData["description"] = metadata.Details
+	}
+	for key, value := range metadata.Attributes {
+		if _, present := problemData[key]; !present {
+			problemData[key] = value
+		}
+	}
+
+	encodedProblem, err := json.MarshalIndent(problemData, "", "  ")
+	if err != nil {
+		return fmt.Errorf("could not encode hacksport problem metadata: %v", err)
+	}
+	encodedProblem = append(encodedProblem, '\n')
+	if err = writeBuildContextFile(
+		writer,
+		".cmgr/problem.json",
+		0644,
+		encodedProblem,
+	); err != nil {
+		return err
+	}
+
+	for _, file := range []struct {
+		source string
+		target string
+		mode   int64
+	}{
+		{"packages.txt", ".cmgr/packages.txt", 0644},
+		{"requirements.txt", ".cmgr/requirements.txt", 0644},
+		{"install_dependencies", ".cmgr/install_dependencies", 0755},
+	} {
+		data, readErr := ioutil.ReadFile(filepath.Join(challengeDir, file.source))
+		if readErr != nil {
+			if !os.IsNotExist(readErr) {
+				return fmt.Errorf(
+					"could not read hacksport support file %q: %v",
+					file.source,
+					readErr,
+				)
+			}
+			data = nil
+		}
+		if err = writeBuildContextFile(
+			writer,
+			file.target,
+			file.mode,
+			data,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }

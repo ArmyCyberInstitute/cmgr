@@ -1,5 +1,4 @@
 from base64 import b64encode
-import hashlib
 import os
 
 TEMPLATE_EXT = ".template"
@@ -18,7 +17,7 @@ def generate_dockerfile(target_file):
         f.write(template)
 
 
-for (path, _, files) in os.walk("."):
+for path, _, files in os.walk("."):
     for f in files:
         basename, extension = os.path.splitext(f)
         if extension == TEMPLATE_EXT and ("pybuild" in path or "pybuild" in basename):

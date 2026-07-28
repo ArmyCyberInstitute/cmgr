@@ -35,3 +35,22 @@ The cmgr software is released under the Apache License, Version 2.0 ("Apache
 Consistent with the inbound=outbound model, contributions to any module must
 be made available, by the contributor, under the applicable license(s). Please
 read the Legal section of the CONTRIBUTING.md guide.
+
+The cmgr OCI runtime interceptor design and portions of its implementation are
+adapted from picoCTF/oci-interceptor:
+
+    https://github.com/picoCTF/oci-interceptor
+    Version 0.2.2, commit bcba3ad4a6f31be57659a9554a79fa5ad5efc7a6
+
+picoCTF/oci-interceptor is dual-licensed under the MIT License or the Apache
+License, Version 2.0. cmgr uses it under the Apache License, Version 2.0.
+
+The cmgr hacksport compatibility API and build lifecycle are adapted from the
+picoCTF/picoCTF hacksport implementation:
+
+    https://github.com/picoCTF/picoCTF
+    Release v19.2.10, commit fb09fa2cb745c2db007dc4be8f95e37a1788c830
+
+Those portions are Copyright (c) 2013-2016 Carnegie Mellon University and are
+used under the MIT License. The license is bundled with the compatibility
+source at cmgr/dockerfiles/hacksport_compat/LICENSE.picoCTF.

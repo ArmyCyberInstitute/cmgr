@@ -54,7 +54,7 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 	}
 
 	if err == nil {
-		err = txn.Select(&metadata.Hosts, "SELECT name, target FROM hosts WHERE challenge=?", challenge)
+		err = txn.Select(&metadata.Hosts, "SELECT name, target FROM hosts WHERE challenge=? ORDER BY idx", challenge)
 	}
 
 	ports := []struct {
@@ -94,11 +94,18 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 
 	containerOptions := new([]dbContainerOptions)
 	if err == nil {
-		err = txn.Select(containerOptions, "SELECT host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, diskquota, cgroupparent FROM containerOptions WHERE challenge=?", challenge)
+		err = txn.Select(containerOptions, "SELECT host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, diskquota, cgroupparent, seccomp FROM containerOptions WHERE challenge=?", challenge)
 	}
 	for _, dbOpts := range *containerOptions {
-		cOpts, err := newFromDbContainerOptions(dbOpts)
+		var cOpts ContainerOptions
+		cOpts, err = newFromDbContainerOptions(dbOpts)
 		if err != nil {
+			err = fmt.Errorf(
+				"could not load container options for challenge %q host %q: %v",
+				challenge,
+				dbOpts.Host,
+				err,
+			)
 			break
 		}
 		if metadata.ChallengeOptions.Overrides == nil {
@@ -278,8 +285,12 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 				}
 				break
 			}
-			m.log.debugf("%s%s: %v", metadata.Id, host_str, dbOpts)
-			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, diskquota, cgroupparent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+			logOpts := dbOpts
+			if logOpts.Seccomp != "" {
+				logOpts.Seccomp = "<configured>"
+			}
+			m.log.debugf("%s%s: %v", metadata.Id, host_str, logOpts)
+			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, diskquota, cgroupparent, seccomp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
 				metadata.Id,
 				host,
 				dbOpts.Init,
@@ -291,7 +302,8 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 				dbOpts.DroppedCaps,
 				dbOpts.NoNewPrivileges,
 				dbOpts.DiskQuota,
-				dbOpts.CgroupParent)
+				dbOpts.CgroupParent,
+				dbOpts.Seccomp)
 			if err != nil {
 				m.log.error(err)
 				err = txn.Rollback()
@@ -315,11 +327,32 @@ func (m *Manager) addChallenges(addedChallenges []*ChallengeMetadata) []error {
 }
 
 func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebuild bool) []error {
+	return m.updateChallengesInternal(updatedChallenges, rebuild, true)
+}
+
+func (m *Manager) updateChallengesInternal(
+	updatedChallenges []*ChallengeMetadata,
+	rebuild bool,
+	preflight bool,
+) []error {
 	errs := []error{}
 	for _, metadata := range updatedChallenges {
+		previousMetadata, err := m.lookupChallengeMetadata(metadata.Id)
+		if err != nil {
+			m.log.error(err)
+			errs = append(errs, err)
+			continue
+		}
+		if preflight {
+			if err := m.preflightChallengeSeccomp(metadata); err != nil {
+				m.log.error(err)
+				errs = append(errs, err)
+				continue
+			}
+		}
 		txn := m.db.MustBegin()
 
-		_, err := txn.NamedExec(challengeUpdateQuery, metadata)
+		_, err = txn.NamedExec(challengeUpdateQuery, metadata)
 		if err != nil {
 			m.log.error(err)
 			err = txn.Rollback()
@@ -542,7 +575,7 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 				}
 				break
 			}
-			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, diskquota, cgroupparent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, diskquota, cgroupparent, seccomp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
 				metadata.Id,
 				host,
 				dbOpts.Init,
@@ -554,7 +587,8 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 				dbOpts.DroppedCaps,
 				dbOpts.NoNewPrivileges,
 				dbOpts.DiskQuota,
-				dbOpts.CgroupParent)
+				dbOpts.CgroupParent,
+				dbOpts.Seccomp)
 			if err != nil {
 				m.log.error(err)
 				err = txn.Rollback()
@@ -581,6 +615,14 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 			if err != nil {
 				m.log.error(err)
 				errs = append(errs, err)
+				errs = append(
+					errs,
+					m.updateChallengesInternal(
+						[]*ChallengeMetadata{previousMetadata},
+						false,
+						false,
+					)...,
+				)
 				continue
 			}
 
@@ -589,61 +631,125 @@ func (m *Manager) updateChallenges(updatedChallenges []*ChallengeMetadata, rebui
 				if err != nil {
 					m.log.errorf("failed to create build context: %s", err)
 					errs = append(errs, err)
+					errs = append(
+						errs,
+						m.updateChallengesInternal(
+							[]*ChallengeMetadata{previousMetadata},
+							false,
+							false,
+						)...,
+					)
 					continue
 				}
 				defer os.Remove(buildCtxFile)
 
+				completedUpdates := make([]*stagedBuildUpdate, 0, len(buildIds))
+				challengeFailed := false
 				for _, buildId := range buildIds {
 					build, err := m.lookupBuildMetadata(buildId)
 					if err != nil {
 						errs = append(errs, err)
-						continue
+						challengeFailed = true
+						break
 					}
-					cMeta, err := m.lookupChallengeMetadata(build.Challenge)
-					if err != nil {
-						errs = append(errs, err)
-						continue
-					}
+					candidate := cloneBuildMetadata(build)
+					qualifier := fmt.Sprintf(
+						"cmgr-validate-%d",
+						m.rand.Int63(),
+					)
 
 					// Resetting the flag signals to rebuild the Dockerfile
-					build.Flag = ""
-					err = m.executeBuild(metadata, build, buildCtxFile)
+					candidate.Flag = ""
+					err = m.executeBuild(
+						metadata,
+						candidate,
+						buildCtxFile,
+						qualifier,
+					)
 					if err != nil {
+						m.discardStagedBuild(metadata, candidate, qualifier)
 						errs = append(errs, err)
-						continue
+						challengeFailed = true
+						break
+					}
+					promotion, err := m.promoteStagedBuild(candidate, qualifier)
+					if err != nil {
+						m.discardStagedBuild(metadata, candidate, qualifier)
+						errs = append(errs, err)
+						challengeFailed = true
+						break
+					}
+					update := &stagedBuildUpdate{
+						metadata:  metadata,
+						previous:  build,
+						candidate: candidate,
+						qualifier: qualifier,
+						promotion: promotion,
 					}
 
 					// Update database
-					err = m.finalizeBuild(build)
+					err = m.finalizeBuild(candidate)
 					if err != nil {
 						errs = append(errs, err)
-						continue
+						errs = append(errs, m.rollbackBuildUpdate(update)...)
+						challengeFailed = true
+						break
 					}
 
-					// Recreate network and containers
-					instances, err := m.getBuildInstances(build.Id)
+					// Start replacements while retaining the old containers
+					// for rollback until every build has validated.
+					instances, err := m.getBuildInstances(candidate.Id)
 					if err != nil {
 						errs = append(errs, err)
-						continue
+						errs = append(errs, m.rollbackBuildUpdate(update)...)
+						challengeFailed = true
+						break
 					}
+					update.cutovers = make([]*instanceCutover, 0, len(instances))
 					for _, iid := range instances {
 						instance, err := m.lookupInstanceMetadata(iid)
 						if err == nil {
-							err = m.stopContainers(instance)
-						}
-						if err == nil {
-							err = m.stopNetwork(instance)
-						}
-						if err == nil {
-							err = m.startNetwork(instance, cMeta.ChallengeOptions.NetworkOptions)
-						}
-						if err == nil {
-							err = m.startContainers(build, instance, cMeta.ChallengeOptions.Overrides)
+							var cutover *instanceCutover
+							cutover, err = m.prepareInstanceCutover(
+								candidate,
+								instance,
+								metadata.ChallengeOptions.Overrides,
+							)
+							if err == nil {
+								update.cutovers = append(update.cutovers, cutover)
+							}
 						}
 						if err != nil {
 							errs = append(errs, err)
+							errs = append(errs, m.rollbackBuildUpdate(update)...)
+							challengeFailed = true
+							break
 						}
 					}
+					if challengeFailed {
+						break
+					}
+					completedUpdates = append(completedUpdates, update)
+				}
+				if challengeFailed {
+					for i := len(completedUpdates) - 1; i >= 0; i-- {
+						errs = append(
+							errs,
+							m.rollbackBuildUpdate(completedUpdates[i])...,
+						)
+					}
+					errs = append(
+						errs,
+						m.updateChallengesInternal(
+							[]*ChallengeMetadata{previousMetadata},
+							false,
+							false,
+						)...,
+					)
+					continue
+				}
+				for _, update := range completedUpdates {
+					errs = append(errs, m.finishBuildUpdate(update)...)
 				}
 			}
 		}
@@ -690,6 +796,7 @@ type dbContainerOptions struct {
 	NoNewPrivileges bool
 	DiskQuota       string
 	CgroupParent    string
+	Seccomp         string
 }
 
 func newFromDbContainerOptions(dbOpts dbContainerOptions) (ContainerOptions, error) {
@@ -724,6 +831,11 @@ func newFromDbContainerOptions(dbOpts dbContainerOptions) (ContainerOptions, err
 	cOpts.DiskQuota = dbOpts.DiskQuota
 
 	cOpts.CgroupParent = dbOpts.CgroupParent
+
+	cOpts.Seccomp, err = unmarshalSeccompOptions(dbOpts.Seccomp)
+	if err != nil {
+		return cOpts, err
+	}
 
 	return cOpts, nil
 }
@@ -760,6 +872,11 @@ func (cOpts ContainerOptions) toDbContainerOptions() (dbContainerOptions, error)
 	dbOpts.DiskQuota = cOpts.DiskQuota
 
 	dbOpts.CgroupParent = cOpts.CgroupParent
+
+	dbOpts.Seccomp, err = marshalSeccompOptions(cOpts.Seccomp)
+	if err != nil {
+		return dbOpts, err
+	}
 
 	return dbOpts, nil
 }

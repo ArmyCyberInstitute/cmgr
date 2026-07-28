@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -13,29 +12,26 @@ import (
 	"io"
 	"io/ioutil"
 	"math/rand"
+	"net/netip"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	dockeropts "github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/strslice"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/ArmyCyberInstitute/cmgr/internal/ociinterceptor"
+	"github.com/containerd/errdefs"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/strslice"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 )
 
-//go:embed seccomp.json
-var seccompPolicy string
-
 func (m *Manager) initDocker() error {
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		m.log.errorf("could not create docker client: %s", err)
 		return err
@@ -44,13 +40,26 @@ func (m *Manager) initDocker() error {
 	m.cli = cli
 	m.ctx = context.Background()
 
-	ping, err := cli.Ping(m.ctx)
+	ping, err := cli.Ping(
+		m.ctx,
+		client.PingOptions{NegotiateAPIVersion: true},
+	)
 	if err != nil {
 		m.log.errorf("could not connect to docker engine: %s", err)
 		return err
 	}
 
 	m.log.infof("connected to docker (API v%s)", ping.APIVersion)
+
+	hostInfoResult, infoErr := cli.Info(m.ctx, client.InfoOptions{})
+	if infoErr != nil {
+		m.log.warnf(
+			"could not determine whether seccomp tweaks are available: %s",
+			infoErr,
+		)
+	} else if warning := seccompRuntimeWarning(hostInfoResult.Info); warning != "" {
+		m.log.warn(warning)
+	}
 
 	chalInterface, isSet := os.LookupEnv(IFACE_ENV)
 	if !isSet {
@@ -157,6 +166,13 @@ func (b *BuildMetadata) getArtifactsFilename() string {
 	return fmt.Sprintf("%d.tar.gz", b.Id)
 }
 
+func (b *BuildMetadata) getArtifactsFilenameForQualifier(qualifier string) string {
+	if qualifier == "" {
+		return b.getArtifactsFilename()
+	}
+	return fmt.Sprintf(".%s-%s", qualifier, b.getArtifactsFilename())
+}
+
 func (i *InstanceMetadata) getNetworkName() string {
 	return fmt.Sprintf("cmgr-%d", i.Id)
 }
@@ -216,7 +232,7 @@ func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
 			return err
 		}
 
-		err = m.executeBuild(cMeta, build, buildCtxFile)
+		err = m.executeBuild(cMeta, build, buildCtxFile, "")
 		if err != nil {
 			m.removeBuildMetadata(build.Id)
 			return err
@@ -231,8 +247,65 @@ func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
 	return nil
 }
 
-type dockerError struct {
-	Error string `json:"error"`
+type dockerProgressMessage struct {
+	Error       string `json:"error"`
+	ErrorDetail *struct {
+		Message string `json:"message"`
+	} `json:"errorDetail"`
+	Stream string `json:"stream"`
+	Status string `json:"status"`
+}
+
+func consumeDockerProgress(response io.ReadCloser, operation string) error {
+	defer response.Close()
+
+	const outputTailLimit = 8 * 1024
+	var outputTail string
+	appendOutput := func(output string) {
+		if output == "" {
+			return
+		}
+		outputTail += output
+		if len(outputTail) > outputTailLimit {
+			outputTail = outputTail[len(outputTail)-outputTailLimit:]
+		}
+	}
+	responseError := func(message string) error {
+		message = strings.TrimSpace(message)
+		outputTail = strings.TrimSpace(outputTail)
+		if outputTail == "" {
+			return fmt.Errorf("Docker %s failed: %s", operation, message)
+		}
+		return fmt.Errorf(
+			"Docker %s failed: %s\nDocker output (tail):\n%s",
+			operation,
+			message,
+			outputTail,
+		)
+	}
+
+	decoder := json.NewDecoder(response)
+	for {
+		var message dockerProgressMessage
+		err := decoder.Decode(&message)
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to decode Docker %s response: %w", operation, err)
+		}
+
+		appendOutput(message.Stream)
+		if message.Status != "" {
+			appendOutput(message.Status + "\n")
+		}
+		if message.ErrorDetail != nil && message.ErrorDetail.Message != "" {
+			return responseError(message.ErrorDetail.Message)
+		}
+		if message.Error != "" {
+			return responseError(message.Error)
+		}
+	}
 }
 
 func (bMeta *BuildMetadata) dockerId(image Image) string {
@@ -269,7 +342,7 @@ func (m *Manager) freezeBaseImage(challenge ChallengeId, force bool) error {
 	defer buildCtx.Close()
 
 	// Setup build options
-	opts := types.ImageBuildOptions{
+	opts := client.ImageBuildOptions{
 		Remove:     true,
 		Tags:       []string{imageName},
 		Target:     "base",
@@ -285,53 +358,20 @@ func (m *Manager) freezeBaseImage(challenge ChallengeId, force bool) error {
 		return err
 	}
 
-	// Read the response because errors aren't propagated.
-	messages, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		m.log.errorf("failed to read build response from docker: %s", err)
-		return err
-	}
-
-	// Search the response for an error message
-	re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
-	errMsg := re.Find(messages)
-	if errMsg != nil {
-		var dMsg dockerError
-		err = json.Unmarshal(errMsg, &dMsg)
-		if err == nil {
-			errMsg = []byte(dMsg.Error)
-		}
-		err = fmt.Errorf("failed to build image: %s", errMsg)
+	if err := consumeDockerProgress(resp.Body, "base image build"); err != nil {
 		m.log.error(err)
 		return err
 	}
 
 	// Push the image
-	pushOpts := types.ImagePushOptions{RegistryAuth: m.authString}
+	pushOpts := client.ImagePushOptions{RegistryAuth: m.authString}
 	pushResp, err := m.cli.ImagePush(m.ctx, imageName, pushOpts)
 	if err != nil {
 		m.log.errorf("failed to push base image: %s", err)
 		return err
 	}
 
-	// Read the response because errors aren't propagated.
-	messages, err = ioutil.ReadAll(pushResp)
-	resp.Body.Close()
-	if err != nil {
-		m.log.errorf("failed to read push response from docker: %s", err)
-		return err
-	}
-
-	// Search the response for an error message
-	errMsg = re.Find(messages)
-	if errMsg != nil {
-		var dMsg dockerError
-		err = json.Unmarshal(errMsg, &dMsg)
-		if err == nil {
-			errMsg = []byte(dMsg.Error)
-		}
-		err = fmt.Errorf("failed to push image: %s", errMsg)
+	if err := consumeDockerProgress(pushResp, "base image push"); err != nil {
 		m.log.error(err)
 		return err
 	}
@@ -339,26 +379,279 @@ func (m *Manager) freezeBaseImage(challenge ChallengeId, force bool) error {
 	return nil
 }
 
-func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, buildCtxFile string) error {
+func buildImageName(
+	challenge ChallengeId,
+	build *BuildMetadata,
+	image Image,
+	qualifier string,
+) string {
+	tag := build.dockerId(image)
+	if qualifier != "" {
+		tag = qualifier + "-" + tag
+	}
+	return fmt.Sprintf("%s:%s", challenge, tag)
+}
+
+func cloneBuildMetadata(build *BuildMetadata) *BuildMetadata {
+	cloned := *build
+	cloned.Images = append([]Image(nil), build.Images...)
+	cloned.RequiredSeccompTweaks = append(
+		SeccompTweakList(nil),
+		build.RequiredSeccompTweaks...,
+	)
+	for i := range cloned.Images {
+		cloned.Images[i].Ports = append([]string(nil), build.Images[i].Ports...)
+	}
+	if build.LookupData != nil {
+		cloned.LookupData = make(map[string]string, len(build.LookupData))
+		for key, value := range build.LookupData {
+			cloned.LookupData[key] = value
+		}
+	}
+	return &cloned
+}
+
+type stagedBuildPromotion struct {
+	build             *BuildMetadata
+	qualifier         string
+	canonicalImageIDs map[string]string
+	stagedImageNames  []string
+	canonicalArtifact string
+	backupArtifact    string
+	hadArtifact       bool
+}
+
+type stagedBuildUpdate struct {
+	metadata  *ChallengeMetadata
+	previous  *BuildMetadata
+	candidate *BuildMetadata
+	qualifier string
+	promotion *stagedBuildPromotion
+	cutovers  []*instanceCutover
+}
+
+func (m *Manager) rollbackBuildUpdate(update *stagedBuildUpdate) []error {
+	var errs []error
+	for i := len(update.cutovers) - 1; i >= 0; i-- {
+		if err := m.rollbackInstanceCutover(update.cutovers[i]); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if update.promotion != nil {
+		if err := m.rollbackStagedBuild(update.promotion); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if update.previous != nil {
+		if err := m.finalizeBuild(update.previous); err != nil {
+			errs = append(errs, err)
+		} else if _, err := m.db.Exec(
+			"UPDATE builds SET lastsolved=? WHERE id=?;",
+			update.previous.LastSolved,
+			update.previous.Id,
+		); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	m.discardStagedBuild(update.metadata, update.candidate, update.qualifier)
+	return errs
+}
+
+func (m *Manager) finishBuildUpdate(update *stagedBuildUpdate) []error {
+	var errs []error
+	for _, cutover := range update.cutovers {
+		if err := m.finishInstanceCutover(cutover); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := m.finishStagedBuild(update.promotion); err != nil {
+		errs = append(errs, err)
+	}
+	candidateHosts := make(map[string]struct{}, len(update.candidate.Images))
+	for _, image := range update.candidate.Images {
+		candidateHosts[image.Host] = struct{}{}
+	}
+	removeOptions := client.ImageRemoveOptions{PruneChildren: true}
+	for _, image := range update.previous.Images {
+		if _, retained := candidateHosts[image.Host]; retained {
+			continue
+		}
+		imageName := buildImageName(
+			update.previous.Challenge,
+			update.previous,
+			image,
+			"",
+		)
+		if _, err := m.cli.ImageRemove(
+			m.ctx,
+			imageName,
+			removeOptions,
+		); err != nil && !errdefs.IsNotFound(err) {
+			errs = append(
+				errs,
+				fmt.Errorf("could not remove obsolete image %s: %v", imageName, err),
+			)
+		}
+	}
+	return errs
+}
+
+func (m *Manager) promoteStagedBuild(
+	build *BuildMetadata,
+	qualifier string,
+) (*stagedBuildPromotion, error) {
+	promotion := &stagedBuildPromotion{
+		build:             build,
+		qualifier:         qualifier,
+		canonicalImageIDs: make(map[string]string),
+	}
+	for _, image := range build.Images {
+		canonical := buildImageName(build.Challenge, build, image, "")
+		staged := buildImageName(build.Challenge, build, image, qualifier)
+		inspection, err := m.cli.ImageInspect(m.ctx, canonical)
+		if err == nil {
+			promotion.canonicalImageIDs[canonical] = inspection.ID
+		} else if errdefs.IsNotFound(err) {
+			// A new challenge host has no canonical tag to preserve.
+			promotion.canonicalImageIDs[canonical] = ""
+		} else {
+			return nil, fmt.Errorf("could not snapshot image %s before promotion: %v", canonical, err)
+		}
+		promotion.stagedImageNames = append(promotion.stagedImageNames, staged)
+	}
+
+	for _, image := range build.Images {
+		canonical := buildImageName(build.Challenge, build, image, "")
+		staged := buildImageName(build.Challenge, build, image, qualifier)
+		if _, err := m.cli.ImageTag(
+			m.ctx,
+			client.ImageTagOptions{Source: staged, Target: canonical},
+		); err != nil {
+			_ = m.rollbackStagedBuild(promotion)
+			return nil, fmt.Errorf("could not promote image %s to %s: %v", staged, canonical, err)
+		}
+	}
+
+	promotion.canonicalArtifact = filepath.Join(
+		m.artifactsDir,
+		build.getArtifactsFilename(),
+	)
+	promotion.backupArtifact = filepath.Join(
+		m.artifactsDir,
+		fmt.Sprintf(".cmgr-old-%s-%s", qualifier, build.getArtifactsFilename()),
+	)
+	stagedArtifact := filepath.Join(
+		m.artifactsDir,
+		build.getArtifactsFilenameForQualifier(qualifier),
+	)
+	if _, err := os.Stat(promotion.canonicalArtifact); err == nil {
+		if err = os.Rename(promotion.canonicalArtifact, promotion.backupArtifact); err != nil {
+			_ = m.rollbackStagedBuild(promotion)
+			return nil, fmt.Errorf("could not preserve current artifacts: %v", err)
+		}
+		promotion.hadArtifact = true
+	} else if !os.IsNotExist(err) {
+		_ = m.rollbackStagedBuild(promotion)
+		return nil, fmt.Errorf("could not inspect current artifacts: %v", err)
+	}
+
+	if build.HasArtifacts {
+		if err := os.Rename(stagedArtifact, promotion.canonicalArtifact); err != nil {
+			_ = m.rollbackStagedBuild(promotion)
+			return nil, fmt.Errorf("could not promote staged artifacts: %v", err)
+		}
+	}
+	return promotion, nil
+}
+
+func (m *Manager) rollbackStagedBuild(promotion *stagedBuildPromotion) error {
+	var firstErr error
+	for canonical, imageID := range promotion.canonicalImageIDs {
+		if imageID == "" {
+			removeOptions := client.ImageRemoveOptions{PruneChildren: true}
+			if _, err := m.cli.ImageRemove(
+				m.ctx,
+				canonical,
+				removeOptions,
+			); err != nil && !errdefs.IsNotFound(err) && firstErr == nil {
+				firstErr = err
+			}
+		} else if _, err := m.cli.ImageTag(
+			m.ctx,
+			client.ImageTagOptions{Source: imageID, Target: canonical},
+		); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if promotion.canonicalArtifact != "" {
+		if err := os.Remove(promotion.canonicalArtifact); err != nil &&
+			!os.IsNotExist(err) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if promotion.hadArtifact {
+		if err := os.Rename(
+			promotion.backupArtifact,
+			promotion.canonicalArtifact,
+		); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (m *Manager) finishStagedBuild(promotion *stagedBuildPromotion) error {
+	var firstErr error
+	removeOptions := client.ImageRemoveOptions{PruneChildren: false}
+	for _, imageName := range promotion.stagedImageNames {
+		if _, err := m.cli.ImageRemove(m.ctx, imageName, removeOptions); err != nil &&
+			!errdefs.IsNotFound(err) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if promotion.hadArtifact {
+		if err := os.Remove(promotion.backupArtifact); err != nil &&
+			!os.IsNotExist(err) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (m *Manager) discardStagedBuild(
+	metadata *ChallengeMetadata,
+	build *BuildMetadata,
+	qualifier string,
+) {
+	removeOptions := client.ImageRemoveOptions{PruneChildren: true}
+	for _, host := range metadata.Hosts {
+		image := Image{Host: host.Name}
+		imageName := buildImageName(metadata.Id, build, image, qualifier)
+		_, _ = m.cli.ImageRemove(m.ctx, imageName, removeOptions)
+	}
+	_ = os.Remove(filepath.Join(
+		m.artifactsDir,
+		build.getArtifactsFilenameForQualifier(qualifier),
+	))
+}
+
+func (m *Manager) executeBuild(
+	cMeta *ChallengeMetadata,
+	bMeta *BuildMetadata,
+	buildCtxFile string,
+	qualifier string,
+) error {
 
 	seedStr := fmt.Sprintf("%d", bMeta.Seed)
 
 	baseName := fmt.Sprintf("%s/%s:%x", m.challengeRegistry, challengeToFreezeName(cMeta.Id), cMeta.SourceChecksum)
-	pullOpts := types.ImagePullOptions{RegistryAuth: m.authString}
+	pullOpts := client.ImagePullOptions{RegistryAuth: m.authString}
 	var buildCache []string
 	pullResp, err := m.cli.ImagePull(m.ctx, baseName, pullOpts)
 	if err == nil {
-		// Read the response because errors aren't propagated.
-		messages, err := ioutil.ReadAll(pullResp)
-		pullResp.Close()
-		if err == nil {
-			// Search the response for an error message
-			re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
-			errMsg := re.Find(messages)
-			if errMsg == nil {
-				m.log.infof("Successfully pulled base image '%s'", baseName)
-				buildCache = append(buildCache, baseName)
-			}
+		if err := consumeDockerProgress(pullResp, "base image pull"); err == nil {
+			m.log.infof("Successfully pulled base image '%s'", baseName)
+			buildCache = append(buildCache, baseName)
 		}
 	}
 
@@ -366,7 +659,7 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 	var buildImage string
 	for _, host := range cMeta.Hosts {
 		image := Image{Host: host.Name, Ports: []string{}}
-		imageName := fmt.Sprintf("%s:%s", cMeta.Id, bMeta.dockerId(image))
+		imageName := buildImageName(cMeta.Id, bMeta, image, qualifier)
 
 		if host.Name == "builder" || (host.Name == "challenge" && buildImage == "") {
 			buildImage = imageName
@@ -379,7 +672,7 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 		}
 
 		// Setup build options
-		opts := types.ImageBuildOptions{
+		opts := client.ImageBuildOptions{
 			BuildArgs: map[string]*string{
 				"FLAG_FORMAT": &bMeta.Format,
 				"SEED":        &seedStr,
@@ -406,26 +699,15 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 			return err
 		}
 
-		messages, err := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			m.log.errorf("failed to read build response from docker: %s", err)
-			return err
-		}
-
-		re := regexp.MustCompile(`{"errorDetail":[^\n]+`)
-		errMsg := re.Find(messages)
-		if errMsg != nil {
-			var dMsg dockerError
-			err = json.Unmarshal(errMsg, &dMsg)
-			if err == nil {
-				errMsg = []byte(dMsg.Error)
-			}
-			err = fmt.Errorf("failed to build image: %s", errMsg)
+		if err := consumeDockerProgress(resp.Body, "challenge image build"); err != nil {
 			m.log.error(err)
 			return err
 		}
 		images = append(images, image)
+		// Multi-container and builder/challenge targets share the same context.
+		// Explicitly offer each completed target to the next build so daemon
+		// cache behavior does not cause common stages to be rebuilt.
+		buildCache = append(buildCache, imageName)
 	}
 
 	if buildImage == "" {
@@ -438,33 +720,35 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 	hConfig := container.HostConfig{}
 	nConfig := network.NetworkingConfig{}
 
-	hostInfo, err := m.cli.Info(m.ctx)
-	if err != nil {
-		return err
-	}
-
-	if hostInfo.OSType == "linux" {
-		m.log.debug("inserting custom seccomp profile")
-		hConfig.SecurityOpt = []string{"seccomp:" + seccompPolicy}
-	}
-
-	respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, nil, "")
+	respCC, err := m.cli.ContainerCreate(
+		m.ctx,
+		client.ContainerCreateOptions{
+			Config:           &cConfig,
+			HostConfig:       &hConfig,
+			NetworkingConfig: &nConfig,
+		},
+	)
 	if err != nil {
 		m.log.errorf("failed to create artifacts container: %s", err)
 		return err
 	}
 
 	cid := respCC.ID
-	crOpts := types.ContainerRemoveOptions{RemoveVolumes: true, RemoveLinks: false, Force: true}
+	crOpts := client.ContainerRemoveOptions{RemoveVolumes: true, RemoveLinks: false, Force: true}
 	defer m.cli.ContainerRemove(m.ctx, cid, crOpts)
 
 	m.log.infof("created container %s", cid)
 
-	metaFile, _, err := m.cli.CopyFromContainer(m.ctx, cid, "/challenge")
+	copyResult, err := m.cli.CopyFromContainer(
+		m.ctx,
+		cid,
+		client.CopyFromContainerOptions{SourcePath: "/challenge"},
+	)
 	if err != nil {
 		m.log.errorf("could not find '/challenge' in container: %s", err)
 		return err
 	}
+	metaFile := copyResult.Content
 	defer metaFile.Close()
 
 	cTar := tar.NewReader(metaFile)
@@ -497,8 +781,14 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 			}
 
 			delete(lookups, "flag")
+
+			bMeta.RequiredSeccompTweaks, err = consumeBuildSeccompTweaks(lookups)
+			if err != nil {
+				m.log.error(err)
+				return err
+			}
 		} else if hdr.Name == "challenge/artifacts.tar.gz" {
-			artifactsFileName := bMeta.getArtifactsFilename()
+			artifactsFileName := bMeta.getArtifactsFilenameForQualifier(qualifier)
 			// Iterate through reading filenames and copying over the tarball
 			artifactsFile, err := os.Create(filepath.Join(m.artifactsDir, artifactsFileName))
 			if err != nil {
@@ -585,11 +875,14 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 
 	err = m.validateBuild(cMeta, bMeta, files)
 	if err != nil {
-		os.Remove(bMeta.getArtifactsFilename())
+		os.Remove(filepath.Join(
+			m.artifactsDir,
+			bMeta.getArtifactsFilenameForQualifier(qualifier),
+		))
 
-		iro := types.ImageRemoveOptions{Force: false, PruneChildren: true}
+		iro := client.ImageRemoveOptions{Force: false, PruneChildren: true}
 		for _, image := range bMeta.Images {
-			imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, bMeta.dockerId(image))
+			imageName := buildImageName(bMeta.Challenge, bMeta, image, qualifier)
 			m.cli.ImageRemove(m.ctx, imageName, iro)
 		}
 	}
@@ -600,7 +893,7 @@ func (m *Manager) executeBuild(cMeta *ChallengeMetadata, bMeta *BuildMetadata, b
 }
 
 func (m *Manager) startNetwork(instance *InstanceMetadata, opts NetworkOptions) error {
-	netSpec := types.NetworkCreate{
+	netSpec := client.NetworkCreateOptions{
 		Driver: "bridge",
 	}
 	netname := instance.getNetworkName()
@@ -613,9 +906,13 @@ func (m *Manager) startNetwork(instance *InstanceMetadata, opts NetworkOptions) 
 
 func (m *Manager) stopNetwork(instance *InstanceMetadata) error {
 	networkName := instance.getNetworkName()
-	err := m.cli.NetworkRemove(m.ctx, networkName)
+	_, err := m.cli.NetworkRemove(
+		m.ctx,
+		networkName,
+		client.NetworkRemoveOptions{},
+	)
 	if err != nil {
-		if client.IsErrNotFound(err) {
+		if errdefs.IsNotFound(err) {
 			m.log.warnf("skipped removing network (not found): %s", networkName)
 			err = nil
 		} else {
@@ -631,7 +928,21 @@ func (m *Manager) stopNetwork(instance *InstanceMetadata) error {
 // with the SQLite database.
 var portLock sync.Mutex
 
-func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetadata, opts map[string]ContainerOptions) error {
+func (m *Manager) startContainers(
+	build *BuildMetadata,
+	instance *InstanceMetadata,
+	opts map[string]ContainerOptions,
+) error {
+	return m.startContainersWithPersistence(build, instance, opts, true, nil)
+}
+
+func (m *Manager) startContainersWithPersistence(
+	build *BuildMetadata,
+	instance *InstanceMetadata,
+	opts map[string]ContainerOptions,
+	persist bool,
+	preferredPorts map[string]int,
+) error {
 	revPortMap, err := m.getReversePortMap(build.Challenge)
 	if err != nil {
 		return err
@@ -642,23 +953,42 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		portLock.Lock()
 		defer portLock.Unlock()
 	}
+	hostIP, err := netip.ParseAddr(m.challengeInterface)
+	if err != nil {
+		return fmt.Errorf("invalid challenge interface %q: %v", m.challengeInterface, err)
+	}
 	// Call create in docker
 	netname := instance.getNetworkName()
 	for _, image := range build.Images {
 		if image.Host == "builder" {
 			continue
 		}
-		exposedPorts := nat.PortSet{}
-		publishedPorts := nat.PortMap{}
+		exposedPorts := network.PortSet{}
+		publishedPorts := network.PortMap{}
 		for _, portStr := range image.Ports {
-			port := nat.Port(portStr)
-			hostPort, err := m.getFreePort()
+			port, err := network.ParsePort(portStr)
+			if err != nil {
+				return fmt.Errorf("invalid image port %q: %v", portStr, err)
+			}
+			endpoint := challengePortEndpoint{
+				Host: image.Host,
+				Port: portStr,
+			}
+			portName, ok := revPortMap[endpoint]
+			if !ok {
+				return fmt.Errorf(
+					"could not find the challenge port name for %s on host %s",
+					portStr,
+					image.Host,
+				)
+			}
+			hostPort, err := m.selectHostPort(portName, preferredPorts)
 			if err != nil {
 				return err
 			}
 			exposedPorts[port] = struct{}{}
-			publishedPorts[port] = []nat.PortBinding{
-				{HostIP: m.challengeInterface, HostPort: hostPort},
+			publishedPorts[port] = []network.PortBinding{
+				{HostIP: hostIP, HostPort: hostPort},
 			}
 		}
 
@@ -673,19 +1003,17 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			RestartPolicy: container.RestartPolicy{Name: "always"},
 		}
 
-		hasContainerOpts := false
-		cOpts, hasContainerOpts := opts[""]
-		if hostCOpts, ok := opts[strings.ToLower(image.Host)]; ok {
-			cOpts = hostCOpts
-			hasContainerOpts = true
-		}
+		cOpts, hasContainerOpts := effectiveContainerOptions(
+			opts,
+			strings.ToLower(image.Host),
+		)
 		if image.Host == "builder" {
 			hasContainerOpts = false
 		}
 		if hasContainerOpts {
 			hConfig.Init = &cOpts.Init
 			if cOpts.Cpus != "" {
-				nanoCpus, err := dockeropts.ParseCPUs(cOpts.Cpus)
+				nanoCpus, err := parseNanoCPUs(cOpts.Cpus)
 				if err != nil {
 					return err
 				}
@@ -733,14 +1061,45 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			}
 		}
 
-		hostInfo, err := m.cli.Info(m.ctx)
+		effectiveSeccomp, err := withRequiredSeccompTweaks(
+			cOpts.Seccomp,
+			build.RequiredSeccompTweaks,
+		)
 		if err != nil {
-			return err
+			return fmt.Errorf(
+				"invalid seccomp requirements for challenge %q container %q: %v",
+				build.Challenge,
+				image.Host,
+				err,
+			)
 		}
-
-		if hostInfo.OSType == "linux" {
-			m.log.debug("inserting custom seccomp profile")
-			hConfig.SecurityOpt = append(hConfig.SecurityOpt, "seccomp:"+seccompPolicy)
+		if effectiveSeccomp != nil &&
+			(len(effectiveSeccomp.Tweaks) != 0 ||
+				effectiveSeccomp.effectiveProfile != "") {
+			hostInfoResult, err := m.cli.Info(m.ctx, client.InfoOptions{})
+			if err != nil {
+				return err
+			}
+			if effectiveSeccomp.effectiveProfile != "" {
+				m.log.debugf(
+					"inserting custom seccomp profile (%s)",
+					effectiveSeccomp.ProfileHash,
+				)
+			}
+			if len(effectiveSeccomp.Tweaks) != 0 {
+				m.log.debugf(
+					"requesting OCI seccomp tweaks: %s",
+					strings.Join(effectiveSeccomp.Tweaks, ","),
+				)
+			}
+			if err = configureContainerSeccomp(
+				&cConfig,
+				&hConfig,
+				effectiveSeccomp,
+				hostInfoResult.Info,
+			); err != nil {
+				return err
+			}
 		}
 
 		nConfig := network.NetworkingConfig{
@@ -752,7 +1111,14 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 			},
 		}
 
-		respCC, err := m.cli.ContainerCreate(m.ctx, &cConfig, &hConfig, &nConfig, nil, "")
+		respCC, err := m.cli.ContainerCreate(
+			m.ctx,
+			client.ContainerCreateOptions{
+				Config:           &cConfig,
+				HostConfig:       &hConfig,
+				NetworkingConfig: &nConfig,
+			},
+		)
 		if err != nil {
 			m.log.errorf("failed to create instance container: %s", err)
 			return err
@@ -762,7 +1128,7 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		instance.Containers = append(instance.Containers, cid)
 		m.log.infof("created new image: %s", cid)
 
-		err = m.cli.ContainerStart(m.ctx, cid, types.ContainerStartOptions{})
+		_, err = m.cli.ContainerStart(m.ctx, cid, client.ContainerStartOptions{})
 		if err != nil {
 			m.log.errorf("failed to start container: %s", err)
 			return err
@@ -773,14 +1139,18 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 		for !done && backoff < time.Second {
 			m.log.debug("Querying docker for port info...")
 
-			cInfo, err := m.cli.ContainerInspect(m.ctx, cid)
+			cInfo, err := m.cli.ContainerInspect(
+				m.ctx,
+				cid,
+				client.ContainerInspectOptions{},
+			)
 			if err != nil {
 				m.log.errorf("failed to get container info: %s", err)
 				return err
 			}
 			done = true
 
-			for cPort, hPortInfo := range cInfo.NetworkSettings.Ports {
+			for cPort, hPortInfo := range cInfo.Container.NetworkSettings.Ports {
 				if len(hPortInfo) == 0 {
 					done = false
 					time.Sleep(backoff)
@@ -792,22 +1162,253 @@ func (m *Manager) startContainers(build *BuildMetadata, instance *InstanceMetada
 				if err != nil {
 					return err
 				}
-				instance.Ports[revPortMap[string(cPort)]] = hPort
+				endpoint := challengePortEndpoint{
+					Host: image.Host,
+					Port: cPort.String(),
+				}
+				portName, ok := revPortMap[endpoint]
+				if !ok {
+					return fmt.Errorf(
+						"could not find the challenge port name for %s on host %s",
+						cPort,
+						image.Host,
+					)
+				}
+				instance.Ports[portName] = hPort
 				m.log.debugf("container port %s mapped to %s", cPort, hPortInfo[0].HostPort)
 			}
 		}
+		if !done {
+			return fmt.Errorf(
+				"timed out waiting for Docker port assignments for container %s",
+				cid,
+			)
+		}
 	}
 
-	return m.finalizeInstance(instance)
+	if persist {
+		return m.finalizeInstance(instance)
+	}
+	return nil
 }
 
+func (m *Manager) selectHostPort(
+	portName string,
+	preferredPorts map[string]int,
+) (string, error) {
+	if preferredPort, reuse := preferredPorts[portName]; reuse {
+		if preferredPort <= 0 || preferredPort >= 65536 {
+			return "", fmt.Errorf(
+				"cannot preserve invalid host port %d for %q",
+				preferredPort,
+				portName,
+			)
+		}
+		return strconv.Itoa(preferredPort), nil
+	}
+	return m.getFreePort()
+}
+
+func effectiveContainerOptions(
+	options map[string]ContainerOptions,
+	host string,
+) (ContainerOptions, bool) {
+	defaultOptions, hasDefault := options[""]
+	hostOptions, hasHost := options[host]
+	if !hasHost {
+		return defaultOptions, hasDefault
+	}
+
+	// Host options retain the existing replacement semantics for general
+	// container settings. Seccomp is inherited separately so a challenge-level
+	// policy applies to every runtime container unless that host explicitly
+	// selects its own policy.
+	if hostOptions.Seccomp == nil {
+		hostOptions.Seccomp = defaultOptions.Seccomp
+	}
+	return hostOptions, true
+}
+
+type instanceCutover struct {
+	old       *InstanceMetadata
+	candidate *InstanceMetadata
+}
+
+func (m *Manager) prepareInstanceCutover(
+	build *BuildMetadata,
+	current *InstanceMetadata,
+	options map[string]ContainerOptions,
+) (*instanceCutover, error) {
+	oldContainerIDs := append([]string(nil), current.Containers...)
+	pausedContainerIDs, err := m.pauseContainerProcesses(oldContainerIDs)
+	if err != nil {
+		if resumeErr := m.resumeContainerProcesses(pausedContainerIDs); resumeErr != nil {
+			return nil, fmt.Errorf(
+				"could not pause old containers: %v; partially paused containers could not be resumed: %v",
+				err,
+				resumeErr,
+			)
+		}
+		return nil, err
+	}
+
+	old := *current
+	old.Containers = append([]string(nil), current.Containers...)
+	old.Ports = make(map[string]int, len(current.Ports))
+	for name, port := range current.Ports {
+		old.Ports[name] = port
+	}
+	candidate := &InstanceMetadata{
+		Id:         current.Id,
+		Build:      current.Build,
+		LastSolved: current.LastSolved,
+		Ports:      make(map[string]int),
+		Containers: []string{},
+	}
+	if err := m.startContainersWithPersistence(
+		build,
+		candidate,
+		options,
+		false,
+		current.Ports,
+	); err != nil {
+		var recoveryProblems []string
+		if cleanupErr := m.removeContainerIDs(candidate.Containers); cleanupErr != nil {
+			recoveryProblems = append(
+				recoveryProblems,
+				fmt.Sprintf("remove replacement containers: %v", cleanupErr),
+			)
+		}
+		restartErr := m.resumeContainerProcesses(oldContainerIDs)
+		if restartErr != nil {
+			recoveryProblems = append(
+				recoveryProblems,
+				fmt.Sprintf("restart old containers: %v", restartErr),
+			)
+		}
+		if len(recoveryProblems) != 0 {
+			return nil, fmt.Errorf(
+				"replacement containers failed: %v; recovery also failed: %s",
+				err,
+				strings.Join(recoveryProblems, "; "),
+			)
+		}
+		return nil, err
+	}
+
+	if err := m.replaceInstanceRuntimeMetadata(candidate); err != nil {
+		var recoveryProblems []string
+		if cleanupErr := m.removeContainerIDs(candidate.Containers); cleanupErr != nil {
+			recoveryProblems = append(
+				recoveryProblems,
+				fmt.Sprintf("remove replacement containers: %v", cleanupErr),
+			)
+		}
+		restartErr := m.resumeContainerProcesses(oldContainerIDs)
+		if restartErr != nil {
+			recoveryProblems = append(
+				recoveryProblems,
+				fmt.Sprintf("restart old containers: %v", restartErr),
+			)
+		}
+		if len(recoveryProblems) != 0 {
+			return nil, fmt.Errorf(
+				"could not record replacement containers: %v; recovery also failed: %s",
+				err,
+				strings.Join(recoveryProblems, "; "),
+			)
+		}
+		return nil, err
+	}
+
+	return &instanceCutover{old: &old, candidate: candidate}, nil
+}
+
+func (m *Manager) rollbackInstanceCutover(cutover *instanceCutover) error {
+	var problems []string
+	if err := m.removeContainerIDs(cutover.candidate.Containers); err != nil {
+		problems = append(problems, fmt.Sprintf("remove replacement containers: %v", err))
+	}
+	if err := m.replaceInstanceRuntimeMetadata(cutover.old); err != nil {
+		problems = append(problems, fmt.Sprintf("restore instance metadata: %v", err))
+	}
+	if err := m.resumeContainerProcesses(cutover.old.Containers); err != nil {
+		problems = append(problems, fmt.Sprintf("restart old containers: %v", err))
+	}
+	if len(problems) != 0 {
+		return errors.New(strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func (m *Manager) finishInstanceCutover(cutover *instanceCutover) error {
+	return m.removeContainerIDs(cutover.old.Containers)
+}
+
+// pauseContainerProcesses stops containers without removing them or their
+// database rows. Staged challenge updates retain them for rollback.
+func (m *Manager) pauseContainerProcesses(
+	containerIDs []string,
+) ([]string, error) {
+	timeout := 10
+	paused := make([]string, 0, len(containerIDs))
+	for _, containerID := range containerIDs {
+		if _, err := m.cli.ContainerStop(
+			m.ctx,
+			containerID,
+			client.ContainerStopOptions{Timeout: &timeout},
+		); err != nil {
+			return paused, fmt.Errorf("could not stop container %s: %v", containerID, err)
+		}
+		paused = append(paused, containerID)
+	}
+	return paused, nil
+}
+
+func (m *Manager) resumeContainerProcesses(containerIDs []string) error {
+	var problems []string
+	for _, containerID := range containerIDs {
+		if _, err := m.cli.ContainerStart(
+			m.ctx,
+			containerID,
+			client.ContainerStartOptions{},
+		); err != nil {
+			problems = append(
+				problems,
+				fmt.Sprintf("could not restart container %s: %v", containerID, err),
+			)
+		}
+	}
+	if len(problems) != 0 {
+		return errors.New(strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func (m *Manager) removeContainerIDs(containerIDs []string) error {
+	var firstErr error
+	for _, containerID := range containerIDs {
+		_, err := m.cli.ContainerRemove(
+			m.ctx,
+			containerID,
+			client.ContainerRemoveOptions{RemoveVolumes: true, Force: true},
+		)
+		if err != nil && !errdefs.IsNotFound(err) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// stopContainers permanently removes an instance's containers and their
+// runtime metadata. Staged updates use pauseContainerProcesses instead.
 func (m *Manager) stopContainers(instance *InstanceMetadata) error {
 	var err error
 	for _, cid := range instance.Containers {
-		opts := types.ContainerRemoveOptions{RemoveVolumes: true, Force: true}
-		err = m.cli.ContainerRemove(m.ctx, cid, opts)
+		opts := client.ContainerRemoveOptions{RemoveVolumes: true, Force: true}
+		_, err = m.cli.ContainerRemove(m.ctx, cid, opts)
 		if err != nil {
-			if client.IsErrNotFound(err) {
+			if errdefs.IsNotFound(err) {
 				m.log.warnf("skipped removing container (not found): %s", cid)
 				err = nil
 			} else {
@@ -850,13 +1451,13 @@ func (m *Manager) destroyImages(build BuildId) error {
 		}
 	}
 
-	iro := types.ImageRemoveOptions{Force: true, PruneChildren: true}
+	iro := client.ImageRemoveOptions{Force: true, PruneChildren: true}
 	for _, image := range bMeta.Images {
 
 		imageName := fmt.Sprintf("%s:%s", bMeta.Challenge, bMeta.dockerId(image))
 		_, err := m.cli.ImageRemove(m.ctx, imageName, iro)
 		if err != nil {
-			if client.IsErrNotFound(err) {
+			if errdefs.IsNotFound(err) {
 				m.log.warnf("skipped removing image (not found): %s", imageName)
 			} else {
 				m.log.errorf("failed to remove image: %s", err)
@@ -866,4 +1467,112 @@ func (m *Manager) destroyImages(build BuildId) error {
 	}
 
 	return nil
+}
+
+func configureContainerSeccomp(
+	cConfig *container.Config,
+	hConfig *container.HostConfig,
+	options *SeccompOptions,
+	hostInfo system.Info,
+) error {
+	if options == nil {
+		return nil
+	}
+	if hostInfo.OSType != "linux" {
+		return fmt.Errorf("seccomp configuration is only supported by Linux Docker hosts")
+	}
+	if options.effectiveProfile != "" {
+		hConfig.SecurityOpt = append(
+			hConfig.SecurityOpt,
+			"seccomp="+options.effectiveProfile,
+		)
+	}
+	if len(options.Tweaks) != 0 {
+		if !seccompRuntimeReady(hostInfo) {
+			return fmt.Errorf(
+				"seccomp tweaks require compatible Docker runtime %q; on the Docker host run: %s",
+				ociinterceptor.RuntimeName,
+				ociinterceptor.RegistrationCommand,
+			)
+		}
+		hConfig.Runtime = ociinterceptor.RuntimeName
+		cConfig.Env = append(
+			cConfig.Env,
+			ociinterceptor.TweakEnvironmentVariable+"="+strings.Join(options.Tweaks, ","),
+		)
+	}
+	return nil
+}
+
+// preflightChallengeSeccomp verifies each runtime host's effective policy
+// against the connected Docker daemon before an update mutates persisted
+// challenge state.
+func (m *Manager) preflightChallengeSeccomp(metadata *ChallengeMetadata) error {
+	requiresSeccomp := false
+	for _, options := range metadata.ChallengeOptions.Overrides {
+		if options.Seccomp != nil &&
+			(len(options.Seccomp.Tweaks) != 0 ||
+				options.Seccomp.effectiveProfile != "") {
+			requiresSeccomp = true
+			break
+		}
+	}
+	if !requiresSeccomp {
+		return nil
+	}
+
+	hostInfoResult, err := m.cli.Info(m.ctx, client.InfoOptions{})
+	if err != nil {
+		return fmt.Errorf("could not preflight seccomp configuration: %v", err)
+	}
+	for _, host := range metadata.Hosts {
+		if host.Name == "builder" {
+			continue
+		}
+		options, ok := effectiveContainerOptions(
+			metadata.ChallengeOptions.Overrides,
+			strings.ToLower(host.Name),
+		)
+		if !ok || options.Seccomp == nil {
+			continue
+		}
+		var config container.Config
+		var hostConfig container.HostConfig
+		if err = configureContainerSeccomp(
+			&config,
+			&hostConfig,
+			options.Seccomp,
+			hostInfoResult.Info,
+		); err != nil {
+			return fmt.Errorf(
+				"seccomp preflight failed for challenge %q container %q: %v",
+				metadata.Id,
+				host.Name,
+				err,
+			)
+		}
+	}
+	return nil
+}
+
+func seccompRuntimeReady(hostInfo system.Info) bool {
+	runtimeConfig, ok := hostInfo.Runtimes[ociinterceptor.RuntimeName]
+	return ok && ociinterceptor.RuntimeRegistrationCompatible(
+		runtimeConfig.Path,
+		runtimeConfig.Args,
+	)
+}
+
+func seccompRuntimeWarning(hostInfo system.Info) string {
+	if hostInfo.OSType != "linux" {
+		return ""
+	}
+	if seccompRuntimeReady(hostInfo) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"seccomp tweaks are unavailable until this command is run on the Docker host: %s (registers or updates Docker runtime %q)",
+		ociinterceptor.RegistrationCommand,
+		ociinterceptor.RuntimeName,
+	)
 }

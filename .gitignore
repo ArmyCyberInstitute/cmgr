@@ -1,6 +1,7 @@
 # Ignore binary targets
 cmd/cmgr/cmgr
 cmd/cmgrd/cmgrd
+cmd/cmgr-oci-interceptor/cmgr-oci-interceptor
 bin
 *.db
 *.db-shm

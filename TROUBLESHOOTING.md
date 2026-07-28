@@ -38,3 +38,43 @@ is:
 ```
 
 **Note:** You will need to restart the daemon after changing its configuration.
+
+## A container fails to create threads or processes
+
+**Symptom:** A challenge using a recent Linux distribution fails while creating
+threads or processes, often with an `Operation not permitted` error.
+
+**Cause:** The challenge may have explicitly selected cmgr's historical seccomp
+profile with `seccomp.legacy: true`. That profile predates the `clone3` fallback
+behavior required by newer versions of glibc.
+
+**Solution:** Remove the legacy setting so Docker applies its current default
+profile. If the challenge only needs to disable ASLR, replace it with:
+
+```yaml
+seccomp:
+    tweaks:
+        - allow-disable-aslr
+```
+
+The tweak requires the
+[`cmgr-oci-interceptor`](README.md#seccomp-oci-interceptor) runtime on the
+Docker host.
+
+## A seccomp tweak reports that the OCI runtime is missing
+
+**Symptom:** Starting a challenge configured with `seccomp.tweaks` fails with
+an error stating that the `cmgr-oci-interceptor` Docker runtime is required.
+
+**Cause:** The interceptor binary is not installed on the Docker host, or the
+named runtime has not been added to that daemon's configuration. Installing
+the binary only on a machine acting as a remote Docker client is insufficient.
+
+**Solution:** Install `cmgr-oci-interceptor` on the Docker host, then run:
+
+```sh
+sudo cmgr-oci-interceptor register
+```
+
+The command updates Docker's daemon configuration and reloads Docker. Confirm
+that `cmgr-oci-interceptor` then appears in the daemon's reported runtime list.

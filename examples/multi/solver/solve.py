@@ -1,10 +1,13 @@
 import json
+import re
 import time
 
 from pwnlib.tubes import ssh
 
 with open("metadata.json", "r") as f:
     md = json.loads(f.read())
+
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def buffer_predicate(buff):
@@ -22,7 +25,7 @@ sh.sendline('ssh -o "UserKnownHostsFile=/dev/null" -o "StrictHostKeyChecking=no"
 sh.recvuntil("$")  # user prompt ready
 sh.sendline("cat flag.txt")
 sh.recvline()  # Read the rest of our command line
-flag = sh.recvlineS().strip()
+flag = ANSI_ESCAPE.sub("", sh.recvlineS()).strip()
 
 with open("flag", "w") as f:
     f.write(flag)

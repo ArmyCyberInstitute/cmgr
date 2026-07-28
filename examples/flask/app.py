@@ -19,20 +19,18 @@ CREATE TABLE IF NOT EXISTS users (
     pwHash TEXT NOT NULL
 );
 
-INSERT INTO users (username, pwHash) VALUES
+INSERT OR IGNORE INTO users (username, pwHash) VALUES
     ("admin", "68933979c6ac2cd3b935311c1d9a7d9dd575ca834fa896ea004791cb45ac2621"),
     ("houdini", "((not a hash))");
 """
 
 
-@app.before_first_request
 def init():
-    cur = sqlite3.connect("users.db").cursor()
-    try:
-        cur.executescript(INITIALIZATION_QUERY)
-        cur.commit()
-    except Exception as e:
-        pass
+    with sqlite3.connect("users.db") as database:
+        database.executescript(INITIALIZATION_QUERY)
+
+
+init()
 
 
 @app.route("/")

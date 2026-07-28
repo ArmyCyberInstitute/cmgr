@@ -1,4 +1,4 @@
-FROM ubuntu:18.04 AS base
+FROM ubuntu:18.04@sha256:152dc042452c496007f07ca9127571cb9c29697f42acbfad72324b2bb2e43c98 AS base
 # Stage 1. base
 # This stage is intended to be built from an empty context and ensure a common
 # set of dependencies. This is portable across environments and should rarely
@@ -52,7 +52,7 @@ FROM base AS hacksport
 
 RUN git clone https://github.com/picoCTF/picoCTF.git \
     && cd picoCTF \
-    && git checkout release-2019 \
+    && git checkout fb09fa2cb745c2db007dc4be8f95e37a1788c830 \
     && python3.7 -m venv /picoCTF-env \
     && . /picoCTF-env/bin/activate \
     && pip install ./picoCTF-shell
