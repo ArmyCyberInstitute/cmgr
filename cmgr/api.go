@@ -135,7 +135,9 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 // considered an error).
 func (m *Manager) Update(fp string) *ChallengeUpdates {
 	cu := m.DetectChanges(fp)
-	errs := m.addChallenges(cu.Added)
+	candidates := cu.Added
+	var errs []error
+	cu.Added, errs = m.addChallenges(candidates)
 	if len(errs) != 0 {
 		cu.Errors = append(cu.Errors, errs...)
 	}

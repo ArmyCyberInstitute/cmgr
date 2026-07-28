@@ -1,9 +1,12 @@
 package cmgr
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -50,115 +53,292 @@ func TestInitDatabase(t *testing.T) {
 	if requiredSeccompTweaksColumns != 1 {
 		t.Fatalf("database does not contain the build seccomp requirements column")
 	}
+
+	var version int
+	if err = mgr.db.Get(&version, "PRAGMA user_version;"); err != nil {
+		t.Fatalf("failed to inspect database version: %s", err)
+	}
+	if version != currentDatabaseVersion {
+		t.Fatalf(
+			"unexpected database version %d, expected %d",
+			version,
+			currentDatabaseVersion,
+		)
+	}
 }
 
-func TestSeccompDatabaseMigration(t *testing.T) {
-	dbFile, err := ioutil.TempFile("", "*.db")
-	if err != nil {
-		t.Fatalf("failed to make temporary file: %s", err)
-	}
-	dbPath := dbFile.Name()
-	dbFile.Close()
-	defer os.Remove(dbPath)
+func TestDatabaseV0ToV1Migration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cmgr.db")
+	db := newVersionZeroDatabase(t, dbPath)
 
-	db, err := sqlx.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("failed to open temporary database: %s", err)
-	}
-	_, err = db.Exec(`
-		CREATE TABLE containerOptions (
-			challenge INTEGER NOT NULL,
-			host TEXT NOT NULL
+	if _, err := db.Exec(`
+		INSERT INTO challenges(
+			id, name, namespace, challengetype, description, details,
+			sourcechecksum, metadatachecksum, path, solvescript, templatable,
+			maxusers, category, points
+		) VALUES (
+			'challenge', 'Challenge', '', 'custom', '', '', 0, 0,
+			'/challenge', 0, 0, 0, '', 0
 		);
-	`)
-	db.Close()
-	if err != nil {
-		t.Fatalf("failed to create legacy database schema: %s", err)
+		INSERT INTO hosts(challenge, name, idx, target)
+			VALUES ('challenge', 'web', 0, 'web');
+		INSERT INTO portNames(challenge, name, host, port)
+			VALUES
+				('challenge', 'http', 'web', 8080),
+				('challenge', 'http', 'web', 8080);
+	`); err != nil {
+		t.Fatalf("failed to populate version 0 database: %s", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("failed to close version 0 database: %s", err)
 	}
 
-	mgr := new(Manager)
-	mgr.log = newLogger(DISABLED)
-	os.Setenv(DB_ENV, dbPath)
-	defer os.Unsetenv(DB_ENV)
-
-	if err = mgr.initDatabase(); err != nil {
+	t.Setenv(DB_ENV, dbPath)
+	mgr := &Manager{log: newLogger(DISABLED)}
+	if err := mgr.initDatabase(); err != nil {
 		t.Fatalf("failed to migrate database: %s", err)
 	}
 	defer mgr.db.Close()
 
-	var seccompColumns int
-	err = mgr.db.Get(&seccompColumns, "SELECT COUNT(*) FROM pragma_table_info('containerOptions') WHERE name = 'seccomp';")
-	if err != nil {
-		t.Fatalf("failed to inspect migrated database schema: %s", err)
+	var version int
+	if err := mgr.db.Get(&version, "PRAGMA user_version;"); err != nil {
+		t.Fatalf("failed to inspect migrated database version: %s", err)
 	}
-	if seccompColumns != 1 {
-		t.Fatalf("legacy database was not migrated")
-	}
-}
-
-func TestBuildSeccompRequirementsDatabaseMigration(t *testing.T) {
-	dbFile, err := ioutil.TempFile("", "*.db")
-	if err != nil {
-		t.Fatalf("failed to make temporary file: %s", err)
-	}
-	dbPath := dbFile.Name()
-	dbFile.Close()
-	defer os.Remove(dbPath)
-
-	db, err := sqlx.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("failed to open temporary database: %s", err)
-	}
-	_, err = db.Exec(`
-		CREATE TABLE builds (
-			id INTEGER PRIMARY KEY,
-			flag TEXT NOT NULL,
-			format TEXT NOT NULL,
-			seed INTEGER NOT NULL,
-			hasartifacts INTEGER NOT NULL,
-			lastsolved INTEGER,
-			challenge TEXT NOT NULL,
-			schema TEXT NOT NULL,
-			instancecount INT NOT NULL
-		);
-	`)
-	db.Close()
-	if err != nil {
-		t.Fatalf("failed to create legacy database schema: %s", err)
+	if version != currentDatabaseVersion {
+		t.Fatalf(
+			"unexpected migrated database version %d, expected %d",
+			version,
+			currentDatabaseVersion,
+		)
 	}
 
-	mgr := new(Manager)
-	mgr.log = newLogger(DISABLED)
-	os.Setenv(DB_ENV, dbPath)
-	defer os.Unsetenv(DB_ENV)
-
-	if err = mgr.initDatabase(); err != nil {
-		t.Fatalf("failed to migrate database: %s", err)
-	}
-	defer mgr.db.Close()
-
-	var columns int
-	err = mgr.db.Get(
-		&columns,
-		"SELECT COUNT(*) FROM pragma_table_info('builds') WHERE name = 'requiredseccomptweaks';",
-	)
-	if err != nil {
-		t.Fatalf("failed to inspect migrated database schema: %s", err)
-	}
-	if columns != 1 {
-		t.Fatalf("legacy database was not migrated")
+	for _, column := range []struct {
+		table string
+		name  string
+	}{
+		{table: "containerOptions", name: "seccomp"},
+		{table: "builds", name: "requiredseccomptweaks"},
+	} {
+		var count int
+		query := fmt.Sprintf(
+			"SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = ?;",
+			column.table,
+		)
+		if err := mgr.db.Get(&count, query, column.name); err != nil {
+			t.Fatalf("failed to inspect migrated column: %s", err)
+		}
+		if count != 1 {
+			t.Fatalf("missing migrated column %s.%s", column.table, column.name)
+		}
 	}
 
-	var defaultValue string
-	if err = mgr.db.Get(
-		&defaultValue,
-		"SELECT dflt_value FROM pragma_table_info('builds') WHERE name = 'requiredseccomptweaks';",
+	var portCount int
+	if err := mgr.db.Get(
+		&portCount,
+		`SELECT COUNT(*) FROM portNames
+		 WHERE challenge = 'challenge' AND name = 'http';`,
 	); err != nil {
-		t.Fatalf("failed to inspect migrated column default: %s", err)
+		t.Fatalf("failed to inspect migrated published ports: %s", err)
 	}
-	if defaultValue != "'[]'" {
-		t.Fatalf("unexpected migrated column default %q", defaultValue)
+	if portCount != 1 {
+		t.Fatalf("exact duplicates were not collapsed: got %d rows", portCount)
 	}
+
+	var endpointIndexCount int
+	if err := mgr.db.Get(
+		&endpointIndexCount,
+		`SELECT COUNT(*) FROM sqlite_schema
+		 WHERE type = 'index' AND name = 'portNamesEndpointIndex';`,
+	); err != nil {
+		t.Fatalf("failed to inspect migrated indexes: %s", err)
+	}
+	if endpointIndexCount != 1 {
+		t.Fatal("version 1 indexes were not created")
+	}
+}
+
+func TestDatabaseAdoptsUnversionedCurrentSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cmgr.db")
+	db, err := sqlx.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open unversioned database: %s", err)
+	}
+	if _, err := db.Exec(schemaQuery); err != nil {
+		t.Fatalf("failed to create unversioned current schema: %s", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("failed to close unversioned database: %s", err)
+	}
+
+	t.Setenv(DB_ENV, dbPath)
+	mgr := &Manager{log: newLogger(DISABLED)}
+	if err := mgr.initDatabase(); err != nil {
+		t.Fatalf("failed to adopt unversioned current schema: %s", err)
+	}
+	defer mgr.db.Close()
+
+	var version int
+	if err := mgr.db.Get(&version, "PRAGMA user_version;"); err != nil {
+		t.Fatalf("failed to inspect adopted database version: %s", err)
+	}
+	if version != currentDatabaseVersion {
+		t.Fatalf(
+			"unexpected adopted database version %d, expected %d",
+			version,
+			currentDatabaseVersion,
+		)
+	}
+}
+
+func TestDatabaseV0MigrationConflictRollsBack(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cmgr.db")
+	db := newVersionZeroDatabase(t, dbPath)
+
+	if _, err := db.Exec(`
+		INSERT INTO challenges(
+			id, name, namespace, challengetype, description, details,
+			sourcechecksum, metadatachecksum, path, solvescript, templatable,
+			maxusers, category, points
+		) VALUES (
+			'challenge', 'Challenge', '', 'custom', '', '', 0, 0,
+			'/challenge', 0, 0, 0, '', 0
+		);
+		INSERT INTO hosts(challenge, name, idx, target)
+			VALUES ('challenge', 'web', 0, 'web');
+		INSERT INTO portNames(challenge, name, host, port)
+			VALUES
+				('challenge', 'http', 'web', 8080),
+				('challenge', 'http', 'web', 8080),
+				('challenge', 'admin', 'web', 8080);
+	`); err != nil {
+		t.Fatalf("failed to populate conflicting version 0 database: %s", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("failed to close version 0 database: %s", err)
+	}
+
+	t.Setenv(DB_ENV, dbPath)
+	mgr := &Manager{log: newLogger(DISABLED)}
+	err := mgr.initDatabase()
+	if err == nil {
+		if mgr.db != nil {
+			_ = mgr.db.Close()
+		}
+		t.Fatal("ambiguous legacy endpoint aliases were migrated")
+	}
+	if !strings.Contains(err.Error(), "unique published endpoints") {
+		t.Fatalf("unexpected migration error: %s", err)
+	}
+	if mgr.db != nil {
+		t.Fatal("manager retained a database handle after failed migration")
+	}
+
+	db, err = sqlx.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to reopen rolled-back database: %s", err)
+	}
+	defer db.Close()
+
+	var version int
+	if err := db.Get(&version, "PRAGMA user_version;"); err != nil {
+		t.Fatalf("failed to inspect rolled-back database version: %s", err)
+	}
+	if version != 0 {
+		t.Fatalf("failed migration changed database version to %d", version)
+	}
+
+	var seccompColumnCount int
+	if err := db.Get(
+		&seccompColumnCount,
+		"SELECT COUNT(*) FROM pragma_table_info('containerOptions') WHERE name = 'seccomp';",
+	); err != nil {
+		t.Fatalf("failed to inspect rolled-back columns: %s", err)
+	}
+	if seccompColumnCount != 0 {
+		t.Fatal("failed migration left the seccomp column behind")
+	}
+
+	var portCount int
+	if err := db.Get(&portCount, "SELECT COUNT(*) FROM portNames;"); err != nil {
+		t.Fatalf("failed to inspect rolled-back published ports: %s", err)
+	}
+	if portCount != 3 {
+		t.Fatalf("failed migration changed published ports: got %d rows", portCount)
+	}
+
+	var endpointIndexCount int
+	if err := db.Get(
+		&endpointIndexCount,
+		`SELECT COUNT(*) FROM sqlite_schema
+		 WHERE type = 'index' AND name = 'portNamesEndpointIndex';`,
+	); err != nil {
+		t.Fatalf("failed to inspect rolled-back indexes: %s", err)
+	}
+	if endpointIndexCount != 0 {
+		t.Fatal("failed migration left version 1 indexes behind")
+	}
+}
+
+func TestDatabaseRejectsFutureVersion(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cmgr.db")
+	db, err := sqlx.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open temporary database: %s", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE marker (value INTEGER);
+		PRAGMA user_version = 2;
+	`); err != nil {
+		t.Fatalf("failed to create future database: %s", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("failed to close future database: %s", err)
+	}
+
+	t.Setenv(DB_ENV, dbPath)
+	mgr := &Manager{log: newLogger(DISABLED)}
+	err = mgr.initDatabase()
+	if err == nil {
+		if mgr.db != nil {
+			_ = mgr.db.Close()
+		}
+		t.Fatal("future database version was accepted")
+	}
+	if !strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("unexpected future-version error: %s", err)
+	}
+}
+
+func newVersionZeroDatabase(t *testing.T, dbPath string) *sqlx.DB {
+	t.Helper()
+
+	db, err := sqlx.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open version 0 database: %s", err)
+	}
+	if _, err := db.Exec(schemaQuery); err != nil {
+		_ = db.Close()
+		t.Fatalf("failed to create version 0 database fixture: %s", err)
+	}
+	if _, err := db.Exec(`
+		DROP INDEX hostsOrderIndex;
+		DROP INDEX portNamesNameIndex;
+		DROP INDEX portNamesEndpointIndex;
+		DROP INDEX imagesHostIndex;
+		DROP INDEX imagePortsPortIndex;
+		DROP INDEX lookupDataKeyIndex;
+		DROP INDEX portAssignmentsNameIndex;
+		DROP INDEX portAssignmentsPortIndex;
+		DROP INDEX containerOptionsHostIndex;
+
+		ALTER TABLE containerOptions DROP COLUMN seccomp;
+		ALTER TABLE builds DROP COLUMN requiredseccomptweaks;
+		PRAGMA user_version = 0;
+	`); err != nil {
+		_ = db.Close()
+		t.Fatalf("failed to downgrade database fixture to version 0: %s", err)
+	}
+	return db
 }
 
 func TestReplaceInstanceRuntimeMetadataPreservesAssignedPorts(t *testing.T) {

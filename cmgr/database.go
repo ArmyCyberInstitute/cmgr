@@ -190,9 +190,410 @@ const schemaQuery string = `
 	CREATE UNIQUE INDEX IF NOT EXISTS containerOptionsHostIndex
 		ON containerOptions(challenge, host);`
 
+const (
+	currentDatabaseVersion = 1
+
+	databaseV1IndexesQuery = `
+		CREATE UNIQUE INDEX IF NOT EXISTS hostsOrderIndex
+			ON hosts(challenge, idx);
+		CREATE UNIQUE INDEX IF NOT EXISTS portNamesNameIndex
+			ON portNames(challenge, name);
+		CREATE UNIQUE INDEX IF NOT EXISTS portNamesEndpointIndex
+			ON portNames(challenge, host, port);
+		CREATE UNIQUE INDEX IF NOT EXISTS imagesHostIndex
+			ON images(build, host);
+		CREATE UNIQUE INDEX IF NOT EXISTS imagePortsPortIndex
+			ON imagePorts(image, port);
+		CREATE UNIQUE INDEX IF NOT EXISTS lookupDataKeyIndex
+			ON lookupData(build, key);
+		CREATE UNIQUE INDEX IF NOT EXISTS portAssignmentsNameIndex
+			ON portAssignments(instance, name);
+		CREATE UNIQUE INDEX IF NOT EXISTS portAssignmentsPortIndex
+			ON portAssignments(port);
+		CREATE UNIQUE INDEX IF NOT EXISTS containerOptionsHostIndex
+			ON containerOptions(challenge, host);`
+
+	databaseV0ToV1DuplicateCleanupQuery = `
+		DELETE FROM portNames
+		WHERE rowid NOT IN (
+			SELECT MIN(rowid)
+			FROM portNames
+			GROUP BY challenge, name, host, port
+		);
+
+		DELETE FROM imagePorts
+		WHERE rowid NOT IN (
+			SELECT MIN(rowid)
+			FROM imagePorts
+			GROUP BY image, port
+		);
+
+		DELETE FROM lookupData
+		WHERE rowid NOT IN (
+			SELECT MIN(rowid)
+			FROM lookupData
+			GROUP BY build, key, value
+		);
+
+		DELETE FROM portAssignments
+		WHERE rowid NOT IN (
+			SELECT MIN(rowid)
+			FROM portAssignments
+			GROUP BY instance, name, port
+		);
+
+		DELETE FROM containerOptions
+		WHERE rowid NOT IN (
+			SELECT MIN(rowid)
+			FROM containerOptions
+			GROUP BY
+				challenge,
+				host,
+				init,
+				cpus,
+				memory,
+				ulimits,
+				pidslimit,
+				readonlyrootfs,
+				droppedcaps,
+				nonewprivileges,
+				diskquota,
+				cgroupparent,
+				seccomp
+		);`
+)
+
+type databaseMigration struct {
+	to    int
+	apply func(*sqlx.Tx) error
+}
+
+type databaseConflictCheck struct {
+	invariant string
+	query     string
+}
+
+var databaseMigrations = map[int]databaseMigration{
+	0: {
+		to:    1,
+		apply: migrateDatabaseV0ToV1,
+	},
+}
+
+var databaseV1ConflictChecks = []databaseConflictCheck{
+	{
+		invariant: "unique host ordering per challenge",
+		query: `
+			SELECT printf('challenge=%Q, idx=%d', challenge, idx)
+			FROM hosts
+			GROUP BY challenge, idx
+			HAVING COUNT(*) > 1
+			LIMIT 1;`,
+	},
+	{
+		invariant: "unique published-port names per challenge",
+		query: `
+			SELECT printf('challenge=%Q, name=%Q', challenge, name)
+			FROM portNames
+			GROUP BY challenge, name
+			HAVING COUNT(*) > 1
+			LIMIT 1;`,
+	},
+	{
+		invariant: "unique published endpoints per challenge",
+		query: `
+			SELECT printf(
+				'challenge=%Q, host=%Q, port=%d',
+				challenge,
+				host,
+				port
+			)
+			FROM portNames
+			GROUP BY challenge, host, port
+			HAVING COUNT(*) > 1
+			LIMIT 1;`,
+	},
+	{
+		invariant: "one image per build host",
+		query: `
+			SELECT printf('build=%d, host=%Q', build, host)
+			FROM images
+			GROUP BY build, host
+			HAVING COUNT(*) > 1
+			LIMIT 1;`,
+	},
+	{
+		invariant: "unique lookup-data keys per build",
+		query: `
+			SELECT printf('build=%d, key=%Q', build, key)
+			FROM lookupData
+			GROUP BY build, key
+			HAVING COUNT(*) > 1
+			LIMIT 1;`,
+	},
+	{
+		invariant: "unique assigned-port names per instance",
+		query: `
+			SELECT printf('instance=%d, name=%Q', instance, name)
+			FROM portAssignments
+			GROUP BY instance, name
+			HAVING COUNT(*) > 1
+			LIMIT 1;`,
+	},
+	{
+		invariant: "globally unique assigned ports",
+		query: `
+			SELECT printf('port=%d', port)
+			FROM portAssignments
+			GROUP BY port
+			HAVING COUNT(*) > 1
+			LIMIT 1;`,
+	},
+	{
+		invariant: "one container-options row per challenge host",
+		query: `
+			SELECT printf('challenge=%Q, host=%Q', challenge, host)
+			FROM containerOptions
+			GROUP BY challenge, host
+			HAVING COUNT(*) > 1
+			LIMIT 1;`,
+	},
+}
+
+func withTransaction(db *sqlx.DB, apply func(*sqlx.Tx) error) error {
+	txn, err := db.Beginx()
+	if err != nil {
+		return fmt.Errorf("could not begin transaction: %w", err)
+	}
+
+	if err := apply(txn); err != nil {
+		rollbackErr := txn.Rollback()
+		if rollbackErr != nil {
+			return errors.Join(
+				err,
+				fmt.Errorf("could not roll back transaction: %w", rollbackErr),
+			)
+		}
+		return err
+	}
+
+	if err := txn.Commit(); err != nil {
+		return fmt.Errorf("could not commit transaction: %w", err)
+	}
+	return nil
+}
+
+func setDatabaseVersion(txn *sqlx.Tx, version int) error {
+	_, err := txn.Exec(fmt.Sprintf("PRAGMA user_version = %d;", version))
+	if err != nil {
+		return fmt.Errorf("could not set database version to %d: %w", version, err)
+	}
+	return nil
+}
+
+func createCurrentDatabaseSchema(db *sqlx.DB) error {
+	return withTransaction(db, func(txn *sqlx.Tx) error {
+		if _, err := txn.Exec(schemaQuery); err != nil {
+			return fmt.Errorf("could not create database schema: %w", err)
+		}
+		return setDatabaseVersion(txn, currentDatabaseVersion)
+	})
+}
+
+func validateDatabaseV0Schema(txn *sqlx.Tx) error {
+	const expectedTableCount = 14
+
+	var tableCount int
+	err := txn.Get(
+		&tableCount,
+		`SELECT COUNT(*)
+		 FROM sqlite_schema
+		 WHERE type = 'table'
+		   AND name IN (
+				'challenges',
+				'hints',
+				'tags',
+				'attributes',
+				'hosts',
+				'portNames',
+				'builds',
+				'images',
+				'imagePorts',
+				'lookupData',
+				'instances',
+				'portAssignments',
+				'containers',
+				'containerOptions'
+		   );`,
+	)
+	if err != nil {
+		return fmt.Errorf("could not inspect version 0 database tables: %w", err)
+	}
+	if tableCount != expectedTableCount {
+		return fmt.Errorf(
+			"unsupported version 0 database schema: found %d of %d required tables",
+			tableCount,
+			expectedTableCount,
+		)
+	}
+	return nil
+}
+
+func addDatabaseColumnIfMissing(
+	txn *sqlx.Tx,
+	table string,
+	column string,
+	inspectionQuery string,
+	alterQuery string,
+) error {
+	var columnCount int
+	if err := txn.Get(&columnCount, inspectionQuery); err != nil {
+		return fmt.Errorf("could not inspect %s.%s: %w", table, column, err)
+	}
+
+	switch columnCount {
+	case 0:
+		if _, err := txn.Exec(alterQuery); err != nil {
+			return fmt.Errorf("could not add %s.%s: %w", table, column, err)
+		}
+	case 1:
+		return nil
+	default:
+		return fmt.Errorf(
+			"invalid version 0 database schema: %s.%s appears %d times",
+			table,
+			column,
+			columnCount,
+		)
+	}
+	return nil
+}
+
+func rejectDatabaseV1Conflicts(txn *sqlx.Tx) error {
+	for _, check := range databaseV1ConflictChecks {
+		var conflicts []string
+		if err := txn.Select(&conflicts, check.query); err != nil {
+			return fmt.Errorf(
+				"could not validate %s: %w",
+				check.invariant,
+				err,
+			)
+		}
+		if len(conflicts) != 0 {
+			return fmt.Errorf(
+				"cannot migrate database: %s conflict (%s)",
+				check.invariant,
+				conflicts[0],
+			)
+		}
+	}
+	return nil
+}
+
+func migrateDatabaseV0ToV1(txn *sqlx.Tx) error {
+	if err := validateDatabaseV0Schema(txn); err != nil {
+		return err
+	}
+
+	if err := addDatabaseColumnIfMissing(
+		txn,
+		"containerOptions",
+		"seccomp",
+		"SELECT COUNT(*) FROM pragma_table_info('containerOptions') WHERE name = 'seccomp';",
+		"ALTER TABLE containerOptions ADD COLUMN seccomp TEXT NOT NULL DEFAULT '';",
+	); err != nil {
+		return err
+	}
+	if err := addDatabaseColumnIfMissing(
+		txn,
+		"builds",
+		"requiredseccomptweaks",
+		"SELECT COUNT(*) FROM pragma_table_info('builds') WHERE name = 'requiredseccomptweaks';",
+		"ALTER TABLE builds ADD COLUMN requiredseccomptweaks TEXT NOT NULL DEFAULT '[]';",
+	); err != nil {
+		return err
+	}
+
+	if _, err := txn.Exec(databaseV0ToV1DuplicateCleanupQuery); err != nil {
+		return fmt.Errorf("could not remove exact duplicate rows: %w", err)
+	}
+	if err := rejectDatabaseV1Conflicts(txn); err != nil {
+		return err
+	}
+	if _, err := txn.Exec(databaseV1IndexesQuery); err != nil {
+		return fmt.Errorf("could not create version 1 database indexes: %w", err)
+	}
+	return nil
+}
+
+func migrateDatabase(db *sqlx.DB, fromVersion int) error {
+	version := fromVersion
+	for version < currentDatabaseVersion {
+		migration, ok := databaseMigrations[version]
+		if !ok || migration.to <= version {
+			return fmt.Errorf("no valid database migration from version %d", version)
+		}
+
+		err := withTransaction(db, func(txn *sqlx.Tx) error {
+			if err := migration.apply(txn); err != nil {
+				return fmt.Errorf(
+					"could not migrate database from version %d to %d: %w",
+					version,
+					migration.to,
+					err,
+				)
+			}
+			return setDatabaseVersion(txn, migration.to)
+		})
+		if err != nil {
+			return err
+		}
+		version = migration.to
+	}
+	return nil
+}
+
+func ensureDatabaseSchema(db *sqlx.DB) error {
+	var version int
+	if err := db.Get(&version, "PRAGMA user_version;"); err != nil {
+		return fmt.Errorf("could not read database version: %w", err)
+	}
+	if version > currentDatabaseVersion {
+		return fmt.Errorf(
+			"database version %d is newer than supported version %d",
+			version,
+			currentDatabaseVersion,
+		)
+	}
+
+	var tableCount int
+	if err := db.Get(
+		&tableCount,
+		`SELECT COUNT(*)
+		 FROM sqlite_schema
+		 WHERE type = 'table' AND name NOT LIKE 'sqlite_%';`,
+	); err != nil {
+		return fmt.Errorf("could not inspect database tables: %w", err)
+	}
+
+	if tableCount == 0 {
+		if version != 0 {
+			return fmt.Errorf(
+				"database version is %d but the database contains no tables",
+				version,
+			)
+		}
+		return createCurrentDatabaseSchema(db)
+	}
+	if version == currentDatabaseVersion {
+		return nil
+	}
+	return migrateDatabase(db, version)
+}
+
 // Connects to the desired database (creating it if it does not exist) and then
-// ensures that the necessary tables and indexes exist and that the sqlite
-// engine is enforcing foreign key constraints.
+// creates or migrates its schema and ensures that the sqlite engine is
+// enforcing foreign key constraints.
 func (m *Manager) initDatabase() error {
 	dbPath, isSet := os.LookupEnv(DB_ENV)
 	if !isSet {
@@ -205,47 +606,12 @@ func (m *Manager) initDatabase() error {
 		return err
 	}
 
-	// File exists and is a valid sqlite database
-	m.dbPath = dbPath
-
-	_, err = db.Exec(schemaQuery)
-	if err != nil {
-		m.log.errorf("could not set database schema: %s", err)
-		return err
-	}
-
-	var seccompColumnCount int
-	err = db.Get(&seccompColumnCount, "SELECT COUNT(*) FROM pragma_table_info('containerOptions') WHERE name = 'seccomp';")
-	if err != nil {
-		m.log.errorf("could not inspect database schema: %s", err)
-		return err
-	}
-	if seccompColumnCount == 0 {
-		_, err = db.Exec("ALTER TABLE containerOptions ADD COLUMN seccomp TEXT NOT NULL DEFAULT '';")
-		if err != nil {
-			m.log.errorf("could not migrate database schema: %s", err)
-			return err
+	initialized := false
+	defer func() {
+		if !initialized {
+			_ = db.Close()
 		}
-	}
-
-	var requiredSeccompTweaksColumnCount int
-	err = db.Get(
-		&requiredSeccompTweaksColumnCount,
-		"SELECT COUNT(*) FROM pragma_table_info('builds') WHERE name = 'requiredseccomptweaks';",
-	)
-	if err != nil {
-		m.log.errorf("could not inspect database schema: %s", err)
-		return err
-	}
-	if requiredSeccompTweaksColumnCount == 0 {
-		_, err = db.Exec(
-			"ALTER TABLE builds ADD COLUMN requiredseccomptweaks TEXT NOT NULL DEFAULT '[]';",
-		)
-		if err != nil {
-			m.log.errorf("could not migrate database schema: %s", err)
-			return err
-		}
-	}
+	}()
 
 	var fkeysEnforced bool
 	err = db.QueryRow("PRAGMA foreign_keys;").Scan(&fkeysEnforced)
@@ -259,7 +625,14 @@ func (m *Manager) initDatabase() error {
 		return errors.New("foreign keys not enabled")
 	}
 
+	if err = ensureDatabaseSchema(db); err != nil {
+		m.log.errorf("could not set database schema: %s", err)
+		return err
+	}
+
+	m.dbPath = dbPath
 	m.db = db
+	initialized = true
 
 	return nil
 }

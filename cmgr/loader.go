@@ -590,6 +590,21 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 	if len(publishedPorts) > 0 && md.PortMap == nil {
 		md.PortMap = make(map[string]PortInfo)
 	}
+	endpointNames := make(map[PortInfo]string, len(md.PortMap)+len(publishedPorts))
+	for portName, endpoint := range md.PortMap {
+		if existingName, exists := endpointNames[endpoint]; exists {
+			err = fmt.Errorf(
+				"published ports '%s' and '%s' both map to %s:%d",
+				existingName,
+				portName,
+				endpoint.Host,
+				endpoint.Port,
+			)
+			m.log.error(err)
+			return err
+		}
+		endpointNames[endpoint] = portName
+	}
 	m.log.debugf("found %d ports", len(publishedPorts))
 
 	stageIdx := 0
@@ -628,7 +643,33 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 			return err
 		}
 
-		md.PortMap[portName] = PortInfo{host.Name, port}
+		endpoint := PortInfo{Host: host.Name, Port: port}
+		if existingEndpoint, exists := md.PortMap[portName]; exists {
+			err = fmt.Errorf(
+				"published port name '%s' is declared more than once (%s:%d and %s:%d)",
+				portName,
+				existingEndpoint.Host,
+				existingEndpoint.Port,
+				endpoint.Host,
+				endpoint.Port,
+			)
+			m.log.error(err)
+			return err
+		}
+		if existingName, exists := endpointNames[endpoint]; exists {
+			err = fmt.Errorf(
+				"published port '%s' aliases '%s' at %s:%d",
+				portName,
+				existingName,
+				endpoint.Host,
+				endpoint.Port,
+			)
+			m.log.error(err)
+			return err
+		}
+
+		endpointNames[endpoint] = portName
+		md.PortMap[portName] = endpoint
 	}
 
 	// Validate ContainerOptions hosts
