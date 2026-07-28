@@ -9,6 +9,6 @@
   "author": "",
   "license": "UNLICENSED",
   "dependencies": {
-    "puppeteer": "25.3.0"
+    "puppeteer": "25.4.0"
   }
 }
