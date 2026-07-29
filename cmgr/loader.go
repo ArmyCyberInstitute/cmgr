@@ -1,9 +1,11 @@
 package cmgr
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"hash/crc32"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -19,9 +21,17 @@ func (m *Manager) loadChallenge(path string, info os.FileInfo) (*ChallengeMetada
 	var err error
 
 	// Screen out non-problem files
-	if info.Name() == "problem.json" {
+	isJSON := info.Name() == "problem.json"
+	isMarkdown := info.Name() == "problem.md"
+	if (isJSON || isMarkdown) && !info.Mode().IsRegular() {
+		return nil, fmt.Errorf(
+			"challenge metadata must be a regular file: %s",
+			path,
+		)
+	}
+	if isJSON {
 		md, err = m.loadJsonChallenge(path, info)
-	} else if info.Name() == "problem.md" {
+	} else if isMarkdown {
 		md, err = m.loadMarkdownChallenge(path, info)
 	}
 
@@ -125,10 +135,17 @@ var shortLinkAsRe *regexp.Regexp = regexp.MustCompile(shortLinkAsRePattern)
 
 func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	var lastErr error
+	var validationErrors []error
+	record := func(err error) {
+		if err != nil {
+			validationErrors = append(validationErrors, err)
+		}
+	}
 	// Require a challenge name
 	if md.Name == "" {
 		lastErr = fmt.Errorf("challenge file missing name: %s", md.Path)
 		m.log.error(lastErr)
+		record(lastErr)
 	}
 
 	// Validate Namespace
@@ -137,6 +154,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		lastErr = fmt.Errorf("invalid namespace (limited to lowercase letters, numerals, and '/') of '%s': %s",
 			md.Namespace, md.Path)
 		m.log.error(lastErr)
+		record(lastErr)
 	}
 
 	// Validate Description
@@ -144,6 +162,17 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	if len(templates) > 0 {
 		lastErr = fmt.Errorf("template strings not allowed in the 'description' field, but found: %s", strings.Join(templates, ", "))
 		m.log.error(lastErr)
+		record(lastErr)
+	}
+	if md.MaxUsers < 0 {
+		lastErr = fmt.Errorf("max_users cannot be negative: %s", md.Path)
+		m.log.error(lastErr)
+		record(lastErr)
+	}
+	if md.Points < 0 {
+		lastErr = fmt.Errorf("points cannot be negative: %s", md.Path)
+		m.log.error(lastErr)
+		record(lastErr)
 	}
 
 	// Validate (& lift) Hints
@@ -271,6 +300,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 	res, err := normalizeAndCheckTemplated(md.Details)
 	if err != nil {
 		lastErr = err
+		record(lastErr)
 	}
 	md.Details = res
 
@@ -279,6 +309,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 
 		if err != nil {
 			lastErr = err
+			record(lastErr)
 		}
 
 		md.Hints[i] = res
@@ -288,6 +319,7 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 		if !used && !isHacksportChallengeType(md.ChallengeType) {
 			lastErr = fmt.Errorf("port '%s' published but not referenced: %s", port, md.Path)
 			m.log.error(lastErr)
+			record(lastErr)
 		}
 	}
 
@@ -303,23 +335,33 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			if err != nil {
 				lastErr = fmt.Errorf("%serror resolving seccomp container option: %v", hostStr, err)
 				m.log.error(lastErr)
+				record(lastErr)
 			}
 			md.ChallengeOptions.Overrides[host] = opts
 		}
 
 		if opts.Cpus != "" {
-			_, err := parseNanoCPUs(opts.Cpus)
-			if err != nil {
+			nanoCPUs, err := parseNanoCPUs(opts.Cpus)
+			if err != nil || nanoCPUs <= 0 {
+				if err == nil {
+					err = errors.New("CPU value must be greater than zero")
+				}
 				lastErr = fmt.Errorf("%serror parsing cpus container option: %v", hostStr, err)
 				m.log.error(lastErr)
+				record(lastErr)
 			}
 		}
 
 		if opts.Memory != "" {
-			_, err = units.RAMInBytes(opts.Memory)
-			if err != nil {
+			var memoryBytes int64
+			memoryBytes, err = units.RAMInBytes(opts.Memory)
+			if err != nil || memoryBytes <= 0 {
+				if err == nil {
+					err = errors.New("memory value must be greater than zero")
+				}
 				lastErr = fmt.Errorf("%serror parsing memory container option: %v", hostStr, err)
 				m.log.error(lastErr)
+				record(lastErr)
 			}
 		}
 
@@ -328,17 +370,21 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 			if err != nil {
 				lastErr = fmt.Errorf("%serror parsing ulimits container option: %v", hostStr, err)
 				m.log.error(lastErr)
+				record(lastErr)
+				continue
 			}
 			// See https://docs.docker.com/engine/reference/commandline/run/#set-ulimits-in-container---ulimit
 			if limit.Name == "nproc" {
 				lastErr = fmt.Errorf("%snproc ulimits are not supported, use the pidslimit container option instead", hostStr)
 				m.log.error(lastErr)
+				record(lastErr)
 			}
 		}
 
 		if opts.PidsLimit < -1 {
 			lastErr = fmt.Errorf("%sinvalid pidslimit container option (must be >= -1)", hostStr)
 			m.log.error(lastErr)
+			record(lastErr)
 		}
 
 		droppable_capabilities := map[string]struct{}{
@@ -363,24 +409,30 @@ func (m *Manager) validateMetadata(md *ChallengeMetadata) error {
 				if _, ok = droppable_capabilities[fmt.Sprintf("CAP_%s", cap)]; !ok {
 					lastErr = fmt.Errorf("%sinvalid DroppedCaps container option: %s", hostStr, cap)
 					m.log.error(lastErr)
+					record(lastErr)
 				}
 			}
 		}
 
 		if opts.DiskQuota != "" {
-			_, err := units.RAMInBytes(opts.DiskQuota) // Despite its name, Docker uses this method to parse the size= storage option.
-			if err != nil {
+			diskBytes, err := units.RAMInBytes(opts.DiskQuota) // Despite its name, Docker uses this method to parse the size= storage option.
+			if err != nil || diskBytes <= 0 {
+				if err == nil {
+					err = errors.New("disk quota must be greater than zero")
+				}
 				lastErr = fmt.Errorf("%serror parsing DiskQuota container option: %v", hostStr, err)
 				m.log.error(lastErr)
+				record(lastErr)
 			}
 		}
 	}
 	md.ChallengeOptions.ContainerOptions = md.ChallengeOptions.Overrides[""]
 
-	return lastErr
+	return errors.Join(validationErrors...)
 }
 
 func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, files []string) error {
+	var validationErrors []error
 	refFile := make(map[string]bool)
 	refLookup := make(map[string]bool)
 	for _, k := range files {
@@ -401,6 +453,7 @@ func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, fil
 			if !ok {
 				err = fmt.Errorf("unknown artifact '%s' referenced with '%s': %s/%d", ref[1], ref[0], md.Challenge, md.Id)
 				m.log.error(err)
+				validationErrors = append(validationErrors, err)
 			} else {
 				refFile[ref[1]] = true
 			}
@@ -412,6 +465,7 @@ func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, fil
 			if !ok {
 				err = fmt.Errorf("unknown lookup key of '%s' referenced with '%s': %s/%d", ref[1], ref[0], md.Challenge, md.Id)
 				m.log.error(err)
+				validationErrors = append(validationErrors, err)
 			} else {
 				refLookup[ref[1]] = true
 			}
@@ -435,6 +489,7 @@ func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, fil
 		if !used {
 			err = fmt.Errorf("artifact file '%s' published but not referenced: %s/%d", f, md.Challenge, md.Id)
 			m.log.error(err)
+			validationErrors = append(validationErrors, err)
 		}
 	}
 
@@ -442,10 +497,11 @@ func (m *Manager) validateBuild(cMeta *ChallengeMetadata, md *BuildMetadata, fil
 		if !used {
 			err = fmt.Errorf("lookup value '%s' published but not referenced: %s/%d", key, md.Challenge, md.Id)
 			m.log.error(err)
+			validationErrors = append(validationErrors, err)
 		}
 	}
 
-	return err
+	return errors.Join(validationErrors...)
 }
 
 // Validates the challenge metadata for compliance with expectations
@@ -499,11 +555,22 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 			m.log.errorf("could not open custom Dockerfile (%s): %s", md.Id, err)
 			return err
 		}
-
-		data, err = ioutil.ReadAll(f)
+		const maxDockerfileBytes = 4 * 1024 * 1024
+		data, err = ioutil.ReadAll(io.LimitReader(f, maxDockerfileBytes+1))
+		closeErr := f.Close()
 		if err != nil {
 			m.log.errorf("could not read custom Dockerfile (%s): %s", md.Id, err)
 			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if len(data) > maxDockerfileBytes {
+			return fmt.Errorf(
+				"custom Dockerfile for %s exceeds %d bytes",
+				md.Id,
+				maxDockerfileBytes,
+			)
 		}
 	} else {
 		data = m.GetDockerfile(md.ChallengeType)
@@ -562,7 +629,12 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 		launchRe := regexp.MustCompile(`\w+`)
 		launches := launchRe.FindAllString(launchDirective[1], -1)
 		m.log.debugf("launches = %v", launches)
+		launched := make(map[string]struct{}, len(launches))
 		for _, launch := range launches {
+			if _, duplicate := launched[launch]; duplicate {
+				return fmt.Errorf("Docker target %q is listed in LAUNCH more than once", launch)
+			}
+			launched[launch] = struct{}{}
 			validLaunch := false
 			for _, hostInfo := range hostNames {
 				if launch == hostInfo.Name {
@@ -582,6 +654,10 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 		hostArray = append([]HostInfo{{"builder", "builder"}}, hostArray...)
 	}
 	md.Hosts = hostArray
+	launchedHosts := make(map[string]struct{}, len(hostArray))
+	for _, host := range hostArray {
+		launchedHosts[host.Name] = struct{}{}
+	}
 	// Build md.Hosts and md.PortMap
 	//   md.Hosts = builder + LAUNCH
 	//            | builder + DEFAULT (last target in Dockerfile)
@@ -592,6 +668,21 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 	}
 	endpointNames := make(map[PortInfo]string, len(md.PortMap)+len(publishedPorts))
 	for portName, endpoint := range md.PortMap {
+		if endpoint.Port <= 0 || endpoint.Port >= 65536 {
+			return fmt.Errorf(
+				"published port %q has invalid container port %d",
+				portName,
+				endpoint.Port,
+			)
+		}
+		if _, willLaunch := launchedHosts[endpoint.Host]; !willLaunch ||
+			endpoint.Host == "builder" {
+			return fmt.Errorf(
+				"published port %q is exposed on host %q which is not launched",
+				portName,
+				endpoint.Host,
+			)
+		}
 		if existingName, exists := endpointNames[endpoint]; exists {
 			err = fmt.Errorf(
 				"published ports '%s' and '%s' both map to %s:%d",
@@ -619,6 +710,13 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 			return err
 		}
 		portName := dockerfile[portMatch[4]:portMatch[5]]
+		if port <= 0 || port >= 65536 {
+			return fmt.Errorf(
+				"published port %q has invalid container port %d",
+				portName,
+				port,
+			)
+		}
 		host := hostNames[stageIdx]
 		if host.Name == "" {
 			err = fmt.Errorf("published port '%s' uses a stage with no reference name (and not last stage)", portName)
@@ -630,15 +728,9 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 			return err
 		}
 
-		willLaunch := false
-		for _, hostName := range hostNames {
-			if host == hostName {
-				willLaunch = true
-				break
-			}
-		}
+		_, willLaunch := launchedHosts[host.Name]
 		if !willLaunch {
-			err = fmt.Errorf("published port '%s' is exposed on host '%s' which is not marked for launching", portName, host)
+			err = fmt.Errorf("published port '%s' is exposed on host '%s' which is not marked for launching", portName, host.Name)
 			m.log.error(err)
 			return err
 		}
@@ -678,14 +770,10 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 			continue
 		}
 		found := false
-		for _, host := range hostNames {
-			if host.Name == opt_host {
-				found = true
-				break
-			}
-		}
+		_, found = launchedHosts[opt_host]
+		found = found && opt_host != "builder"
 		if !found {
-			err = fmt.Errorf("container options are specified for host %s, which is not present in Dockerfile", opt_host)
+			err = fmt.Errorf("container options are specified for host %s, which is not launched", opt_host)
 			m.log.error(err)
 			return err
 		}
@@ -693,10 +781,6 @@ func (m *Manager) processDockerfile(md *ChallengeMetadata) error {
 
 	return err
 }
-
-// BUG(jrolli): Need to actually implement more validation such as verifying
-// that published ports are referenced and that there are no clearly invalid
-// format strings in the details and hints.
 
 type hacksportAttrs struct {
 	Author       string `json:"author"`
@@ -728,9 +812,66 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 		return nil, err
 	}
 
-	// Unmarshal the JSON file
+	// Validate a single JSON value and reject misspelled or internal fields.
+	// Known fields from legacy challenge catalogs are accepted explicitly,
+	// then removed before the strict ChallengeMetadata decode. Historically
+	// json.Unmarshal ignored these fields on non-hacksport challenges, so
+	// retaining them as no-ops preserves existing challenge corpora.
+	var raw map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err = decoder.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("could not decode challenge file: %w", err)
+	}
+	if err = decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			err = errors.New("multiple JSON values are not allowed")
+		}
+		return nil, fmt.Errorf("invalid trailing JSON data: %w", err)
+	}
+	allowedFields := map[string]struct{}{
+		"id": {}, "name": {}, "namespace": {}, "challenge_type": {},
+		"description": {}, "details": {}, "hints": {}, "templatable": {},
+		"port_map": {}, "max_users": {}, "category": {}, "points": {},
+		"tags": {}, "attributes": {}, "challenge_options": {},
+		// Historical catalog and hacksport metadata. Some older catalogs
+		// include these fields on custom and static-pybuild challenges even
+		// though cmgr never consumed them for those challenge types.
+		"author": {}, "event": {}, "organization": {}, "version": {},
+		"score": {}, "walkthrough": {}, "pip_requirements": {},
+		"pip_python_version": {}, "packages": {}, "pkg_dependencies": {},
+		"section": {},
+	}
+	compatibilityFields := map[string]struct{}{
+		"author": {}, "event": {}, "organization": {}, "version": {},
+		"score": {}, "walkthrough": {}, "pip_requirements": {},
+		"pip_python_version": {}, "packages": {}, "pkg_dependencies": {},
+		"section": {},
+	}
+	var declaredType string
+	if encodedType, present := raw["challenge_type"]; present {
+		if err := json.Unmarshal(encodedType, &declaredType); err != nil {
+			return nil, fmt.Errorf("challenge_type must be a string: %w", err)
+		}
+	}
+	strictRaw := make(map[string]json.RawMessage, len(raw))
+	for key, value := range raw {
+		if _, allowed := allowedFields[key]; !allowed {
+			return nil, fmt.Errorf("unknown challenge JSON field %q", key)
+		}
+		if _, compatibilityField := compatibilityFields[key]; compatibilityField {
+			continue
+		}
+		strictRaw[key] = value
+	}
+	strictData, err := json.Marshal(strictRaw)
+	if err != nil {
+		return nil, err
+	}
+
 	metadata := new(ChallengeMetadata)
-	err = json.Unmarshal(data, metadata)
+	decoder = json.NewDecoder(bytes.NewReader(strictData))
+	decoder.DisallowUnknownFields()
+	err = decoder.Decode(metadata)
 	if err != nil {
 		m.log.errorf("could not unmarshal challenge file: %s", err)
 		return nil, err
@@ -805,12 +946,13 @@ func (m *Manager) loadJsonChallenge(path string, info os.FileInfo) (*ChallengeMe
 		}
 	}
 
-	h := crc32.NewIEEE()
-	_, err = h.Write(append(data, []byte(path)...))
+	metadata.MetadataChecksum, metadata.MetadataDigest, err = metadataHashes(
+		data,
+		path,
+	)
 	if err != nil {
 		return nil, err
 	}
-	metadata.MetadataChecksum = h.Sum32()
 
 	return metadata, nil
 }

@@ -2,8 +2,8 @@ package cmgr
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"hash/crc32"
 	"io/ioutil"
 	"os"
 	"regexp"
@@ -59,6 +59,7 @@ func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*Challen
 	md := new(ChallengeMetadata)
 	md.Path = path
 	md.Attributes = make(map[string]string)
+	var parseErrors []error
 
 	lines := strings.Split(string(data), "\n")
 	idx := 0
@@ -91,8 +92,9 @@ func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*Challen
 		}
 
 		if match == nil {
-			err = fmt.Errorf("unrecognized metadata text on line %d: %s", idx, path)
-			m.log.error(err)
+			parseErr := fmt.Errorf("unrecognized metadata text on line %d: %s", idx, path)
+			m.log.error(parseErr)
+			parseErrors = append(parseErrors, parseErr)
 			continue
 		}
 
@@ -108,18 +110,25 @@ func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*Challen
 		case "templatable":
 			val, tmpErr := parseBool(match[2])
 			md.Templatable = val
-			err = tmpErr
+			if tmpErr != nil {
+				parseErrors = append(parseErrors, tmpErr)
+			}
 		case "points":
 			i, tmpErr := strconv.Atoi(match[2])
 			md.Points = i
-			err = tmpErr
+			if tmpErr != nil {
+				parseErrors = append(parseErrors, tmpErr)
+			}
 		case "maxusers":
 			i, tmpErr := strconv.Atoi(match[2])
 			md.MaxUsers = i
-			err = tmpErr
+			if tmpErr != nil {
+				parseErrors = append(parseErrors, tmpErr)
+			}
 		default:
-			err = fmt.Errorf("unrecognized top-level attribute '%s' on line %d: %s", match[1], idx, path)
-			m.log.error(err)
+			parseErr := fmt.Errorf("unrecognized top-level attribute '%s' on line %d: %s", match[1], idx, path)
+			m.log.error(parseErr)
+			parseErrors = append(parseErrors, parseErr)
 		}
 	}
 
@@ -129,7 +138,9 @@ func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*Challen
 		line = strings.TrimSpace(lines[idx])
 		match := sectionRe.FindStringSubmatch(line)
 		if match != nil && section != "" {
-			err = m.processMarkdownSection(md, section, lines, startIdx, idx)
+			if sectionErr := m.processMarkdownSection(md, section, lines, startIdx, idx); sectionErr != nil {
+				parseErrors = append(parseErrors, sectionErr)
+			}
 		}
 		if match != nil {
 			section = match[1]
@@ -139,35 +150,41 @@ func (m *Manager) loadMarkdownChallenge(path string, info os.FileInfo) (*Challen
 	}
 
 	if section != "" {
-		err = m.processMarkdownSection(md, section, lines, startIdx, idx)
+		if sectionErr := m.processMarkdownSection(md, section, lines, startIdx, idx); sectionErr != nil {
+			parseErrors = append(parseErrors, sectionErr)
+		}
 	}
 
-	h := crc32.NewIEEE()
-	_, err = h.Write(append(data, []byte(path)...))
+	md.MetadataChecksum, md.MetadataDigest, err = metadataHashes(data, path)
 	if err != nil {
-		return nil, err
+		parseErrors = append(parseErrors, err)
 	}
-	md.MetadataChecksum = h.Sum32()
 
-	return md, nil
+	return md, errors.Join(parseErrors...)
 }
 
 func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, lines []string, startIdx, endIdx int) error {
-	var err error
+	var sectionErrors []error
 	m.log.debugf("processing markdown: section='%s' start=%d end=%d", section, startIdx, endIdx)
 	switch strings.ToLower(section) {
 	case "description":
 		text, tmpErr := m.parseMarkdown(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Description = text
-		err = tmpErr
+		if tmpErr != nil {
+			sectionErrors = append(sectionErrors, tmpErr)
+		}
 	case "details":
 		text, tmpErr := m.parseMarkdown(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Details = text
-		err = tmpErr
+		if tmpErr != nil {
+			sectionErrors = append(sectionErrors, tmpErr)
+		}
 	case "hints":
 		hints, tmpErr := m.parseHints(lines[startIdx:endIdx])
 		md.Hints = hints
-		err = tmpErr
+		if tmpErr != nil {
+			sectionErrors = append(sectionErrors, tmpErr)
+		}
 	case "tags":
 		md.Tags = []string{}
 		for i, rawLine := range lines[startIdx:endIdx] {
@@ -178,8 +195,9 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			match := tagLineRe.FindStringSubmatch(line)
 			if match == nil {
-				err = fmt.Errorf("unexpected text in 'tags' section on line %d: %s", i+1, md.Path)
+				err := fmt.Errorf("unexpected text in 'tags' section on line %d: %s", startIdx+i+1, md.Path)
 				m.log.error(err)
+				sectionErrors = append(sectionErrors, err)
 				continue
 			}
 
@@ -194,8 +212,9 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 
 			match := kvLineRe.FindStringSubmatch(line)
 			if match == nil {
-				err = fmt.Errorf("unexpected text in 'attributes' section on line %d: %s", i+1, md.Path)
+				err := fmt.Errorf("unexpected text in 'attributes' section on line %d: %s", i+1, md.Path)
 				m.log.error(err)
+				sectionErrors = append(sectionErrors, err)
 				continue
 			}
 
@@ -207,14 +226,16 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 		for i := startIdx; i < endIdx; i++ {
 			if lines[i] == "```yaml" {
 				if yamlStart != 0 {
-					err = fmt.Errorf("found multiple start markers for yaml at lines %d and %d", yamlStart-1, i)
+					err := fmt.Errorf("found multiple start markers for yaml at lines %d and %d", yamlStart-1, i)
 					m.log.error(err)
+					sectionErrors = append(sectionErrors, err)
 				}
 				yamlStart = i + 1
 			} else if lines[i] == "```" {
 				if yamlEnd != 0 {
-					err = fmt.Errorf("found multiple end markers for yaml at lines %d and %d", yamlEnd, i)
+					err := fmt.Errorf("found multiple end markers for yaml at lines %d and %d", yamlEnd, i)
 					m.log.error(err)
+					sectionErrors = append(sectionErrors, err)
 				}
 				yamlEnd = i
 			}
@@ -225,17 +246,27 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 			yamlStart = startIdx
 			yamlEnd = endIdx
 		} else if (yamlStart == 0) != (yamlEnd == 0) {
-			err = fmt.Errorf("found a start/end marker but missing its pair: startline=%d endline=%d", yamlStart, yamlEnd)
+			err := fmt.Errorf("found a start/end marker but missing its pair: startline=%d endline=%d", yamlStart, yamlEnd)
 			m.log.error(err)
+			sectionErrors = append(sectionErrors, err)
 			yamlStart = 0
 			yamlEnd = 0
 		}
 
 		opts := ChallengeOptions{}
-		yamlData := []byte(strings.Join(lines[yamlStart:yamlEnd], "\n"))
-		err = yaml.Unmarshal(yamlData, &opts)
-		if err != nil {
-			m.log.error(err)
+		if yamlStart <= yamlEnd {
+			yamlData := strings.Join(lines[yamlStart:yamlEnd], "\n")
+			decoder := yaml.NewDecoder(strings.NewReader(yamlData))
+			decoder.KnownFields(true)
+			if err := decoder.Decode(&opts); err != nil {
+				m.log.error(err)
+				sectionErrors = append(sectionErrors, err)
+			}
+		} else {
+			sectionErrors = append(
+				sectionErrors,
+				fmt.Errorf("invalid YAML marker order: startline=%d endline=%d", yamlStart, yamlEnd),
+			)
 		}
 
 		md.ChallengeOptions = opts
@@ -244,7 +275,7 @@ func (m *Manager) processMarkdownSection(md *ChallengeMetadata, section string, 
 		attrVal := strings.TrimSpace(strings.Join(lines[startIdx:endIdx], "\n"))
 		md.Attributes[section] = attrVal
 	}
-	return err
+	return errors.Join(sectionErrors...)
 }
 
 var lineStartRe *regexp.Regexp = regexp.MustCompile(`^    |^\t`)
@@ -252,13 +283,13 @@ var lineStartRe *regexp.Regexp = regexp.MustCompile(`^    |^\t`)
 func (m *Manager) parseHints(lines []string) ([]string, error) {
 	hints := []string{}
 	hintLines := []string{}
-	var err error
+	var parseErrors []error
 	for _, rawLine := range lines {
 		if len(rawLine) > 0 && rawLine[0] == '-' {
 			if len(hintLines) > 0 {
 				hint, tmpErr := m.parseMarkdown(strings.Join(hintLines, "\n"))
 				if tmpErr != nil {
-					err = tmpErr
+					parseErrors = append(parseErrors, tmpErr)
 				}
 				hint = strings.TrimSpace(hint)
 				if hint != "" {
@@ -273,14 +304,14 @@ func (m *Manager) parseHints(lines []string) ([]string, error) {
 	if len(hintLines) > 0 {
 		hint, tmpErr := m.parseMarkdown(strings.Join(hintLines, "\n"))
 		if tmpErr != nil {
-			err = tmpErr
+			parseErrors = append(parseErrors, tmpErr)
 		}
 		hint = strings.TrimSpace(hint)
 		if hint != "" {
 			hints = append(hints, hint)
 		}
 	}
-	return hints, err
+	return hints, errors.Join(parseErrors...)
 }
 
 func (m *Manager) parseMarkdown(text string) (string, error) {

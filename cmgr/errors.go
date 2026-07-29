@@ -1,12 +1,49 @@
 package cmgr
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 )
 
+type InvalidInputError struct {
+	Err error
+}
+
+func (e *InvalidInputError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *InvalidInputError) Unwrap() error {
+	return e.Err
+}
+
+func invalidInput(err error) error {
+	if err == nil {
+		return nil
+	}
+	var invalid *InvalidInputError
+	if errors.As(err, &invalid) {
+		return err
+	}
+	return &InvalidInputError{Err: err}
+}
+
+type ConflictError struct {
+	Err error
+}
+
+func (e *ConflictError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *ConflictError) Unwrap() error {
+	return e.Err
+}
+
 func isEmptyQueryError(err error) bool {
-	return err != nil && err.Error() == "sql: no rows in result set"
+	return errors.Is(err, sql.ErrNoRows)
 }
 
 func unknownChallengeIdError(id ChallengeId) error {

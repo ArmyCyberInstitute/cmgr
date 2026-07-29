@@ -70,6 +70,69 @@ FROM alpine AS admin
 	}
 }
 
+func TestProcessDockerfileRejectsPortOnUnlaunchedHost(t *testing.T) {
+	manager, metadata := newPublishedPortTestChallenge(
+		t,
+		`FROM alpine AS web
+# PUBLISH 8080 AS http
+FROM alpine AS worker
+# LAUNCH worker
+`,
+	)
+
+	err := manager.processDockerfile(metadata)
+	if err == nil || !strings.Contains(err.Error(), "not marked for launching") {
+		t.Fatalf("unexpected unlaunched-host error: %v", err)
+	}
+}
+
+func TestProcessDockerfileRejectsExplicitPortOnUnlaunchedHost(t *testing.T) {
+	manager, metadata := newPublishedPortTestChallenge(
+		t,
+		`FROM alpine AS web
+FROM alpine AS worker
+# LAUNCH worker
+`,
+	)
+	metadata.PortMap = map[string]PortInfo{
+		"http": {Host: "web", Port: 8080},
+	}
+
+	err := manager.processDockerfile(metadata)
+	if err == nil || !strings.Contains(err.Error(), "which is not launched") {
+		t.Fatalf("unexpected explicit-port error: %v", err)
+	}
+}
+
+func TestProcessDockerfileRejectsDuplicateLaunchTarget(t *testing.T) {
+	manager, metadata := newPublishedPortTestChallenge(
+		t,
+		`FROM alpine AS web
+# LAUNCH web web
+`,
+	)
+
+	err := manager.processDockerfile(metadata)
+	if err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("unexpected duplicate-launch error: %v", err)
+	}
+}
+
+func TestProcessDockerfileRejectsInvalidPublishDirectivePort(t *testing.T) {
+	for _, port := range []string{"0", "65536"} {
+		t.Run(port, func(t *testing.T) {
+			manager, metadata := newPublishedPortTestChallenge(
+				t,
+				"FROM alpine AS web\n# PUBLISH "+port+" AS http\n# LAUNCH web\n",
+			)
+			err := manager.processDockerfile(metadata)
+			if err == nil || !strings.Contains(err.Error(), "invalid container port") {
+				t.Fatalf("invalid PUBLISH port %s produced %v", port, err)
+			}
+		})
+	}
+}
+
 func TestAddChallengesPreservesConstraintErrorAndSuccessfulResults(t *testing.T) {
 	manager := newSchemaTestManager(t)
 	invalid := newAddChallengeTestMetadata(

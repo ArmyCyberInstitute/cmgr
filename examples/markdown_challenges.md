@@ -67,6 +67,14 @@ merged with any specified top-level options.
 Container options are never applied to the ["builder"](./custom/README.md) stage or to solver
 containers.
 
+- The `allow_egress` option enables outbound connectivity from the challenge
+  network. It defaults to `false`. By default, cmgr disables IP masquerading
+  on each challenge bridge, which preserves published host ports while
+  preventing Internet egress in the standard Docker bridge/NAT topology.
+  Deployments that deliberately route Docker container subnets should also
+  enforce their egress policy in the host firewall. Set `allow_egress: true`
+  for challenges that intentionally require outbound access.
+
 - The `init` option runs an init process as PID 1 inside the container. This can be useful if your
   challenge process forks, and will ensure that zombie processes are reaped. This is equivalent to
   passing the [`--init`](https://docs.docker.com/engine/reference/run/#specify-an-init-process) flag
@@ -76,7 +84,9 @@ containers.
   capacity. This may be useful in order to prevent computationally-heavy challenge instances from
   dominating the host. This is equivalent to passing the
   [`--cpus`](https://docs.docker.com/engine/reference/run/#cpu-period-constraint) option to `docker
-  run`. Specify a floating-point value, as shown in the example below. Unset by default.
+  run`. Specify a floating-point value, as shown in the example below. The
+  default is `1`, configurable with `CMGR_DEFAULT_CPUS`; a challenge value
+  replaces that default and may be higher.
 
 - The `memory` option specifies the maximum amount of memory available to a container. Attempting to
   exceed this limit at runtime may cause the container to restart, depending on how the challenge
@@ -84,7 +94,10 @@ containers.
   available to each challenge instance, preventing memory leaks from crashing the Docker host. This
   is equivalent to passing the
   [`--memory`](https://docs.docker.com/engine/reference/run/#user-memory-constraints) option to
-  `docker run`. Specify an integer value with unit, as shown in the example below. Unset by default.
+  `docker run`. Specify an integer value with unit, as shown in the example
+  below. The default is `512m`, configurable with `CMGR_DEFAULT_MEMORY`; a
+  challenge value replaces that default and may be higher. cmgr sets Docker's
+  memory-swap limit to the same value, disabling additional swap.
 
 - The `ulimits` option can be used to specify various [resource
   limits](https://access.redhat.com/solutions/61334) inside the container. Note that the `nproc`
@@ -93,13 +106,16 @@ containers.
   `pidslimit` option instead). This is equivalent to passing
   [`--ulimit`](https://docs.docker.com/engine/reference/commandline/run/#set-ulimits-in-container---ulimit)
   options to `docker run`. Specify a list of limit names and limits, as shown in the example below.
-  Unset by default.
+  cmgr adds a default `nofile=4096:4096` limit, configurable with
+  `CMGR_DEFAULT_NOFILE`, unless the challenge supplies its own `nofile` value.
 
 - The `pidslimit` option specifies the maximum number of simultaneous processes inside the
   container. This is useful in order to prevent forkbombs from crashing the Docker host. This is
   equivalent to passing the
   [`--pids-limit`](https://docs.docker.com/engine/reference/commandline/run/) option to `docker
-  run`. Specify an integer value, as shown in the example below. Unset by default.
+  run`. Specify an integer value, as shown in the example below. The default
+  is `256`, configurable with `CMGR_DEFAULT_PIDS_LIMIT`; a challenge value
+  replaces that default and may be higher.
 
 - The `readonlyrootfs` option can be used to mount the container's root filesystem as read-only. If
   your challenge does not need to write to disk outside of `/dev/shm`, this is an easy way to
@@ -197,13 +213,17 @@ containers.
   size`](https://docs.docker.com/engine/reference/commandline/run/#set-storage-driver-options-per-container)
   option to `docker run`.
 
-  Note that this option is **only supported** when using the `overlay2` Docker storage driver and
-  [pquota-enabled](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/storage_administration_guide/xfsquota)
-  XFS backing storage (see this [Docker Engine PR](https://github.com/moby/moby/pull/24771) for more
-  details.) If these requirements are not met, container creation will fail at runtime.
+  Docker supports this option with its `zfs` storage driver and with
+  `overlay2` on project-quota-enabled XFS backing storage. It is not supported
+  by the common `overlay2` on ext4 configuration.
 
   To help prevent this issue, the `diskquota` option only takes effect if the
-  `CMGR_ENABLE_DISK_QUOTAS` environment variable is set.
+  `CMGR_ENABLE_DISK_QUOTAS` environment variable is set and cmgr detects a
+  compatible storage driver. Installations using Docker's containerd image
+store are treated as unsupported unless Docker reports one of those verified
+storage-driver configurations. If XFS is detected without the required
+project-quota mount option, cmgr logs Docker's diagnostic and retries without
+the quota so the challenge can still start.
 
   Specify an integer value with unit, as shown in the example below. Unset by default.
 
@@ -219,6 +239,7 @@ containers.
 
 ```yaml
 # sample challenge options:
+allow_egress: false
 init: true
 cpus: 0.5
 memory: 512m

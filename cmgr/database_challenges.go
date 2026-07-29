@@ -2,6 +2,7 @@ package cmgr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -12,7 +13,7 @@ import (
 // Gets just the ID and checksum for all known challenges
 func (m *Manager) listChallenges() ([]*ChallengeMetadata, error) {
 	metadata := []*ChallengeMetadata{}
-	err := m.db.Select(&metadata, "SELECT id, name, path, sourcechecksum, metadatachecksum, solvescript FROM challenges ORDER BY id;")
+	err := m.db.Select(&metadata, "SELECT id, name, path, sourcechecksum, metadatachecksum, sourcedigest, metadatadigest, solvescript FROM challenges ORDER BY id;")
 	return metadata, err
 }
 
@@ -32,7 +33,7 @@ func (m *Manager) searchChallenges(tags []string) ([]*ChallengeMetadata, error) 
 		tagBaseQuery +
 		strings.Repeat(" INTERSECT "+tagBaseQuery, len(tags)-1) +
 		")"
-	query := fmt.Sprintf("SELECT id, name, path, sourcechecksum, metadatachecksum, solvescript FROM challenges WHERE id IN %s ORDER BY id;", subQuery)
+	query := fmt.Sprintf("SELECT id, name, path, sourcechecksum, metadatachecksum, sourcedigest, metadatadigest, solvescript FROM challenges WHERE id IN %s ORDER BY id;", subQuery)
 	err = m.db.Select(&metadata, query, interfaceTags...)
 
 	return metadata, err
@@ -40,9 +41,12 @@ func (m *Manager) searchChallenges(tags []string) ([]*ChallengeMetadata, error) 
 
 func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMetadata, error) {
 	metadata := new(ChallengeMetadata)
-	txn := m.db.MustBegin()
+	txn, err := m.db.Beginx()
+	if err != nil {
+		return metadata, fmt.Errorf("could not begin challenge lookup: %w", err)
+	}
 
-	err := txn.Get(metadata, "SELECT * FROM challenges WHERE id=?", challenge)
+	err = txn.Get(metadata, "SELECT * FROM challenges WHERE id=?", challenge)
 	if isEmptyQueryError(err) {
 		err = unknownChallengeIdError(challenge)
 	}
@@ -86,13 +90,16 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 		metadata.Attributes[attr.Key] = attr.Value
 	}
 
-	networkOptions := new(NetworkOptions)
-	// Note: there are currently no network-level challenge options, but they will be loaded here if added in the future.
-
-	// if err == nil {
-	// 	err = txn.Get(networkOptions, "SELECT '' FROM networkOptions WHERE challenge=?", challenge)
-	// }
-	metadata.ChallengeOptions.NetworkOptions = *networkOptions
+	if err == nil {
+		err = txn.Get(
+			&metadata.ChallengeOptions.NetworkOptions,
+			`SELECT COALESCE(
+				(SELECT allowegress FROM networkOptions WHERE challenge=?),
+				0
+			) AS allowegress;`,
+			challenge,
+		)
+	}
 
 	containerOptions := new([]dbContainerOptions)
 	if err == nil {
@@ -126,12 +133,113 @@ func (m *Manager) lookupChallengeMetadata(challenge ChallengeId) (*ChallengeMeta
 		m.log.errorf("read of database failed: %s", err)
 		closeErr := txn.Rollback()
 		if closeErr != nil {
-			m.log.errorf("rollback failed: %s", err)
-			err = closeErr
+			m.log.errorf("rollback failed: %s", closeErr)
+			err = errors.Join(err, closeErr)
 		}
 	}
 
 	return metadata, err
+}
+
+func (m *Manager) insertChallengeRelations(
+	txn *sqlx.Tx,
+	metadata *ChallengeMetadata,
+) error {
+	for i, hint := range metadata.Hints {
+		if _, err := txn.Exec(
+			"INSERT INTO hints(challenge, idx, hint) VALUES (?, ?, ?);",
+			metadata.Id,
+			i,
+			hint,
+		); err != nil {
+			return fmt.Errorf("could not insert hint %d: %w", i, err)
+		}
+	}
+	for _, tag := range metadata.Tags {
+		if _, err := txn.Exec(
+			"INSERT INTO tags(challenge, tag) VALUES (?, ?);",
+			metadata.Id,
+			tag,
+		); err != nil {
+			return fmt.Errorf("could not insert tag %q: %w", tag, err)
+		}
+	}
+	for key, value := range metadata.Attributes {
+		if _, err := txn.Exec(
+			"INSERT INTO attributes(challenge, key, value) VALUES (?, ?, ?);",
+			metadata.Id,
+			key,
+			value,
+		); err != nil {
+			return fmt.Errorf("could not insert attribute %q: %w", key, err)
+		}
+	}
+	for i, host := range metadata.Hosts {
+		if _, err := txn.Exec(
+			"INSERT INTO hosts(challenge, name, idx, target) VALUES (?, ?, ?, ?);",
+			metadata.Id,
+			host.Name,
+			i,
+			host.Target,
+		); err != nil {
+			return fmt.Errorf("could not insert host %q: %w", host.Name, err)
+		}
+	}
+	for name, endpoint := range metadata.PortMap {
+		if _, err := txn.Exec(
+			"INSERT INTO portNames(challenge, name, host, port) VALUES (?, ?, ?, ?);",
+			metadata.Id,
+			name,
+			endpoint.Host,
+			endpoint.Port,
+		); err != nil {
+			return fmt.Errorf("could not insert published port %q: %w", name, err)
+		}
+	}
+	if _, err := txn.Exec(
+		"INSERT INTO networkOptions(challenge, allowegress) VALUES (?, ?);",
+		metadata.Id,
+		metadata.ChallengeOptions.AllowEgress,
+	); err != nil {
+		return fmt.Errorf("could not insert network options: %w", err)
+	}
+	for host, opts := range metadata.ChallengeOptions.Overrides {
+		dbOpts, err := opts.toDbContainerOptions()
+		if err != nil {
+			return fmt.Errorf(
+				"could not serialize container options for host %q: %w",
+				host,
+				err,
+			)
+		}
+		if _, err := txn.Exec(
+			`INSERT INTO containerOptions(
+				challenge, host, init, cpus, memory, ulimits, pidslimit,
+				readonlyrootfs, droppedcaps, nonewprivileges, diskquota,
+				cgroupparent, seccomp
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+			metadata.Id,
+			host,
+			dbOpts.Init,
+			dbOpts.Cpus,
+			dbOpts.Memory,
+			dbOpts.Ulimits,
+			dbOpts.PidsLimit,
+			dbOpts.ReadonlyRootfs,
+			dbOpts.DroppedCaps,
+			dbOpts.NoNewPrivileges,
+			dbOpts.DiskQuota,
+			dbOpts.CgroupParent,
+			dbOpts.Seccomp,
+		); err != nil {
+			return fmt.Errorf(
+				"could not insert container options for host %q: %w",
+				host,
+				err,
+			)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) addChallenge(metadata *ChallengeMetadata) error {
@@ -139,127 +247,41 @@ func (m *Manager) addChallenge(metadata *ChallengeMetadata) error {
 		if _, err := txn.NamedExec(challengeInsertQuery, metadata); err != nil {
 			return fmt.Errorf("could not insert challenge metadata: %w", err)
 		}
+		return m.insertChallengeRelations(txn, metadata)
+	})
+}
 
-		for i, hint := range metadata.Hints {
-			if _, err := txn.Exec(
-				"INSERT INTO hints(challenge, idx, hint) VALUES (?, ?, ?);",
-				metadata.Id,
-				i,
-				hint,
-			); err != nil {
-				return fmt.Errorf("could not insert hint %d: %w", i, err)
-			}
+func (m *Manager) replaceChallengeMetadata(metadata *ChallengeMetadata) error {
+	return withTransaction(m.db, func(txn *sqlx.Tx) error {
+		result, err := txn.NamedExec(challengeUpdateQuery, metadata)
+		if err != nil {
+			return fmt.Errorf("could not update challenge row: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("could not inspect challenge update: %w", err)
+		}
+		if affected != 1 {
+			return fmt.Errorf("updated %d challenge rows; expected one", affected)
 		}
 
-		for _, tag := range metadata.Tags {
+		for _, table := range []string{
+			"hints",
+			"tags",
+			"attributes",
+			"portNames",
+			"hosts",
+			"networkOptions",
+			"containerOptions",
+		} {
 			if _, err := txn.Exec(
-				"INSERT INTO tags(challenge, tag) VALUES (?, ?);",
+				fmt.Sprintf("DELETE FROM %s WHERE challenge = ?;", table),
 				metadata.Id,
-				tag,
 			); err != nil {
-				return fmt.Errorf("could not insert tag %q: %w", tag, err)
+				return fmt.Errorf("could not clear %s: %w", table, err)
 			}
 		}
-
-		for key, value := range metadata.Attributes {
-			if _, err := txn.Exec(
-				"INSERT INTO attributes(challenge, key, value) VALUES (?, ?, ?);",
-				metadata.Id,
-				key,
-				value,
-			); err != nil {
-				return fmt.Errorf("could not insert attribute %q: %w", key, err)
-			}
-		}
-
-		for i, host := range metadata.Hosts {
-			m.log.debugf("%s: %v", metadata.Id, host)
-			if _, err := txn.Exec(
-				"INSERT INTO hosts(challenge, name, idx, target) VALUES (?, ?, ?, ?);",
-				metadata.Id,
-				host.Name,
-				i,
-				host.Target,
-			); err != nil {
-				return fmt.Errorf("could not insert host %q: %w", host.Name, err)
-			}
-		}
-
-		for name, endpoint := range metadata.PortMap {
-			m.log.debugf("%s: %v", metadata.Id, endpoint)
-			if _, err := txn.Exec(
-				"INSERT INTO portNames(challenge, name, host, port) VALUES (?, ?, ?, ?);",
-				metadata.Id,
-				name,
-				endpoint.Host,
-				endpoint.Port,
-			); err != nil {
-				return fmt.Errorf("could not insert published port %q: %w", name, err)
-			}
-		}
-
-		// There are currently no network-level challenge options. They should
-		// be inserted here if network options are added in the future.
-
-		for host, opts := range metadata.ChallengeOptions.Overrides {
-			dbOpts, err := opts.toDbContainerOptions()
-			if err != nil {
-				return fmt.Errorf(
-					"could not serialize container options for host %q: %w",
-					host,
-					err,
-				)
-			}
-
-			hostSuffix := ""
-			if host != "" {
-				hostSuffix = fmt.Sprintf(" (%s)", host)
-			}
-			logOpts := dbOpts
-			if logOpts.Seccomp != "" {
-				logOpts.Seccomp = "<configured>"
-			}
-			m.log.debugf("%s%s: %v", metadata.Id, hostSuffix, logOpts)
-
-			if _, err := txn.Exec(
-				`INSERT INTO containerOptions(
-					challenge,
-					host,
-					init,
-					cpus,
-					memory,
-					ulimits,
-					pidslimit,
-					readonlyrootfs,
-					droppedcaps,
-					nonewprivileges,
-					diskquota,
-					cgroupparent,
-					seccomp
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-				metadata.Id,
-				host,
-				dbOpts.Init,
-				dbOpts.Cpus,
-				dbOpts.Memory,
-				dbOpts.Ulimits,
-				dbOpts.PidsLimit,
-				dbOpts.ReadonlyRootfs,
-				dbOpts.DroppedCaps,
-				dbOpts.NoNewPrivileges,
-				dbOpts.DiskQuota,
-				dbOpts.CgroupParent,
-				dbOpts.Seccomp,
-			); err != nil {
-				return fmt.Errorf(
-					"could not insert container options for host %q: %w",
-					host,
-					err,
-				)
-			}
-		}
-
-		return nil
+		return m.insertChallengeRelations(txn, metadata)
 	})
 }
 
@@ -308,263 +330,11 @@ func (m *Manager) updateChallengesInternal(
 				continue
 			}
 		}
-		txn := m.db.MustBegin()
-
-		_, err = txn.NamedExec(challengeUpdateQuery, metadata)
-		if err != nil {
-			m.log.error(err)
-			err = txn.Rollback()
-			if err != nil { // If rollback fails, we're in trouble.
-				m.log.error(err)
-				return append(errs, err)
-			}
-			continue
-		}
-
-		_, err = txn.Exec("DELETE FROM hints WHERE challenge = ?;", metadata.Id)
-
-		if err != nil {
-			m.log.error(err)
-			err = txn.Rollback()
-			if err != nil { // If rollback fails, we're in trouble.
-				m.log.error(err)
-				return append(errs, err)
-			}
-			continue
-		}
-		for i, hint := range metadata.Hints {
-
-			_, err = txn.Exec("INSERT INTO hints(challenge, idx, hint) VALUES (?, ?, ?);",
-				metadata.Id,
-				i,
-				hint)
-
-			if err != nil {
-				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				break
-			}
-		}
-		if err != nil {
-			continue
-		}
-
-		_, err = txn.Exec("DELETE FROM tags WHERE challenge = ?;", metadata.Id)
-
-		if err != nil {
-			m.log.error(err)
-			err = txn.Rollback()
-			if err != nil { // If rollback fails, we're in trouble.
-				m.log.error(err)
-				return append(errs, err)
-			}
-			continue
-		}
-		for _, tag := range metadata.Tags {
-
-			_, err = txn.Exec("INSERT INTO tags(challenge, tag) VALUES (?, ?);",
-				metadata.Id,
-				tag)
-
-			if err != nil {
-				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				break
-			}
-		}
-		if err != nil {
-			continue
-		}
-
-		_, err = txn.Exec("DELETE FROM attributes WHERE challenge = ?;", metadata.Id)
-
-		if err != nil {
-			m.log.error(err)
-			err = txn.Rollback()
-			if err != nil { // If rollback fails, we're in trouble.
-				m.log.error(err)
-				return append(errs, err)
-			}
-			continue
-		}
-		for k, v := range metadata.Attributes {
-
-			_, err = txn.Exec("INSERT INTO attributes(challenge, key, value) VALUES (?, ?, ?);",
-				metadata.Id,
-				k,
-				v)
-
-			if err != nil {
-				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				break
-			}
-		}
-		if err != nil {
-			continue
-		}
-
-		_, err = txn.Exec("DELETE FROM hosts WHERE challenge = ?;", metadata.Id)
-
-		if err != nil {
-			m.log.error(err)
-			err = txn.Rollback()
-			if err != nil { // If rollback fails, we're in trouble.
-				m.log.error(err)
-				return append(errs, err)
-			}
-			continue
-		}
-
-		for i, host := range metadata.Hosts {
-			_, err = txn.Exec("INSERT INTO hosts(challenge, name, idx, target) VALUES (?, ?, ?, ?);",
-				metadata.Id,
-				host.Name,
-				i,
-				host.Target)
-
-			if err != nil {
-				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				break
-			}
-		}
-		if err != nil {
-			continue
-		}
-
-		_, err = txn.Exec("DELETE FROM portNames WHERE challenge = ?;", metadata.Id)
-
-		if err != nil {
-			m.log.error(err)
-			err = txn.Rollback()
-			if err != nil { // If rollback fails, we're in trouble.
-				m.log.error(err)
-				return append(errs, err)
-			}
-			continue
-		}
-
-		for k, v := range metadata.PortMap {
-			_, err = txn.Exec("INSERT INTO portNames(challenge, name, host, port) VALUES (?, ?, ?, ?);",
-				metadata.Id,
-				k,
-				v.Host,
-				v.Port)
-
-			if err != nil {
-				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				break
-			}
-		}
-		if err != nil {
-			continue
-		}
-
-		// Note: there are currently no network-level challenge options, but they would be updated here if added in the future.
-
-		// _, err = txn.Exec("DELETE FROM networkOptions WHERE challenge = ?;", metadata.Id)
-
-		// if err != nil {
-		// 	m.log.error(err)
-		// 	err = txn.Rollback()
-		// 	if err != nil { // If rollback fails, we're in trouble.
-		// 		m.log.error(err)
-		// 		return append(errs, err)
-		// 	}
-		// 	continue
-		// }
-
-		// _, err = txn.Exec("INSERT INTO networkOptions(challenge) VALUES (?);",
-		// 	metadata.Id)
-		// if err != nil {
-		// 	m.log.error(err)
-		// 	err = txn.Rollback()
-		// 	if err != nil { // If rollback fails, we're in trouble.
-		// 		m.log.error(err)
-		// 		return append(errs, err)
-		// 	}
-		// }
-		// if err != nil {
-		// 	continue
-		// }
-
-		_, err = txn.Exec("DELETE FROM containerOptions WHERE challenge = ?;", metadata.Id)
-
-		if err != nil {
-			m.log.error(err)
-			err = txn.Rollback()
-			if err != nil { // If rollback fails, we're in trouble.
-				m.log.error(err)
-				return append(errs, err)
-			}
-			continue
-		}
-
-		for host, opts := range metadata.ChallengeOptions.Overrides {
-			dbOpts, err := opts.toDbContainerOptions()
-			if err != nil {
-				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				break
-			}
-			_, err = txn.Exec("INSERT INTO containerOptions(challenge, host, init, cpus, memory, ulimits, pidslimit, readonlyrootfs, droppedcaps, nonewprivileges, diskquota, cgroupparent, seccomp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-				metadata.Id,
-				host,
-				dbOpts.Init,
-				dbOpts.Cpus,
-				dbOpts.Memory,
-				dbOpts.Ulimits,
-				dbOpts.PidsLimit,
-				dbOpts.ReadonlyRootfs,
-				dbOpts.DroppedCaps,
-				dbOpts.NoNewPrivileges,
-				dbOpts.DiskQuota,
-				dbOpts.CgroupParent,
-				dbOpts.Seccomp)
-			if err != nil {
-				m.log.error(err)
-				err = txn.Rollback()
-				if err != nil { // If rollback fails, we're in trouble.
-					m.log.error(err)
-					return append(errs, err)
-				}
-				break
-			}
-		}
-		if err != nil {
-			continue
-		}
-
-		if err := txn.Commit(); err != nil { // It's undocumented what this means...
+		if err := m.replaceChallengeMetadata(metadata); err != nil {
+			err = fmt.Errorf("could not update challenge %q: %w", metadata.Id, err)
 			m.log.error(err)
 			errs = append(errs, err)
-			continue // next challenge
+			continue
 		}
 
 		if rebuild {
@@ -611,10 +381,13 @@ func (m *Manager) updateChallengesInternal(
 						break
 					}
 					candidate := cloneBuildMetadata(build)
-					qualifier := fmt.Sprintf(
-						"cmgr-validate-%d",
-						m.rand.Int63(),
-					)
+					randomSuffix, randomErr := randomIdentifier()
+					if randomErr != nil {
+						errs = append(errs, randomErr)
+						challengeFailed = true
+						break
+					}
+					qualifier := "cmgr-validate-" + randomSuffix
 
 					// Resetting the flag signals to rebuild the Dockerfile
 					candidate.Flag = ""
@@ -625,15 +398,27 @@ func (m *Manager) updateChallengesInternal(
 						qualifier,
 					)
 					if err != nil {
-						m.discardStagedBuild(metadata, candidate, qualifier)
 						errs = append(errs, err)
+						if cleanupErr := m.discardStagedBuild(
+							metadata,
+							candidate,
+							qualifier,
+						); cleanupErr != nil {
+							errs = append(errs, cleanupErr)
+						}
 						challengeFailed = true
 						break
 					}
 					promotion, err := m.promoteStagedBuild(candidate, qualifier)
 					if err != nil {
-						m.discardStagedBuild(metadata, candidate, qualifier)
 						errs = append(errs, err)
+						if cleanupErr := m.discardStagedBuild(
+							metadata,
+							candidate,
+							qualifier,
+						); cleanupErr != nil {
+							errs = append(errs, cleanupErr)
+						}
 						challengeFailed = true
 						break
 					}
@@ -716,28 +501,27 @@ func (m *Manager) updateChallengesInternal(
 }
 
 func (m *Manager) removeChallenges(removedChallenges []*ChallengeMetadata) error {
-	txn := m.db.MustBegin()
-	for _, metadata := range removedChallenges {
-		// This should throw an error and cause a rollback when builds exist for
-		// a challenge we are removing.
-		_, err := txn.Exec("DELETE FROM challenges WHERE id = ?;", metadata.Id)
-		if err != nil {
-			m.log.error(err)
-			rbErr := txn.Rollback()
-			if rbErr != nil { // If rollback fails, we're in trouble.
-				m.log.error(rbErr)
-				return rbErr
+	return withTransaction(m.db, func(txn *sqlx.Tx) error {
+		for _, metadata := range removedChallenges {
+			// Existing builds intentionally make this delete fail through the
+			// foreign-key constraint.
+			result, err := txn.Exec(
+				"DELETE FROM challenges WHERE id = ?;",
+				metadata.Id,
+			)
+			if err != nil {
+				return fmt.Errorf("could not remove challenge %q: %w", metadata.Id, err)
 			}
-			return err
+			affected, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if affected != 1 {
+				return unknownChallengeIdError(metadata.Id)
+			}
 		}
-	}
-
-	if err := txn.Commit(); err != nil { // It's undocumented what this means...
-		m.log.error(err)
-		return err
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // Database representation of ContainerOptions
@@ -848,9 +632,11 @@ const (
 		challengetype,
 		description,
 		details,
-		sourcechecksum,
-		metadatachecksum,
-		path,
+			sourcechecksum,
+			metadatachecksum,
+			sourcedigest,
+			metadatadigest,
+			path,
 		solvescript,
 		templatable,
 		maxusers,
@@ -864,9 +650,11 @@ const (
 		:challengetype,
 		:description,
 		:details,
-		:sourcechecksum,
-		:metadatachecksum,
-		:path,
+			:sourcechecksum,
+			:metadatachecksum,
+			:sourcedigest,
+			:metadatadigest,
+			:path,
 		:solvescript,
 		:templatable,
 		:maxusers,
@@ -877,11 +665,14 @@ const (
 	challengeUpdateQuery string = `
 	UPDATE challenges SET
 	    name = :name,
+		namespace = :namespace,
 		challengetype = :challengetype,
 		description = :description,
 		details = :details,
-		sourcechecksum = :sourcechecksum,
-		metadatachecksum = :metadatachecksum,
+			sourcechecksum = :sourcechecksum,
+			metadatachecksum = :metadatachecksum,
+			sourcedigest = :sourcedigest,
+			metadatadigest = :metadatadigest,
 		path = :path,
 		solvescript = :solvescript,
 		templatable = :templatable,

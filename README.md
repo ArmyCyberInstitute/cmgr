@@ -68,10 +68,52 @@ adjusting the kernel parameter.
 
 - *CMGR\_ENABLE\_DISK\_QUOTAS*: enables the [disk
   quota](examples/markdown_challenges.md#challenge-options) container option when set. Disk quotas
-  are only functional when using the `overlay2` Docker storage driver and
-  [pquota-enabled](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/storage_administration_guide/xfsquota)
-  XFS backing storage. Otherwise, the creation of containers with disk quotas will fail at runtime.
-  When unset, any specified quotas are ignored.
+  are supported by Docker's `zfs` storage driver and by `overlay2` with
+  [project-quota-enabled](https://docs.docker.com/engine/storage/drivers/overlayfs-driver/#prerequisites)
+  XFS backing storage. cmgr checks the reported storage driver before applying
+  a quota. When unset, or when the required storage support is unavailable,
+  any specified quotas are ignored with a warning.
+
+The following variables set challenge runtime defaults. A challenge may
+explicitly request a higher or lower value; these settings are defaults, not
+deployment-wide maxima:
+
+- *CMGR\_DEFAULT\_CPUS*: CPU cores per runtime container (defaults to `1`)
+
+- *CMGR\_DEFAULT\_MEMORY*: memory limit per runtime container (defaults to
+  `512m`; cmgr sets Docker's memory-swap limit to the same value, disabling
+  additional swap)
+
+- *CMGR\_DEFAULT\_PIDS\_LIMIT*: process limit per runtime container (defaults
+  to `256`)
+
+- *CMGR\_DEFAULT\_NOFILE*: soft and hard open-file limit when a challenge does
+  not provide its own `nofile` ulimit (defaults to `4096`)
+
+The following configurable safety bounds prevent accidental resource
+exhaustion. They can be raised for larger deployments. In particular, cmgr
+does **not** impose a limit on the number of active instances:
+
+- *CMGR\_MAX\_SEEDS\_PER\_REQUEST*: seeds accepted for one challenge in one
+  build or schema request (defaults to `10000`)
+
+- *CMGR\_MAX\_CONCURRENT\_BUILDS*: Docker builds cmgr may execute concurrently
+  (defaults to `4`)
+
+- *CMGR\_MAX\_BUILD\_CONTEXT\_FILES* and
+  *CMGR\_MAX\_BUILD\_CONTEXT\_BYTES*: challenge or solver context limits
+  (defaults to `10000` and `2g`)
+
+- *CMGR\_MAX\_ARTIFACT\_FILES*, *CMGR\_MAX\_ARTIFACT\_BYTES*, and
+  *CMGR\_MAX\_ARTIFACT\_FILE\_BYTES*: artifact archive entry, total
+  uncompressed, and per-file limits (defaults to `10000`, `5g`, and `1g`)
+
+- *CMGR\_MAX\_REQUEST\_BYTES*: maximum JSON request body accepted by `cmgrd`
+  (defaults to `1m`)
+
+- *CMGR\_SOLVER\_TIMEOUT*, *CMGR\_MAX\_SOLVER\_LOG\_BYTES*, and
+  *CMGR\_MAX\_SOLVER\_FLAG\_BYTES*: solver runtime, log output, and
+  build/solver flag limits (defaults to `5m`, `1m`, and `4k`)
 
 Additionally, we rely on the Docker SDK's ability to self-configure base off
 environment variables.  The documentation for those variables can be found at

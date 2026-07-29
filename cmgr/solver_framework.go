@@ -3,10 +3,12 @@ package cmgr
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -19,6 +21,21 @@ import (
 )
 
 func (m *Manager) runSolver(instance InstanceId) error {
+	solverTimeout := m.policy.SolverTimeout
+	if solverTimeout == 0 {
+		solverTimeout = 5 * time.Minute
+	}
+	operationContext, cancel := context.WithTimeout(m.ctx, solverTimeout)
+	defer cancel()
+	maxLogBytes := m.policy.MaxSolverLogBytes
+	if maxLogBytes == 0 {
+		maxLogBytes = 1024 * 1024
+	}
+	maxFlagBytes := m.policy.MaxSolverFlagBytes
+	if maxFlagBytes == 0 {
+		maxFlagBytes = 4 * 1024
+	}
+
 	iMeta, err := m.lookupInstanceMetadata(instance)
 	if err != nil {
 		return err
@@ -38,13 +55,13 @@ func (m *Manager) runSolver(instance InstanceId) error {
 		return fmt.Errorf("no solve script for '%s'", cMeta.Id)
 	}
 
-	solveCtx := m.createSolveContext(bMeta)
+	solveContext := m.createSolveContext(bMeta)
 
 	imageName := fmt.Sprintf("%s/%s:%d", bMeta.Challenge, "solver", bMeta.Id)
 	opts := client.ImageBuildOptions{Remove: true, Tags: []string{imageName}}
 
 	// Build the base image (will run the solver)
-	resp, err := m.cli.ImageBuild(m.ctx, solveCtx, opts)
+	resp, err := m.cli.ImageBuild(operationContext, solveContext, opts)
 	if err != nil {
 		m.log.errorf("failed to build solver image: %s", err)
 		return err
@@ -79,7 +96,7 @@ func (m *Manager) runSolver(instance InstanceId) error {
 	}
 
 	respCC, err := m.cli.ContainerCreate(
-		m.ctx,
+		operationContext,
 		client.ContainerCreateOptions{
 			Config:           &cConfig,
 			HostConfig:       &hConfig,
@@ -92,30 +109,55 @@ func (m *Manager) runSolver(instance InstanceId) error {
 	}
 	cid := respCC.ID
 
-	cro := client.ContainerRemoveOptions{RemoveVolumes: true, Force: true}
-	defer m.cli.ContainerRemove(m.ctx, cid, cro)
+	if err := m.retireContainer(cid); err != nil {
+		removeOptions := client.ContainerRemoveOptions{
+			RemoveVolumes: true,
+			Force:         true,
+		}
+		_, removeErr := m.cli.ContainerRemove(m.ctx, cid, removeOptions)
+		return errors.Join(
+			fmt.Errorf("could not track temporary solver container %s: %w", cid, err),
+			removeErr,
+		)
+	}
+	defer func() {
+		if cleanupErr := m.removeRetiredContainerIDs(
+			[]string{cid},
+		); cleanupErr != nil {
+			m.log.warnf(
+				"could not remove temporary solver container %s: %v",
+				cid,
+				cleanupErr,
+			)
+		}
+	}()
 
-	_, err = m.cli.ContainerStart(m.ctx, cid, client.ContainerStartOptions{})
+	_, err = m.cli.ContainerStart(operationContext, cid, client.ContainerStartOptions{})
 	if err != nil {
 		m.log.errorf("failed to start solve container: %s", err)
 		return err
 	}
 
 	waitResult := m.cli.ContainerWait(
-		m.ctx,
+		operationContext,
 		cid,
 		client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning},
 	)
 	select {
 	case err := <-waitResult.Error:
+		if err == nil {
+			err = errors.New("Docker solver wait ended without a result")
+		}
 		m.log.errorf("failed to wait on solve container: %s", err)
 		return err
 	case _ = <-waitResult.Result:
+	case <-operationContext.Done():
+		return fmt.Errorf("solver exceeded %s: %w", solverTimeout, operationContext.Err())
 	}
 
 	// Copy out the flag & compare
 	copyResult, err := m.cli.CopyFromContainer(
-		m.ctx,
+		operationContext,
 		cid,
 		client.CopyFromContainerOptions{SourcePath: "/solve/flag"},
 	)
@@ -125,17 +167,20 @@ func (m *Manager) runSolver(instance InstanceId) error {
 			ShowStdout: true,
 			ShowStderr: true,
 		}
-		logs, lerr := m.cli.ContainerLogs(m.ctx, cid, clo)
+		logs, lerr := m.cli.ContainerLogs(operationContext, cid, clo)
 		if lerr != nil {
 			m.log.errorf("could not access error logs: %s", lerr)
 			err = lerr
 		} else {
 			defer logs.Close()
-			s, lerr := ioutil.ReadAll(logs)
+			s, lerr := ioutil.ReadAll(io.LimitReader(logs, maxLogBytes+1))
 			if lerr != nil {
 				m.log.errorf("could not read logs: %s", lerr)
 				err = lerr
 			} else {
+				if int64(len(s)) > maxLogBytes {
+					s = append(s[:maxLogBytes], []byte("\n[solver log truncated]")...)
+				}
 				m.log.errorf("logs from failed container: %s", s)
 			}
 		}
@@ -146,11 +191,28 @@ func (m *Manager) runSolver(instance InstanceId) error {
 	defer flagFileTar.Close()
 
 	fTar := tar.NewReader(flagFileTar)
-	for _, err = fTar.Next(); err == nil; _, err = fTar.Next() {
-		flag, err := ioutil.ReadAll(fTar)
+	for {
+		header, nextErr := fTar.Next()
+		if nextErr == io.EOF {
+			err = io.EOF
+			break
+		}
+		if nextErr != nil {
+			return fmt.Errorf("could not read solver flag archive: %w", nextErr)
+		}
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			return fmt.Errorf("solver flag output is not a regular file")
+		}
+		if header.Size < 0 || header.Size > maxFlagBytes {
+			return fmt.Errorf("solver flag output exceeds %d bytes", maxFlagBytes)
+		}
+		flag, err := ioutil.ReadAll(io.LimitReader(fTar, maxFlagBytes+1))
 		if err != nil {
 			m.log.errorf("could not read flag file: %s", err)
 			return err
+		}
+		if int64(len(flag)) > maxFlagBytes {
+			return fmt.Errorf("solver flag output exceeds %d bytes", maxFlagBytes)
 		}
 
 		flagStr := strings.TrimSpace(string(flag))
@@ -172,25 +234,67 @@ func (m *Manager) runSolver(instance InstanceId) error {
 
 func (m *Manager) createSolveContext(meta *BuildMetadata) io.Reader {
 	r, w := io.Pipe()
-	ctx := tar.NewWriter(w)
+	maxContextBytes := m.policy.MaxBuildContextBytes + m.policy.MaxArtifactBytes
+	if maxContextBytes == 0 {
+		maxContextBytes = 7 * 1024 * 1024 * 1024
+	}
+	ctx := tar.NewWriter(&boundedWriter{
+		writer:    w,
+		remaining: maxContextBytes,
+		limit:     maxContextBytes,
+	})
 
 	customDocker := false
 
 	go func() {
 		cMeta, err := m.lookupChallengeMetadata(meta.Challenge)
 		if err != nil {
-			w.CloseWithError(err)
+			_ = w.CloseWithError(err)
+			return
 		}
 
 		// Copy in contents of the "solver" directory
 		solveDir := filepath.Join(filepath.Dir(cMeta.Path), "solver")
-		err = filepath.Walk(solveDir, func(path string, info os.FileInfo, err error) error {
+		root, err := os.OpenRoot(solveDir)
+		if err != nil {
+			_ = w.CloseWithError(err)
+			return
+		}
+		defer root.Close()
+		entryCount := 0
+		maxEntries := m.policy.MaxBuildContextFiles
+		if maxEntries == 0 {
+			maxEntries = 10_000
+		}
+		err = filepath.WalkDir(solveDir, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 
 			if path == solveDir {
 				return nil
+			}
+			entryCount++
+			if entryCount > maxEntries {
+				return fmt.Errorf("solver context contains more than %d entries", maxEntries)
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			archivePath, err := filepath.Rel(solveDir, path)
+			if err != nil {
+				return err
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("solver context cannot contain symlink %q", archivePath)
+			}
+			if !info.IsDir() && !info.Mode().IsRegular() {
+				return fmt.Errorf(
+					"solver context contains unsupported file type %q (%s)",
+					archivePath,
+					info.Mode(),
+				)
 			}
 
 			if path == filepath.Join(solveDir, "Dockerfile") {
@@ -202,8 +306,8 @@ func (m *Manager) createSolveContext(meta *BuildMetadata) io.Reader {
 				return err
 			}
 
-			archivePath := path[len(solveDir)+1:]
 			hdr.Name = strings.ReplaceAll(archivePath, `\`, `/`)
+			hdr.Linkname = ""
 
 			err = ctx.WriteHeader(hdr)
 			if err != nil {
@@ -214,16 +318,29 @@ func (m *Manager) createSolveContext(meta *BuildMetadata) io.Reader {
 				return nil
 			}
 
-			fd, err := os.Open(path)
+			fd, err := root.Open(archivePath)
 			if err != nil {
 				return err
 			}
-
-			_, err = io.Copy(ctx, fd)
+			currentInfo, err := fd.Stat()
+			if err != nil {
+				_ = fd.Close()
+				return err
+			}
+			if !currentInfo.Mode().IsRegular() ||
+				currentInfo.Size() != info.Size() ||
+				currentInfo.Mode() != info.Mode() {
+				_ = fd.Close()
+				return fmt.Errorf("solver file changed while archiving: %q", archivePath)
+			}
+			_, err = io.CopyN(ctx, fd, currentInfo.Size())
+			closeErr := fd.Close()
 			if err != nil {
 				return err
 			}
-			fd.Close()
+			if closeErr != nil {
+				return closeErr
+			}
 
 			return nil
 		})

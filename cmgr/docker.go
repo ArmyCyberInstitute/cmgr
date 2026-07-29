@@ -2,10 +2,8 @@ package cmgr
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,8 +21,10 @@ import (
 	"github.com/ArmyCyberInstitute/cmgr/internal/ociinterceptor"
 	"github.com/containerd/errdefs"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/api/pkg/authconfig"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/api/types/strslice"
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/client"
@@ -60,6 +60,35 @@ func (m *Manager) initDocker() error {
 	} else if warning := seccompRuntimeWarning(hostInfoResult.Info); warning != "" {
 		m.log.warn(warning)
 	}
+	if _, requested := os.LookupEnv(DISK_QUOTA_ENV); requested {
+		if infoErr != nil {
+			m.log.warnf("disk quotas disabled because Docker storage could not be inspected")
+		} else {
+			info := hostInfoResult.Info
+			switch info.Driver {
+			case "zfs":
+				m.diskQuotasEnabled.Store(true)
+			case "overlay2":
+				for _, status := range info.DriverStatus {
+					if len(status) >= 2 &&
+						strings.EqualFold(status[0], "Backing Filesystem") &&
+						strings.EqualFold(status[1], "xfs") {
+						// overlay2 size limits additionally require the XFS
+						// filesystem to be mounted with project quotas. Docker
+						// reports an actionable error at create time if it is not.
+						m.diskQuotasEnabled.Store(true)
+						break
+					}
+				}
+			}
+			if !m.diskQuotasEnabled.Load() {
+				m.log.warnf(
+					"disk quotas disabled: Docker driver %q does not report a supported backing store",
+					info.Driver,
+				)
+			}
+		}
+	}
 
 	chalInterface, isSet := os.LookupEnv(IFACE_ENV)
 	if !isSet {
@@ -69,13 +98,14 @@ func (m *Manager) initDocker() error {
 
 	m.challengeRegistry, isSet = os.LookupEnv(REGISTRY_ENV)
 	if isSet {
-		authPayload := fmt.Sprintf(
-			`{"username":"%s","password":"%s","serveraddress":"%s"}`,
-			os.Getenv(REGISTRY_USER_ENV),
-			os.Getenv(REGISTRY_TOKEN_ENV),
-			strings.SplitN(m.challengeRegistry, "/", 2)[0],
-		)
-		m.authString = base64.StdEncoding.EncodeToString([]byte(authPayload))
+		m.authString, err = authconfig.Encode(registry.AuthConfig{
+			Username:      os.Getenv(REGISTRY_USER_ENV),
+			Password:      os.Getenv(REGISTRY_TOKEN_ENV),
+			ServerAddress: strings.SplitN(m.challengeRegistry, "/", 2)[0],
+		})
+		if err != nil {
+			return fmt.Errorf("could not encode registry authentication: %w", err)
+		}
 	}
 
 	m.portLow, m.portHigh, err = getPortRange()
@@ -109,7 +139,7 @@ func getPortRange() (int, int, error) {
 		return 0, 0, err
 	}
 
-	if low < 1024 || high > (1<<16) || high < low {
+	if low < 1024 || high >= (1<<16) || high < low {
 		err = fmt.Errorf("bad port range: %d-%d either contains invalid/privileged ports or includes 0 ports", low, high)
 	}
 
@@ -129,7 +159,7 @@ func (m *Manager) getFreePort() (string, error) {
 	// Get currently used ports...
 	ports, err := m.usedPortSet()
 	if err != nil {
-		return "", nil
+		return "", fmt.Errorf("could not load assigned ports: %w", err)
 	}
 
 	// Pick a random starting point in the port range...
@@ -158,7 +188,7 @@ func (b *BuildMetadata) makeFlag() *string {
 	if len(sumStr) > 8 {
 		sumStr = sumStr[:8]
 	}
-	*flag = fmt.Sprintf(b.Format, sumStr)
+	*flag = strings.Replace(b.Format, "%s", sumStr, 1)
 	return flag
 }
 
@@ -173,8 +203,44 @@ func (b *BuildMetadata) getArtifactsFilenameForQualifier(qualifier string) strin
 	return fmt.Sprintf(".%s-%s", qualifier, b.getArtifactsFilename())
 }
 
+func challengeSourceVersion(challenge *ChallengeMetadata) string {
+	if challenge.SourceDigest != "" {
+		return challenge.SourceDigest
+	}
+	return fmt.Sprintf("%08x", challenge.SourceChecksum)
+}
+
 func (i *InstanceMetadata) getNetworkName() string {
 	return fmt.Sprintf("cmgr-%d", i.Id)
+}
+
+func (m *Manager) acquireBuildLock(build *BuildMetadata) func() {
+	key := fmt.Sprintf(
+		"%s\x00%s\x00%s\x00%d",
+		build.Schema,
+		build.Format,
+		build.Challenge,
+		build.Seed,
+	)
+	m.buildLocksMu.Lock()
+	lock := m.buildLocks[key]
+	if lock == nil {
+		lock = new(buildLock)
+		m.buildLocks[key] = lock
+	}
+	lock.refs++
+	m.buildLocksMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		m.buildLocksMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(m.buildLocks, key)
+		}
+		m.buildLocksMu.Unlock()
+	}
 }
 
 func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
@@ -227,18 +293,74 @@ func (m *Manager) generateBuilds(builds []*BuildMetadata) error {
 			continue
 		}
 
-		err = m.openBuild(build)
-		if err != nil {
-			return err
+		releaseBuildLock := m.acquireBuildLock(build)
+		if build.Id == 0 {
+			err = m.openBuild(build)
+			if err != nil {
+				releaseBuildLock()
+				return err
+			}
+		} else {
+			requestedCount := build.InstanceCount
+			persisted, lookupErr := m.lookupBuildMetadata(build.Id)
+			if lookupErr != nil {
+				releaseBuildLock()
+				return lookupErr
+			}
+			if persisted.Flag != "" {
+				*build = *persisted
+				build.InstanceCount = requestedCount
+			}
+		}
+		// A concurrent request may have completed this build before we acquired
+		// its keyed lock. openBuild reloads all persisted metadata on conflict.
+		if build.Flag != "" {
+			releaseBuildLock()
+			continue
 		}
 
+		if m.buildSlots != nil {
+			m.buildSlots <- struct{}{}
+		}
 		err = m.executeBuild(cMeta, build, buildCtxFile, "")
+		if m.buildSlots != nil {
+			<-m.buildSlots
+		}
 		if err != nil {
-			m.removeBuildMetadata(build.Id)
+			if cleanupErr := m.discardStagedBuild(cMeta, build, ""); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
+			if cleanupErr := m.removeBuildMetadata(build.Id); cleanupErr != nil {
+				err = errors.Join(
+					err,
+					fmt.Errorf(
+						"could not remove failed build %d metadata: %w",
+						build.Id,
+						cleanupErr,
+					),
+				)
+			}
+			releaseBuildLock()
 			return err
 		}
 
 		err = m.finalizeBuild(build)
+		if err != nil {
+			if cleanupErr := m.discardStagedBuild(cMeta, build, ""); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
+			if cleanupErr := m.removeBuildMetadata(build.Id); cleanupErr != nil {
+				err = errors.Join(
+					err,
+					fmt.Errorf(
+						"could not remove unfinalized build %d metadata: %w",
+						build.Id,
+						cleanupErr,
+					),
+				)
+			}
+		}
+		releaseBuildLock()
 		if err != nil {
 			return err
 		}
@@ -322,7 +444,12 @@ func (m *Manager) freezeBaseImage(challenge ChallengeId, force bool) error {
 		return err
 	}
 
-	imageName := fmt.Sprintf("%s/%s:%x", m.challengeRegistry, challengeToFreezeName(challenge), cMeta.SourceChecksum)
+	imageName := fmt.Sprintf(
+		"%s/%s:%s",
+		m.challengeRegistry,
+		challengeToFreezeName(challenge),
+		challengeSourceVersion(cMeta),
+	)
 
 	if !force {
 		// Do some check here to see if it already exists
@@ -419,6 +546,7 @@ type stagedBuildPromotion struct {
 	canonicalArtifact string
 	backupArtifact    string
 	hadArtifact       bool
+	installedArtifact bool
 }
 
 type stagedBuildUpdate struct {
@@ -453,7 +581,13 @@ func (m *Manager) rollbackBuildUpdate(update *stagedBuildUpdate) []error {
 			errs = append(errs, err)
 		}
 	}
-	m.discardStagedBuild(update.metadata, update.candidate, update.qualifier)
+	if err := m.discardStagedBuild(
+		update.metadata,
+		update.candidate,
+		update.qualifier,
+	); err != nil {
+		errs = append(errs, err)
+	}
 	return errs
 }
 
@@ -527,8 +661,19 @@ func (m *Manager) promoteStagedBuild(
 			m.ctx,
 			client.ImageTagOptions{Source: staged, Target: canonical},
 		); err != nil {
-			_ = m.rollbackStagedBuild(promotion)
-			return nil, fmt.Errorf("could not promote image %s to %s: %v", staged, canonical, err)
+			operationErr := fmt.Errorf(
+				"could not promote image %s to %s: %v",
+				staged,
+				canonical,
+				err,
+			)
+			if rollbackErr := m.rollbackStagedBuild(promotion); rollbackErr != nil {
+				operationErr = errors.Join(
+					operationErr,
+					fmt.Errorf("could not roll back staged build: %w", rollbackErr),
+				)
+			}
+			return nil, operationErr
 		}
 	}
 
@@ -546,20 +691,39 @@ func (m *Manager) promoteStagedBuild(
 	)
 	if _, err := os.Stat(promotion.canonicalArtifact); err == nil {
 		if err = os.Rename(promotion.canonicalArtifact, promotion.backupArtifact); err != nil {
-			_ = m.rollbackStagedBuild(promotion)
-			return nil, fmt.Errorf("could not preserve current artifacts: %v", err)
+			operationErr := fmt.Errorf("could not preserve current artifacts: %v", err)
+			if rollbackErr := m.rollbackStagedBuild(promotion); rollbackErr != nil {
+				operationErr = errors.Join(
+					operationErr,
+					fmt.Errorf("could not roll back staged build: %w", rollbackErr),
+				)
+			}
+			return nil, operationErr
 		}
 		promotion.hadArtifact = true
 	} else if !os.IsNotExist(err) {
-		_ = m.rollbackStagedBuild(promotion)
-		return nil, fmt.Errorf("could not inspect current artifacts: %v", err)
+		operationErr := fmt.Errorf("could not inspect current artifacts: %v", err)
+		if rollbackErr := m.rollbackStagedBuild(promotion); rollbackErr != nil {
+			operationErr = errors.Join(
+				operationErr,
+				fmt.Errorf("could not roll back staged build: %w", rollbackErr),
+			)
+		}
+		return nil, operationErr
 	}
 
 	if build.HasArtifacts {
 		if err := os.Rename(stagedArtifact, promotion.canonicalArtifact); err != nil {
-			_ = m.rollbackStagedBuild(promotion)
-			return nil, fmt.Errorf("could not promote staged artifacts: %v", err)
+			operationErr := fmt.Errorf("could not promote staged artifacts: %v", err)
+			if rollbackErr := m.rollbackStagedBuild(promotion); rollbackErr != nil {
+				operationErr = errors.Join(
+					operationErr,
+					fmt.Errorf("could not roll back staged build: %w", rollbackErr),
+				)
+			}
+			return nil, operationErr
 		}
+		promotion.installedArtifact = true
 	}
 	return promotion, nil
 }
@@ -583,7 +747,7 @@ func (m *Manager) rollbackStagedBuild(promotion *stagedBuildPromotion) error {
 			firstErr = err
 		}
 	}
-	if promotion.canonicalArtifact != "" {
+	if promotion.installedArtifact {
 		if err := os.Remove(promotion.canonicalArtifact); err != nil &&
 			!os.IsNotExist(err) && firstErr == nil {
 			firstErr = err
@@ -622,17 +786,59 @@ func (m *Manager) discardStagedBuild(
 	metadata *ChallengeMetadata,
 	build *BuildMetadata,
 	qualifier string,
-) {
+) error {
+	var errs []error
 	removeOptions := client.ImageRemoveOptions{PruneChildren: true}
 	for _, host := range metadata.Hosts {
 		image := Image{Host: host.Name}
 		imageName := buildImageName(metadata.Id, build, image, qualifier)
-		_, _ = m.cli.ImageRemove(m.ctx, imageName, removeOptions)
+		if _, err := m.cli.ImageRemove(
+			m.ctx,
+			imageName,
+			removeOptions,
+		); err != nil && !errdefs.IsNotFound(err) {
+			errs = append(
+				errs,
+				fmt.Errorf("could not discard image %s: %w", imageName, err),
+			)
+		}
 	}
-	_ = os.Remove(filepath.Join(
+	artifactPath := filepath.Join(
 		m.artifactsDir,
 		build.getArtifactsFilenameForQualifier(qualifier),
-	))
+	)
+	if err := os.Remove(artifactPath); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		errs = append(
+			errs,
+			fmt.Errorf("could not discard artifacts %s: %w", artifactPath, err),
+		)
+	}
+	return errors.Join(errs...)
+}
+
+// The Docker client passes build contexts to net/http as request bodies.
+// net/http closes a request body after RoundTrip returns, so a subsequent
+// defensive close commonly reports os.ErrClosed. Treat that as successful
+// while preserving any other close failure.
+func closeBuildContextFile(file *os.File) error {
+	err := file.Close()
+	if errors.Is(err, os.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
+func unsupportedStorageQuotaError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "storage-opt") &&
+		(strings.Contains(message, "pquota") ||
+			strings.Contains(message, "quota") ||
+			strings.Contains(message, "not supported") ||
+			strings.Contains(message, "supported only"))
 }
 
 func (m *Manager) executeBuild(
@@ -644,7 +850,12 @@ func (m *Manager) executeBuild(
 
 	seedStr := fmt.Sprintf("%d", bMeta.Seed)
 
-	baseName := fmt.Sprintf("%s/%s:%x", m.challengeRegistry, challengeToFreezeName(cMeta.Id), cMeta.SourceChecksum)
+	baseName := fmt.Sprintf(
+		"%s/%s:%s",
+		m.challengeRegistry,
+		challengeToFreezeName(cMeta.Id),
+		challengeSourceVersion(cMeta),
+	)
 	pullOpts := client.ImagePullOptions{RegistryAuth: m.authString}
 	var buildCache []string
 	pullResp, err := m.cli.ImagePull(m.ctx, baseName, pullOpts)
@@ -690,13 +901,17 @@ func (m *Manager) executeBuild(
 			m.log.errorf("failed to seek to beginning of file for %s/%d: %s", cMeta.Id, bMeta.Id, err)
 			return err
 		}
-		defer buildCtx.Close()
 
 		m.log.debugf("creating image %s", imageName)
 		resp, err := m.cli.ImageBuild(m.ctx, buildCtx, opts)
+		closeErr := closeBuildContextFile(buildCtx)
 		if err != nil {
 			m.log.errorf("failed to build base image: %s", err)
 			return err
+		}
+		if closeErr != nil {
+			_ = resp.Body.Close()
+			return fmt.Errorf("could not close build context: %w", closeErr)
 		}
 
 		if err := consumeDockerProgress(resp.Body, "challenge image build"); err != nil {
@@ -734,8 +949,29 @@ func (m *Manager) executeBuild(
 	}
 
 	cid := respCC.ID
-	crOpts := client.ContainerRemoveOptions{RemoveVolumes: true, RemoveLinks: false, Force: true}
-	defer m.cli.ContainerRemove(m.ctx, cid, crOpts)
+	if err := m.retireContainer(cid); err != nil {
+		removeOptions := client.ContainerRemoveOptions{
+			RemoveVolumes: true,
+			RemoveLinks:   false,
+			Force:         true,
+		}
+		_, removeErr := m.cli.ContainerRemove(m.ctx, cid, removeOptions)
+		return errors.Join(
+			fmt.Errorf("could not track temporary build container %s: %w", cid, err),
+			removeErr,
+		)
+	}
+	defer func() {
+		if cleanupErr := m.removeRetiredContainerIDs(
+			[]string{cid},
+		); cleanupErr != nil {
+			m.log.warnf(
+				"could not remove temporary build container %s: %v",
+				cid,
+				cleanupErr,
+			)
+		}
+	}()
 
 	m.log.infof("created container %s", cid)
 
@@ -756,20 +992,36 @@ func (m *Manager) executeBuild(
 	var lookups map[string]string
 	var files []string
 	var flag string
+	metadataFound := false
+	artifactsFound := false
 	for hdr, err = cTar.Next(); err == nil; hdr, err = cTar.Next() {
 		m.log.debugf("found in tar: %s", hdr.Name)
 		if hdr.Name == "challenge/metadata.json" {
-			data, err := ioutil.ReadAll(cTar)
+			if metadataFound {
+				return errors.New("build output contains metadata.json more than once")
+			}
+			metadataFound = true
+			const maxBuildMetadataBytes = 1024 * 1024
+			data, err := ioutil.ReadAll(io.LimitReader(cTar, maxBuildMetadataBytes+1))
 			if err != nil {
 				m.log.errorf("could not read metadata.json: %s", err)
 				return err
 			}
+			if len(data) > maxBuildMetadataBytes {
+				return fmt.Errorf(
+					"build metadata exceeds %d bytes",
+					maxBuildMetadataBytes,
+				)
+			}
 
 			lookups = make(map[string]string)
-			err = json.Unmarshal(data, &lookups)
-			if err != nil {
+			decoder := json.NewDecoder(strings.NewReader(string(data)))
+			if err = decoder.Decode(&lookups); err != nil {
 				m.log.errorf("could not decode build metadata JSON file: %s", err)
 				return err
+			}
+			if err = decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("build metadata contains trailing JSON data")
 			}
 
 			var ok bool
@@ -788,71 +1040,28 @@ func (m *Manager) executeBuild(
 				return err
 			}
 		} else if hdr.Name == "challenge/artifacts.tar.gz" {
+			if artifactsFound {
+				return errors.New("build output contains artifacts.tar.gz more than once")
+			}
+			artifactsFound = true
 			artifactsFileName := bMeta.getArtifactsFilenameForQualifier(qualifier)
-			// Iterate through reading filenames and copying over the tarball
-			artifactsFile, err := os.Create(filepath.Join(m.artifactsDir, artifactsFileName))
+			artifactsPath := filepath.Join(m.artifactsDir, artifactsFileName)
+			files, err = m.cacheArtifacts(
+				cTar,
+				artifactsPath,
+			)
 			if err != nil {
-				m.log.errorf("could not create cached artifacts archive: %s", err)
+				m.log.errorf("could not cache build artifacts: %s", err)
 				return err
 			}
-			defer artifactsFile.Close()
-
-			srcGz, err := gzip.NewReader(cTar)
-			if err != nil {
-				m.log.errorf("could not gzip read artifacts file: %s", err)
-				return err
-			}
-
-			dstGz := gzip.NewWriter(artifactsFile)
-			srcTar := tar.NewReader(srcGz)
-			dstTar := tar.NewWriter(dstGz)
-
-			var h *tar.Header
-			for h, err = srcTar.Next(); err == nil; h, err = srcTar.Next() {
-				files = append(files, h.Name)
-				m.log.debugf("artifact found: %s", h.Name)
-				err = dstTar.WriteHeader(h)
-				if err != nil {
-					m.log.errorf("could not write header to artifacts file: %s", err)
-					return err
+			if len(files) == 0 {
+				if err := os.Remove(artifactsPath); err != nil &&
+					!errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf(
+						"could not remove empty artifact archive: %w",
+						err,
+					)
 				}
-
-				if h.Typeflag != tar.TypeDir {
-					_, err = io.Copy(dstTar, srcTar)
-					if err != nil {
-						m.log.errorf("could not write body to artifacts file: %s", err)
-						return err
-					}
-				}
-			}
-
-			if err != io.EOF {
-				m.log.errorf("error occurred during copy of artifacts: %s", err)
-				return err
-			}
-
-			err = dstTar.Close()
-			if err != nil {
-				m.log.errorf("error closing artifacts tar file: %s", err)
-				return err
-			}
-
-			err = srcGz.Close()
-			if err != nil {
-				m.log.errorf("error closing GZIP decoder: %s", err)
-				return err
-			}
-
-			err = dstGz.Close()
-			if err != nil {
-				m.log.errorf("error closing GZIP encoder: %s", err)
-				return err
-			}
-
-			err = artifactsFile.Close()
-			if err != nil {
-				m.log.errorf("error occurred when closing artifacts: %s", err)
-				return err
 			}
 		}
 	}
@@ -866,6 +1075,17 @@ func (m *Manager) executeBuild(
 		err = errors.New("'flag' missing in metadata.json")
 		m.log.error(err)
 		return err
+	}
+	maxFlagBytes := m.policy.MaxSolverFlagBytes
+	if maxFlagBytes == 0 {
+		maxFlagBytes = 4 * 1024
+	}
+	if int64(len(flag)) > maxFlagBytes {
+		return fmt.Errorf(
+			"build flag is %d bytes; maximum is %d",
+			len(flag),
+			maxFlagBytes,
+		)
 	}
 
 	bMeta.Flag = flag
@@ -892,10 +1112,22 @@ func (m *Manager) executeBuild(
 	return err
 }
 
-func (m *Manager) startNetwork(instance *InstanceMetadata, opts NetworkOptions) error {
-	netSpec := client.NetworkCreateOptions{
-		Driver: "bridge",
+func challengeNetworkCreateOptions(opts NetworkOptions) client.NetworkCreateOptions {
+	options := client.NetworkCreateOptions{Driver: "bridge"}
+	if !opts.AllowEgress {
+		// Docker's Internal setting also suppresses host port publishing on
+		// current engines. Disabling masquerading instead preserves published
+		// ingress while preventing Internet egress in the standard bridge/NAT
+		// topology used by cmgr's Linux deployments.
+		options.Options = map[string]string{
+			"com.docker.network.bridge.enable_ip_masquerade": "false",
+		}
 	}
+	return options
+}
+
+func (m *Manager) startNetwork(instance *InstanceMetadata, opts NetworkOptions) error {
+	netSpec := challengeNetworkCreateOptions(opts)
 	netname := instance.getNetworkName()
 	_, err := m.cli.NetworkCreate(m.ctx, netname, netSpec)
 	if err != nil {
@@ -965,6 +1197,7 @@ func (m *Manager) startContainersWithPersistence(
 		}
 		exposedPorts := network.PortSet{}
 		publishedPorts := network.PortMap{}
+		expectedPorts := make(map[network.Port]string, len(image.Ports))
 		for _, portStr := range image.Ports {
 			port, err := network.ParsePort(portStr)
 			if err != nil {
@@ -982,6 +1215,7 @@ func (m *Manager) startContainersWithPersistence(
 					image.Host,
 				)
 			}
+			expectedPorts[port] = portName
 			hostPort, err := m.selectHostPort(portName, preferredPorts)
 			if err != nil {
 				return err
@@ -1010,6 +1244,12 @@ func (m *Manager) startContainersWithPersistence(
 		if image.Host == "builder" {
 			hasContainerOpts = false
 		}
+		cOpts = mergeRuntimeDefaults(m.runtimeDefaults, cOpts)
+		hasContainerOpts = hasContainerOpts ||
+			cOpts.Cpus != "" ||
+			cOpts.Memory != "" ||
+			cOpts.PidsLimit != 0 ||
+			len(cOpts.Ulimits) != 0
 		if hasContainerOpts {
 			hConfig.Init = &cOpts.Init
 			if cOpts.Cpus != "" {
@@ -1025,6 +1265,7 @@ func (m *Manager) startContainersWithPersistence(
 					return err
 				}
 				hConfig.Memory = memoryBytes
+				hConfig.MemorySwap = memoryBytes
 			}
 			if len(cOpts.Ulimits) > 0 {
 				limits := make([]*units.Ulimit, len(cOpts.Ulimits))
@@ -1046,14 +1287,13 @@ func (m *Manager) startContainersWithPersistence(
 				hConfig.SecurityOpt = append(hConfig.SecurityOpt, "no-new-privileges:true")
 			}
 			if cOpts.DiskQuota != "" {
-				_, quotas_enabled := os.LookupEnv(DISK_QUOTA_ENV)
-				if quotas_enabled {
+				if m.diskQuotasEnabled.Load() {
 					var storageOpt = map[string]string{
 						"size": cOpts.DiskQuota,
 					}
 					hConfig.StorageOpt = storageOpt
 				} else {
-					m.log.warnf("disk quota for %s container '%s' ignored (disk quotas are not enabled)", build.Challenge, image.Host)
+					m.log.warnf("disk quota for %s container '%s' ignored (disk quotas are unavailable or not enabled)", build.Challenge, image.Host)
 				}
 			}
 			if cOpts.CgroupParent != "" {
@@ -1111,14 +1351,28 @@ func (m *Manager) startContainersWithPersistence(
 			},
 		}
 
+		createOptions := client.ContainerCreateOptions{
+			Config:           &cConfig,
+			HostConfig:       &hConfig,
+			NetworkingConfig: &nConfig,
+		}
 		respCC, err := m.cli.ContainerCreate(
 			m.ctx,
-			client.ContainerCreateOptions{
-				Config:           &cConfig,
-				HostConfig:       &hConfig,
-				NetworkingConfig: &nConfig,
-			},
+			createOptions,
 		)
+		if err != nil &&
+			len(hConfig.StorageOpt) != 0 &&
+			unsupportedStorageQuotaError(err) {
+			m.diskQuotasEnabled.Store(false)
+			hConfig.StorageOpt = nil
+			m.log.warnf(
+				"disk quota for %s container %q ignored after Docker rejected quota support: %v",
+				build.Challenge,
+				image.Host,
+				err,
+			)
+			respCC, err = m.cli.ContainerCreate(m.ctx, createOptions)
+		}
 		if err != nil {
 			m.log.errorf("failed to create instance container: %s", err)
 			return err
@@ -1126,6 +1380,16 @@ func (m *Manager) startContainersWithPersistence(
 
 		cid := respCC.ID
 		instance.Containers = append(instance.Containers, cid)
+		// Treat every new container as retired until its active instance
+		// metadata commits. If cmgr exits between Docker creation and the
+		// database cutover, startup recovery can still remove it.
+		if err := m.retireContainer(cid); err != nil {
+			return fmt.Errorf(
+				"could not record pending container %s: %w",
+				cid,
+				err,
+			)
+		}
 		m.log.infof("created new image: %s", cid)
 
 		_, err = m.cli.ContainerStart(m.ctx, cid, client.ContainerStartOptions{})
@@ -1134,9 +1398,8 @@ func (m *Manager) startContainersWithPersistence(
 			return err
 		}
 
-		backoff := time.Millisecond
 		done := false
-		for !done && backoff < time.Second {
+		for backoff := time.Millisecond; backoff < time.Second; backoff *= 2 {
 			m.log.debug("Querying docker for port info...")
 
 			cInfo, err := m.cli.ContainerInspect(
@@ -1148,35 +1411,27 @@ func (m *Manager) startContainersWithPersistence(
 				m.log.errorf("failed to get container info: %s", err)
 				return err
 			}
-			done = true
-
-			for cPort, hPortInfo := range cInfo.Container.NetworkSettings.Ports {
-				if len(hPortInfo) == 0 {
-					done = false
-					time.Sleep(backoff)
-					backoff = 2 * backoff
-					break
-				}
-
-				hPort, err := strconv.Atoi(string(hPortInfo[0].HostPort))
-				if err != nil {
-					return err
-				}
-				endpoint := challengePortEndpoint{
-					Host: image.Host,
-					Port: cPort.String(),
-				}
-				portName, ok := revPortMap[endpoint]
-				if !ok {
-					return fmt.Errorf(
-						"could not find the challenge port name for %s on host %s",
-						cPort,
-						image.Host,
+			assignments, ready, err := inspectedPortAssignments(
+				cid,
+				expectedPorts,
+				cInfo.Container,
+			)
+			if err != nil {
+				return err
+			}
+			if ready {
+				for portName, hostPort := range assignments {
+					instance.Ports[portName] = hostPort
+					m.log.debugf(
+						"container port %s mapped to %d",
+						portName,
+						hostPort,
 					)
 				}
-				instance.Ports[portName] = hPort
-				m.log.debugf("container port %s mapped to %s", cPort, hPortInfo[0].HostPort)
+				done = true
+				break
 			}
+			time.Sleep(backoff)
 		}
 		if !done {
 			return fmt.Errorf(
@@ -1190,6 +1445,55 @@ func (m *Manager) startContainersWithPersistence(
 		return m.finalizeInstance(instance)
 	}
 	return nil
+}
+
+func inspectedPortAssignments(
+	containerID string,
+	expectedPorts map[network.Port]string,
+	inspection container.InspectResponse,
+) (map[string]int, bool, error) {
+	state := inspection.State
+	if state == nil {
+		return nil, false, fmt.Errorf(
+			"container %s inspection omitted runtime state",
+			containerID,
+		)
+	}
+	if !state.Running || state.Paused || state.Restarting || state.Dead {
+		return nil, false, fmt.Errorf(
+			"container %s failed to remain running (status %q, exit code %d, error %q)",
+			containerID,
+			state.Status,
+			state.ExitCode,
+			state.Error,
+		)
+	}
+	if len(expectedPorts) == 0 {
+		return map[string]int{}, true, nil
+	}
+	if inspection.NetworkSettings == nil {
+		return nil, false, nil
+	}
+
+	assignments := make(map[string]int, len(expectedPorts))
+	for containerPort, portName := range expectedPorts {
+		hostPortInfo := inspection.NetworkSettings.Ports[containerPort]
+		if len(hostPortInfo) == 0 {
+			return nil, false, nil
+		}
+		hostPort, err := strconv.Atoi(string(hostPortInfo[0].HostPort))
+		if err != nil || hostPort <= 0 || hostPort >= 1<<16 {
+			return nil, false, fmt.Errorf(
+				"container %s reported invalid host port %q for %s: %v",
+				containerID,
+				hostPortInfo[0].HostPort,
+				containerPort,
+				err,
+			)
+		}
+		assignments[portName] = hostPort
+	}
+	return assignments, true, nil
 }
 
 func (m *Manager) selectHostPort(
@@ -1273,7 +1577,9 @@ func (m *Manager) prepareInstanceCutover(
 		current.Ports,
 	); err != nil {
 		var recoveryProblems []string
-		if cleanupErr := m.removeContainerIDs(candidate.Containers); cleanupErr != nil {
+		if cleanupErr := m.removeRetiredContainerIDs(
+			candidate.Containers,
+		); cleanupErr != nil {
 			recoveryProblems = append(
 				recoveryProblems,
 				fmt.Sprintf("remove replacement containers: %v", cleanupErr),
@@ -1298,7 +1604,9 @@ func (m *Manager) prepareInstanceCutover(
 
 	if err := m.replaceInstanceRuntimeMetadata(candidate); err != nil {
 		var recoveryProblems []string
-		if cleanupErr := m.removeContainerIDs(candidate.Containers); cleanupErr != nil {
+		if cleanupErr := m.removeRetiredContainerIDs(
+			candidate.Containers,
+		); cleanupErr != nil {
 			recoveryProblems = append(
 				recoveryProblems,
 				fmt.Sprintf("remove replacement containers: %v", cleanupErr),
@@ -1326,11 +1634,16 @@ func (m *Manager) prepareInstanceCutover(
 
 func (m *Manager) rollbackInstanceCutover(cutover *instanceCutover) error {
 	var problems []string
-	if err := m.removeContainerIDs(cutover.candidate.Containers); err != nil {
-		problems = append(problems, fmt.Sprintf("remove replacement containers: %v", err))
-	}
+	// Restore the durable ownership record before removing the replacement.
+	// If cmgr exits after this commit, startup recovery sees the replacement as
+	// retired and the old containers as active, and can finish both operations.
 	if err := m.replaceInstanceRuntimeMetadata(cutover.old); err != nil {
-		problems = append(problems, fmt.Sprintf("restore instance metadata: %v", err))
+		return fmt.Errorf("restore instance metadata: %w", err)
+	}
+	if err := m.removeRetiredContainerIDs(
+		cutover.candidate.Containers,
+	); err != nil {
+		problems = append(problems, fmt.Sprintf("remove replacement containers: %v", err))
 	}
 	if err := m.resumeContainerProcesses(cutover.old.Containers); err != nil {
 		problems = append(problems, fmt.Sprintf("restart old containers: %v", err))
@@ -1342,7 +1655,7 @@ func (m *Manager) rollbackInstanceCutover(cutover *instanceCutover) error {
 }
 
 func (m *Manager) finishInstanceCutover(cutover *instanceCutover) error {
-	return m.removeContainerIDs(cutover.old.Containers)
+	return m.removeRetiredContainerIDs(cutover.old.Containers)
 }
 
 // pauseContainerProcesses stops containers without removing them or their
@@ -1385,44 +1698,168 @@ func (m *Manager) resumeContainerProcesses(containerIDs []string) error {
 	return nil
 }
 
-func (m *Manager) removeContainerIDs(containerIDs []string) error {
-	var firstErr error
+func (m *Manager) removeRetiredContainerIDs(containerIDs []string) error {
+	var errs []error
 	for _, containerID := range containerIDs {
 		_, err := m.cli.ContainerRemove(
 			m.ctx,
 			containerID,
 			client.ContainerRemoveOptions{RemoveVolumes: true, Force: true},
 		)
-		if err != nil && !errdefs.IsNotFound(err) && firstErr == nil {
-			firstErr = err
+		if err != nil && !errdefs.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("remove retired container %s: %w", containerID, err))
+			continue
+		}
+		if err := m.forgetRetiredContainer(containerID); err != nil {
+			errs = append(errs, fmt.Errorf("forget retired container %s: %w", containerID, err))
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
+}
+
+func (m *Manager) retryRetiredResources() error {
+	var errs []error
+	containerIDs, err := m.retiredContainerIDs()
+	if err != nil {
+		errs = append(errs, err)
+	} else if err := m.removeRetiredContainerIDs(containerIDs); err != nil {
+		errs = append(errs, err)
+	}
+	networkNames, err := m.retiredNetworkNames()
+	if err != nil {
+		errs = append(errs, err)
+	} else {
+		for _, networkName := range networkNames {
+			_, removeErr := m.cli.NetworkRemove(
+				m.ctx,
+				networkName,
+				client.NetworkRemoveOptions{},
+			)
+			if removeErr != nil && !errdefs.IsNotFound(removeErr) {
+				errs = append(
+					errs,
+					fmt.Errorf("remove retired network %s: %w", networkName, removeErr),
+				)
+				continue
+			}
+			if forgetErr := m.forgetRetiredNetwork(networkName); forgetErr != nil {
+				errs = append(errs, forgetErr)
+			}
+		}
+	}
+	incompleteInstances, err := m.incompleteInstanceIDs()
+	if err != nil {
+		errs = append(errs, err)
+	} else {
+		for _, instanceID := range incompleteInstances {
+			instance, lookupErr := m.lookupInstanceMetadata(instanceID)
+			if lookupErr != nil {
+				errs = append(errs, lookupErr)
+				continue
+			}
+			if removeErr := m.stopNetwork(instance); removeErr != nil {
+				if retireErr := m.retireNetwork(
+					instance.getNetworkName(),
+				); retireErr != nil {
+					errs = append(errs, retireErr)
+				}
+			}
+			if removeErr := m.removeInstanceMetadata(instanceID); removeErr != nil {
+				errs = append(
+					errs,
+					fmt.Errorf(
+						"remove incomplete instance %d: %w",
+						instanceID,
+						removeErr,
+					),
+				)
+			}
+		}
+	}
+	trackedContainers, err := m.trackedContainerIDs()
+	if err != nil {
+		errs = append(errs, err)
+	} else {
+		for _, containerID := range trackedContainers {
+			inspection, inspectErr := m.cli.ContainerInspect(
+				m.ctx,
+				containerID,
+				client.ContainerInspectOptions{},
+			)
+			if inspectErr != nil {
+				errs = append(
+					errs,
+					fmt.Errorf(
+						"inspect tracked container %s: %w",
+						containerID,
+						inspectErr,
+					),
+				)
+				continue
+			}
+			if inspection.Container.State != nil &&
+				!inspection.Container.State.Running {
+				if _, startErr := m.cli.ContainerStart(
+					m.ctx,
+					containerID,
+					client.ContainerStartOptions{},
+				); startErr != nil {
+					errs = append(
+						errs,
+						fmt.Errorf(
+							"restart tracked container %s: %w",
+							containerID,
+							startErr,
+						),
+					)
+				}
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // stopContainers permanently removes an instance's containers and their
 // runtime metadata. Staged updates use pauseContainerProcesses instead.
 func (m *Manager) stopContainers(instance *InstanceMetadata) error {
-	var err error
+	var errs []error
+	remaining := make([]string, 0, len(instance.Containers))
 	for _, cid := range instance.Containers {
 		opts := client.ContainerRemoveOptions{RemoveVolumes: true, Force: true}
-		_, err = m.cli.ContainerRemove(m.ctx, cid, opts)
+		_, err := m.cli.ContainerRemove(m.ctx, cid, opts)
 		if err != nil {
 			if errdefs.IsNotFound(err) {
 				m.log.warnf("skipped removing container (not found): %s", cid)
-				err = nil
 			} else {
 				m.log.errorf("failed to remove container: %s", err)
+				errs = append(errs, fmt.Errorf("remove container %s: %w", cid, err))
+				remaining = append(remaining, cid)
+				continue
 			}
+		}
+		if err := m.removeContainerMetadata(instance.Id, cid); err != nil {
+			errs = append(errs, fmt.Errorf("forget container %s: %w", cid, err))
+			remaining = append(remaining, cid)
+			continue
+		}
+		if err := m.forgetRetiredContainer(cid); err != nil {
+			errs = append(
+				errs,
+				fmt.Errorf("forget pending container %s: %w", cid, err),
+			)
+			remaining = append(remaining, cid)
 		}
 	}
 
-	mdErr := m.removeContainersMetadata(instance)
-	if mdErr != nil {
-		err = mdErr
+	instance.Containers = remaining
+	if len(remaining) == 0 {
+		if err := m.removeInstancePorts(instance.Id); err != nil {
+			errs = append(errs, fmt.Errorf("release instance ports: %w", err))
+		} else {
+			instance.Ports = make(map[string]int)
+		}
 	}
-
-	return err
+	return errors.Join(errs...)
 }
 
 func (m *Manager) destroyImages(build BuildId) error {
@@ -1431,10 +1868,16 @@ func (m *Manager) destroyImages(build BuildId) error {
 	if err != nil {
 		return err
 	}
-
-	err = m.removeBuildMetadata(build)
+	instances, err := m.getBuildInstances(build)
 	if err != nil {
 		return err
+	}
+	if len(instances) != 0 {
+		return &ConflictError{Err: fmt.Errorf(
+			"cannot destroy build %d while %d instances remain",
+			build,
+			len(instances),
+		)}
 	}
 
 	if bMeta.HasArtifacts {
@@ -1466,7 +1909,7 @@ func (m *Manager) destroyImages(build BuildId) error {
 		}
 	}
 
-	return nil
+	return m.removeBuildMetadata(build)
 }
 
 func configureContainerSeccomp(

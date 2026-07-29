@@ -20,6 +20,10 @@ func main() {
 		printOuterUsage(os.Args[0])
 		os.Exit(NO_ERROR)
 	}
+	if os.Args[1] == "version" {
+		fmt.Println(cmgr.Version())
+		os.Exit(NO_ERROR)
+	}
 
 	var logLevel cmgr.LogLevel
 	log_env, _ := os.LookupEnv(cmgr.LOGGING_ENV)
@@ -89,9 +93,6 @@ func main() {
 		exitCode = showSchema(mgr, cmdArgs)
 	case "playtest":
 		exitCode = playtestChallenge(mgr, cmdArgs)
-	case "version":
-		fmt.Println(cmgr.Version())
-		exitCode = NO_ERROR
 	case "help":
 		printOuterUsage(os.Args[0])
 		exitCode = NO_ERROR

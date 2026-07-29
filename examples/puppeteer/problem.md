@@ -62,3 +62,9 @@ database.
 - difficulty: Medium
 - organization: GRIMM
 - event: aacs4
+
+## Challenge Options
+
+```yaml
+allow_egress: true
+```

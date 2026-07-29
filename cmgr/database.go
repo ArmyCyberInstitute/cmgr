@@ -20,6 +20,8 @@ const schemaQuery string = `
 		details TEXT,
 		sourcechecksum INT NOT NULL,
 		metadatachecksum INT NOT NULL,
+		sourcedigest TEXT NOT NULL DEFAULT '',
+		metadatadigest TEXT NOT NULL DEFAULT '',
 		path TEXT NOT NULL,
 		solvescript INTEGER NOT NULL CHECK(solvescript == 0 OR solvescript == 1),
 		templatable INTEGER NOT NULL CHECK(templatable == 0 OR templatable == 1),
@@ -86,6 +88,11 @@ const schemaQuery string = `
 		ON portNames(challenge, name);
 	CREATE UNIQUE INDEX IF NOT EXISTS portNamesEndpointIndex
 		ON portNames(challenge, host, port);
+
+	CREATE TABLE IF NOT EXISTS schemas (
+		name TEXT NOT NULL PRIMARY KEY,
+		manual INTEGER NOT NULL CHECK(manual = 0 OR manual = 1)
+	);
 
 	CREATE TABLE IF NOT EXISTS builds (
 		id INTEGER PRIMARY KEY,
@@ -161,14 +168,20 @@ const schemaQuery string = `
 			ON UPDATE RESTRICT ON DELETE CASCADE
 	);
 
-	-- There are currently not any network-level challenge options, so this table is not created.
-	-- However, this is kept as a placeholder in case additional options are added in the future.
-	--
-	-- CREATE TABLE IF NOT EXISTS networkOptions (
-	--	challenge INTEGER NOT NULL,
-	--	FOREIGN KEY (challenge) REFERENCES challenges (id)
-	--		ON UPDATE CASCADE ON DELETE CASCADE
-	--);
+	CREATE TABLE IF NOT EXISTS retiredContainers (
+		id TEXT NOT NULL PRIMARY KEY
+	);
+
+	CREATE TABLE IF NOT EXISTS retiredNetworks (
+		name TEXT NOT NULL PRIMARY KEY
+	);
+
+	CREATE TABLE IF NOT EXISTS networkOptions (
+		challenge TEXT NOT NULL PRIMARY KEY,
+		allowegress INTEGER NOT NULL CHECK(allowegress = 0 OR allowegress = 1),
+		FOREIGN KEY (challenge) REFERENCES challenges (id)
+			ON UPDATE CASCADE ON DELETE CASCADE
+	);
 
 	CREATE TABLE IF NOT EXISTS containerOptions (
 		challenge INTEGER NOT NULL,
@@ -191,7 +204,8 @@ const schemaQuery string = `
 		ON containerOptions(challenge, host);`
 
 const (
-	currentDatabaseVersion = 1
+	currentDatabaseVersion = 2
+	sqliteBusyTimeoutMS    = 5000
 
 	databaseV1IndexesQuery = `
 		CREATE UNIQUE INDEX IF NOT EXISTS hostsOrderIndex
@@ -261,6 +275,33 @@ const (
 				cgroupparent,
 				seccomp
 		);`
+
+	databaseV1ToV2Query = `
+		CREATE TABLE IF NOT EXISTS schemas (
+			name TEXT NOT NULL PRIMARY KEY,
+			manual INTEGER NOT NULL CHECK(manual = 0 OR manual = 1)
+		);
+		INSERT OR IGNORE INTO schemas(name, manual)
+		SELECT DISTINCT
+			schema,
+			CASE WHEN substr(schema, 1, 7) = 'manual-' THEN 1 ELSE 0 END
+		FROM builds;
+
+		CREATE TABLE IF NOT EXISTS networkOptions (
+			challenge TEXT NOT NULL PRIMARY KEY,
+			allowegress INTEGER NOT NULL CHECK(allowegress = 0 OR allowegress = 1),
+			FOREIGN KEY (challenge) REFERENCES challenges (id)
+				ON UPDATE CASCADE ON DELETE CASCADE
+		);
+		INSERT OR IGNORE INTO networkOptions(challenge, allowegress)
+		SELECT id, 0 FROM challenges;
+
+		CREATE TABLE IF NOT EXISTS retiredContainers (
+			id TEXT NOT NULL PRIMARY KEY
+		);
+		CREATE TABLE IF NOT EXISTS retiredNetworks (
+			name TEXT NOT NULL PRIMARY KEY
+		);`
 )
 
 type databaseMigration struct {
@@ -277,6 +318,10 @@ var databaseMigrations = map[int]databaseMigration{
 	0: {
 		to:    1,
 		apply: migrateDatabaseV0ToV1,
+	},
+	1: {
+		to:    2,
+		apply: migrateDatabaseV1ToV2,
 	},
 }
 
@@ -526,6 +571,187 @@ func migrateDatabaseV0ToV1(txn *sqlx.Tx) error {
 	return nil
 }
 
+func migrateDatabaseV1ToV2(txn *sqlx.Tx) error {
+	if err := addDatabaseColumnIfMissing(
+		txn,
+		"challenges",
+		"sourcedigest",
+		"SELECT COUNT(*) FROM pragma_table_info('challenges') WHERE name = 'sourcedigest';",
+		"ALTER TABLE challenges ADD COLUMN sourcedigest TEXT NOT NULL DEFAULT '';",
+	); err != nil {
+		return err
+	}
+	if err := addDatabaseColumnIfMissing(
+		txn,
+		"challenges",
+		"metadatadigest",
+		"SELECT COUNT(*) FROM pragma_table_info('challenges') WHERE name = 'metadatadigest';",
+		"ALTER TABLE challenges ADD COLUMN metadatadigest TEXT NOT NULL DEFAULT '';",
+	); err != nil {
+		return err
+	}
+	if _, err := txn.Exec(databaseV1ToV2Query); err != nil {
+		return fmt.Errorf("could not create version 2 database objects: %w", err)
+	}
+	return nil
+}
+
+var currentDatabaseColumns = map[string][]string{
+	"challenges": {
+		"id", "name", "namespace", "challengetype", "description", "details",
+		"sourcechecksum", "metadatachecksum", "sourcedigest", "metadatadigest",
+		"path", "solvescript", "templatable", "maxusers", "category", "points",
+	},
+	"hints":             {"challenge", "idx", "hint"},
+	"tags":              {"challenge", "tag"},
+	"attributes":        {"challenge", "key", "value"},
+	"hosts":             {"challenge", "name", "idx", "target"},
+	"portNames":         {"challenge", "name", "host", "port"},
+	"schemas":           {"name", "manual"},
+	"builds":            {"id", "flag", "format", "seed", "hasartifacts", "lastsolved", "challenge", "schema", "instancecount", "requiredseccomptweaks"},
+	"images":            {"id", "build", "host"},
+	"imagePorts":        {"image", "port"},
+	"lookupData":        {"build", "key", "value"},
+	"instances":         {"id", "lastsolved", "build"},
+	"portAssignments":   {"instance", "name", "port"},
+	"containers":        {"instance", "id"},
+	"retiredContainers": {"id"},
+	"retiredNetworks":   {"name"},
+	"networkOptions":    {"challenge", "allowegress"},
+	"containerOptions": {
+		"challenge", "host", "init", "cpus", "memory", "ulimits", "pidslimit",
+		"readonlyrootfs", "droppedcaps", "nonewprivileges", "diskquota",
+		"cgroupparent", "seccomp",
+	},
+}
+
+var currentDatabaseIndexes = []string{
+	"tagIndex",
+	"attributeIndex",
+	"hostsIndex",
+	"hostsOrderIndex",
+	"portNamesNameIndex",
+	"portNamesEndpointIndex",
+	"schemaIndex",
+	"imagesHostIndex",
+	"imagePortsPortIndex",
+	"lookupDataKeyIndex",
+	"portAssignmentsNameIndex",
+	"portAssignmentsPortIndex",
+	"containerOptionsHostIndex",
+}
+
+var currentDatabaseInvariants = []databaseConflictCheck{
+	{
+		invariant: "every build belongs to a defined schema",
+		query: `
+			SELECT printf('build=%d, schema=%Q', builds.id, builds.schema)
+			FROM builds
+			LEFT JOIN schemas ON schemas.name = builds.schema
+			WHERE schemas.name IS NULL
+			LIMIT 1;`,
+	},
+	{
+		invariant: "every challenge has network options",
+		query: `
+			SELECT printf('challenge=%Q', challenges.id)
+			FROM challenges
+			LEFT JOIN networkOptions
+				ON networkOptions.challenge = challenges.id
+			WHERE networkOptions.challenge IS NULL
+			LIMIT 1;`,
+	},
+	{
+		invariant: "active containers are not pending cleanup",
+		query: `
+			SELECT printf('container=%Q', containers.id)
+			FROM containers
+			JOIN retiredContainers ON retiredContainers.id = containers.id
+			LIMIT 1;`,
+	},
+}
+
+func validateCurrentDatabaseSchema(db *sqlx.DB) error {
+	for table, requiredColumns := range currentDatabaseColumns {
+		var tableCount int
+		if err := db.Get(
+			&tableCount,
+			"SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?;",
+			table,
+		); err != nil {
+			return fmt.Errorf("could not inspect table %s: %w", table, err)
+		}
+		if tableCount != 1 {
+			return fmt.Errorf("database version %d is missing required table %q", currentDatabaseVersion, table)
+		}
+
+		type columnInfo struct {
+			Name string
+		}
+		columns := []columnInfo{}
+		if err := db.Select(
+			&columns,
+			fmt.Sprintf("SELECT name FROM pragma_table_info(%q);", table),
+		); err != nil {
+			return fmt.Errorf("could not inspect columns for table %s: %w", table, err)
+		}
+		present := make(map[string]struct{}, len(columns))
+		for _, column := range columns {
+			present[column.Name] = struct{}{}
+		}
+		for _, column := range requiredColumns {
+			if _, ok := present[column]; !ok {
+				return fmt.Errorf(
+					"database version %d is missing required column %s.%s",
+					currentDatabaseVersion,
+					table,
+					column,
+				)
+			}
+		}
+	}
+
+	for _, index := range currentDatabaseIndexes {
+		var indexCount int
+		if err := db.Get(
+			&indexCount,
+			"SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name=?;",
+			index,
+		); err != nil {
+			return fmt.Errorf("could not inspect index %s: %w", index, err)
+		}
+		if indexCount != 1 {
+			return fmt.Errorf("database version %d is missing required index %q", currentDatabaseVersion, index)
+		}
+	}
+
+	rows, err := db.Queryx("PRAGMA foreign_key_check;")
+	if err != nil {
+		return fmt.Errorf("could not check database foreign keys: %w", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return errors.New("database contains foreign-key violations")
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("could not check database foreign keys: %w", err)
+	}
+	for _, check := range currentDatabaseInvariants {
+		var conflicts []string
+		if err := db.Select(&conflicts, check.query); err != nil {
+			return fmt.Errorf("could not validate %s: %w", check.invariant, err)
+		}
+		if len(conflicts) != 0 {
+			return fmt.Errorf(
+				"database violates invariant %q (%s)",
+				check.invariant,
+				conflicts[0],
+			)
+		}
+	}
+	return nil
+}
+
 func migrateDatabase(db *sqlx.DB, fromVersion int) error {
 	version := fromVersion
 	for version < currentDatabaseVersion {
@@ -583,12 +809,18 @@ func ensureDatabaseSchema(db *sqlx.DB) error {
 				version,
 			)
 		}
-		return createCurrentDatabaseSchema(db)
+		if err := createCurrentDatabaseSchema(db); err != nil {
+			return err
+		}
+		return validateCurrentDatabaseSchema(db)
 	}
 	if version == currentDatabaseVersion {
-		return nil
+		return validateCurrentDatabaseSchema(db)
 	}
-	return migrateDatabase(db, version)
+	if err := migrateDatabase(db, version); err != nil {
+		return err
+	}
+	return validateCurrentDatabaseSchema(db)
 }
 
 // Connects to the desired database (creating it if it does not exist) and then
@@ -600,7 +832,12 @@ func (m *Manager) initDatabase() error {
 		dbPath = "cmgr.db"
 	}
 
-	db, err := sqlx.Open("sqlite", dbPath+"?_pragma=foreign_keys(1)")
+	dataSourceName := fmt.Sprintf(
+		"%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)",
+		dbPath,
+		sqliteBusyTimeoutMS,
+	)
+	db, err := sqlx.Open("sqlite", dataSourceName)
 	if err != nil {
 		m.log.errorf("could not open database: %s", err)
 		return err
@@ -623,6 +860,20 @@ func (m *Manager) initDatabase() error {
 	if !fkeysEnforced {
 		m.log.errorf("foreign keys not enabled")
 		return errors.New("foreign keys not enabled")
+	}
+
+	var busyTimeoutMS int
+	err = db.QueryRow("PRAGMA busy_timeout;").Scan(&busyTimeoutMS)
+	if err != nil {
+		m.log.errorf("could not check SQLite busy timeout: %s", err)
+		return err
+	}
+	if busyTimeoutMS != sqliteBusyTimeoutMS {
+		return fmt.Errorf(
+			"SQLite busy timeout is %dms; expected %dms",
+			busyTimeoutMS,
+			sqliteBusyTimeoutMS,
+		)
 	}
 
 	if err = ensureDatabaseSchema(db); err != nil {

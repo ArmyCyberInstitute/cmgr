@@ -1,10 +1,11 @@
 package cmgr
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/rand"
-	"time"
+	"strings"
 
 	"github.com/ArmyCyberInstitute/cmgr/cmgr/dockerfiles"
 )
@@ -28,11 +29,16 @@ func Version() string {
 func NewManager(logLevel LogLevel) *Manager {
 	mgr := new(Manager)
 	mgr.log = newLogger(logLevel)
-	mgr.rand = rand.New(rand.NewSource(time.Now().UnixNano()))
+	mgr.buildLocks = make(map[string]*buildLock)
 
 	mgr.log.infof("version: %s", Version())
 
 	if err := mgr.setDirectories(); err != nil {
+		return nil
+	}
+
+	if err := mgr.initPolicy(); err != nil {
+		mgr.log.error(err)
 		return nil
 	}
 
@@ -44,7 +50,77 @@ func NewManager(logLevel LogLevel) *Manager {
 		return nil
 	}
 
+	if err := mgr.retryRetiredResources(); err != nil {
+		mgr.log.warnf("could not finish deferred Docker cleanup: %v", err)
+	}
+
 	return mgr
+}
+
+func randomIdentifier() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("could not generate random identifier: %w", err)
+	}
+	return hex.EncodeToString(value[:]), nil
+}
+
+const maxFlagFormatBytes = 128
+
+func validateFlagFormat(format string) error {
+	if len(format) > maxFlagFormatBytes {
+		return fmt.Errorf(
+			"flag format is %d bytes; maximum is %d",
+			len(format),
+			maxFlagFormatBytes,
+		)
+	}
+	if strings.Count(format, "%s") != 1 {
+		return errors.New("flag format must contain exactly one literal %s placeholder")
+	}
+	if strings.Count(format, "%") != 1 {
+		return errors.New("flag format cannot contain directives other than one literal %s")
+	}
+	return nil
+}
+
+func validateSeeds(seeds []int) error {
+	seen := make(map[int]struct{}, len(seeds))
+	for _, seed := range seeds {
+		if _, exists := seen[seed]; exists {
+			return fmt.Errorf("seed %d is specified more than once", seed)
+		}
+		seen[seed] = struct{}{}
+	}
+	return nil
+}
+
+func validateSchemaDefinition(schema *Schema) error {
+	if schema == nil {
+		return errors.New("schema definition cannot be null")
+	}
+	if schema.Name == "" {
+		return errors.New("schema name cannot be empty")
+	}
+	if strings.HasPrefix(schema.Name, manualSchemaPrefix) {
+		return fmt.Errorf("schema names beginning with %q are reserved", manualSchemaPrefix)
+	}
+	if err := validateFlagFormat(schema.FlagFormat); err != nil {
+		return err
+	}
+	for challenge, spec := range schema.Challenges {
+		if spec.InstanceCount < DYNAMIC_INSTANCES {
+			return fmt.Errorf(
+				"challenge %q has invalid instance_count %d; use -1 for dynamic instances or a non-negative value",
+				challenge,
+				spec.InstanceCount,
+			)
+		}
+		if err := validateSeeds(spec.Seeds); err != nil {
+			return fmt.Errorf("challenge %q: %w", challenge, err)
+		}
+	}
+	return nil
 }
 
 // Traverses the entire directory and captures all valid challenge
@@ -88,8 +164,10 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 			continue
 		}
 
-		sourceChanged := curr.SourceChecksum != newMeta.SourceChecksum
-		metadataChanged := curr.MetadataChecksum != newMeta.MetadataChecksum
+		sourceChanged := curr.SourceDigest == "" ||
+			curr.SourceDigest != newMeta.SourceDigest
+		metadataChanged := curr.MetadataDigest == "" ||
+			curr.MetadataDigest != newMeta.MetadataDigest
 		solvescriptChanged := curr.SolveScript != newMeta.SolveScript
 		currentMetadata, err := m.lookupChallengeMetadata(curr.Id)
 		if err != nil {
@@ -198,7 +276,23 @@ func (m *Manager) Freeze(challenge ChallengeId, force bool) error {
 // challenges harder.  This feature is opt-in by setting the
 // `CMGR_REGISTRY` environment variable.
 func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) ([]*BuildMetadata, error) {
-	schema := fmt.Sprintf("%s%x", manualSchemaPrefix, m.rand.Int63())
+	if len(seeds) == 0 {
+		return nil, invalidInput(errors.New("at least one seed is required"))
+	}
+	if err := validateFlagFormat(flagFormat); err != nil {
+		return nil, invalidInput(err)
+	}
+	if err := validateSeeds(seeds); err != nil {
+		return nil, invalidInput(err)
+	}
+	if err := m.validateSeedLimit(len(seeds)); err != nil {
+		return nil, invalidInput(err)
+	}
+	randomSuffix, err := randomIdentifier()
+	if err != nil {
+		return nil, err
+	}
+	schema := manualSchemaPrefix + randomSuffix
 	instanceCount := -1
 
 	builds := make([]*BuildMetadata, len(seeds))
@@ -211,7 +305,28 @@ func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) (
 			InstanceCount: instanceCount,
 		}
 	}
-	err := m.generateBuilds(builds)
+	err = m.createSchemaRecord(schema, true)
+	if err != nil {
+		return nil, err
+	}
+	err = m.generateBuilds(builds)
+	if err != nil {
+		var cleanupErrors []error
+		buildIDs, lookupErr := m.getSchemaBuilds(schema)
+		if lookupErr != nil {
+			cleanupErrors = append(cleanupErrors, lookupErr)
+		} else {
+			for _, buildID := range buildIDs {
+				if cleanupErr := m.destroyImages(buildID); cleanupErr != nil {
+					cleanupErrors = append(cleanupErrors, cleanupErr)
+				}
+			}
+		}
+		if cleanupErr := m.deleteSchemaRecordIfEmpty(schema); cleanupErr != nil {
+			cleanupErrors = append(cleanupErrors, cleanupErr)
+		}
+		err = errors.Join(append([]error{err}, cleanupErrors...)...)
+	}
 	return builds, err
 }
 
@@ -225,22 +340,49 @@ func (m *Manager) Start(build BuildId) (InstanceId, error) {
 	}
 
 	if bMeta.InstanceCount != DYNAMIC_INSTANCES {
-		return 0, errors.New("locked build: change the schema definition to start more instances")
+		return 0, &ConflictError{Err: errors.New(
+			"locked build: change the schema definition to start more instances",
+		)}
 	}
 
 	return m.newInstance(bMeta)
 }
 
-func (m *Manager) newInstance(build *BuildMetadata) (InstanceId, error) {
+func (m *Manager) newInstance(build *BuildMetadata) (id InstanceId, err error) {
 	iMeta := &InstanceMetadata{
 		Build:      build.Id,
 		Ports:      make(map[string]int),
 		Containers: []string{},
 	}
-	err := m.openInstance(iMeta)
+	err = m.openInstance(iMeta)
 	if err != nil {
 		return 0, err
 	}
+	complete := false
+	defer func() {
+		if complete {
+			return
+		}
+		var cleanupErrs []error
+		if cleanupErr := m.stopContainers(iMeta); cleanupErr != nil {
+			cleanupErrs = append(cleanupErrs, cleanupErr)
+		}
+		for _, containerID := range iMeta.Containers {
+			if cleanupErr := m.retireContainer(containerID); cleanupErr != nil {
+				cleanupErrs = append(cleanupErrs, cleanupErr)
+			}
+		}
+		if cleanupErr := m.stopNetwork(iMeta); cleanupErr != nil {
+			cleanupErrs = append(cleanupErrs, cleanupErr)
+			if retireErr := m.retireNetwork(iMeta.getNetworkName()); retireErr != nil {
+				cleanupErrs = append(cleanupErrs, retireErr)
+			}
+		}
+		if cleanupErr := m.removeInstanceMetadata(iMeta.Id); cleanupErr != nil {
+			cleanupErrs = append(cleanupErrs, cleanupErr)
+		}
+		err = errors.Join(append([]error{err}, cleanupErrs...)...)
+	}()
 
 	cMeta, err := m.GetChallengeMetadata(build.Challenge)
 	if err != nil {
@@ -254,12 +396,11 @@ func (m *Manager) newInstance(build *BuildMetadata) (InstanceId, error) {
 
 	err = m.startContainers(build, iMeta, cMeta.ChallengeOptions.Overrides)
 	if err != nil {
-		// It is possible we are in a partially deployed state.  Make sure
-		// we are torn down, but ignore the returned error.
-		m.stopInstance(iMeta)
+		return 0, err
 	}
 
-	return iMeta.Id, err
+	complete = true
+	return iMeta.Id, nil
 }
 
 // Stops the running "instance".
@@ -277,7 +418,9 @@ func (m *Manager) Stop(instance InstanceId) error {
 	}
 
 	if bMeta.InstanceCount != DYNAMIC_INSTANCES {
-		return errors.New("locked build: change the schema definition to stop this instance")
+		return &ConflictError{Err: errors.New(
+			"locked build: change the schema definition to stop this instance",
+		)}
 	}
 	return m.stopInstance(iMeta)
 }
@@ -304,11 +447,20 @@ func (m *Manager) Destroy(build BuildId) error {
 		return err
 	}
 
-	if bMeta.Schema[:len(manualSchemaPrefix)] != manualSchemaPrefix {
-		return errors.New("locked build: change the schema definition to destroy this build")
+	manual, err := m.schemaIsManual(bMeta.Schema)
+	if err != nil {
+		return err
+	}
+	if !manual {
+		return &ConflictError{Err: errors.New(
+			"locked build: change the schema definition to destroy this build",
+		)}
 	}
 
-	return m.destroyImages(build)
+	if err := m.destroyImages(build); err != nil {
+		return err
+	}
+	return m.deleteSchemaRecordIfEmpty(bMeta.Schema)
 }
 
 // Runs the automated solver against the designated instance.
@@ -323,6 +475,12 @@ func (m *Manager) ListChallenges() []*ChallengeMetadata {
 	return md
 }
 
+// ListChallengesWithError is the error-preserving form used by long-running
+// services. ListChallenges is retained for CLI/API compatibility.
+func (m *Manager) ListChallengesWithError() ([]*ChallengeMetadata, error) {
+	return m.listChallenges()
+}
+
 // Obtains a list of challenges which match on all of the given tags.  If no
 // tags are passed, then it returns the same results as `ListChallenges`.
 // Wildcards are allowed as either '*' or '%' and the search is ASCII case
@@ -330,6 +488,21 @@ func (m *Manager) ListChallenges() []*ChallengeMetadata {
 func (m *Manager) SearchChallenges(tags []string) []*ChallengeMetadata {
 	md, _ := m.searchChallenges(tags)
 	return md
+}
+
+// SearchChallengesWithError is the error-preserving form used by long-running
+// services. SearchChallenges is retained for CLI/API compatibility.
+func (m *Manager) SearchChallengesWithError(
+	tags []string,
+) ([]*ChallengeMetadata, error) {
+	return m.searchChallenges(tags)
+}
+
+func (m *Manager) MaxRequestBytes() int64 {
+	if m.policy.MaxRequestBytes > 0 {
+		return m.policy.MaxRequestBytes
+	}
+	return 1024 * 1024
 }
 
 // Lists all schemas as currently defined in the database.
@@ -343,14 +516,46 @@ func (m *Manager) ListSchemas() ([]string, error) {
 // likely to be extremely time and resource intensive as it will start creating
 // all of the requested builds immediately and not return until complete.
 func (m *Manager) CreateSchema(schema *Schema) []error {
+	if err := validateSchemaDefinition(schema); err != nil {
+		return []error{invalidInput(err)}
+	}
+	for challenge, spec := range schema.Challenges {
+		if err := m.validateSeedLimit(len(spec.Seeds)); err != nil {
+			return []error{invalidInput(fmt.Errorf("challenge %q: %w", challenge, err))}
+		}
+	}
 	exists, err := m.schemaExists(schema.Name)
 	if err != nil {
 		return []error{err}
 	} else if exists {
-		return []error{fmt.Errorf("schema '%s' already exists", schema.Name)}
+		return []error{&ConflictError{Err: fmt.Errorf("schema '%s' already exists", schema.Name)}}
 	}
 
-	return m.convergeSchema(schema)
+	if err := m.createSchemaRecord(schema.Name, false); err != nil {
+		return []error{err}
+	}
+	errs := m.convergeSchema(schema)
+	if len(errs) != 0 {
+		m.schemaMu.Lock()
+		var activeBuilds int
+		if err := m.db.Get(
+			&activeBuilds,
+			`SELECT COUNT(*) FROM builds
+			 WHERE schema = ? AND instancecount != ?;`,
+			schema.Name,
+			LOCKED,
+		); err != nil {
+			errs = append(errs, err)
+		} else if activeBuilds == 0 {
+			if err := m.cleanupSchemaResources(schema.Name); err != nil {
+				errs = append(errs, err)
+			} else if err := m.deleteSchemaRecord(schema.Name); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		m.schemaMu.Unlock()
+	}
+	return errs
 }
 
 // Updates the definition of the schema internally and then converges to the
@@ -358,115 +563,181 @@ func (m *Manager) CreateSchema(schema *Schema) []error {
 // particular, updating the flag format will cause a complete rebuild of the
 // state.
 func (m *Manager) UpdateSchema(schema *Schema) []error {
+	if err := validateSchemaDefinition(schema); err != nil {
+		return []error{invalidInput(err)}
+	}
+	for challenge, spec := range schema.Challenges {
+		if err := m.validateSeedLimit(len(spec.Seeds)); err != nil {
+			return []error{invalidInput(fmt.Errorf("challenge %q: %w", challenge, err))}
+		}
+	}
 	exists, err := m.schemaExists(schema.Name)
 	if err != nil {
 		return []error{err}
 	} else if !exists {
-		return []error{fmt.Errorf("schema '%s' does not exist", schema.Name)}
+		return []error{unknownSchemaIdError(schema.Name)}
 	}
 
 	return m.convergeSchema(schema)
 }
 
 func (m *Manager) convergeSchema(schema *Schema) []error {
-	// Mark existing state as locked/outdated
-	err := m.lockSchema(schema.Name)
+	m.schemaMu.Lock()
+	defer m.schemaMu.Unlock()
+
+	// Recheck ownership while holding the same lock used by DeleteSchema.
+	// UpdateSchema performs an early check for a useful client error, but the
+	// schema may otherwise be deleted before convergence starts.
+	exists, err := m.schemaExists(schema.Name)
 	if err != nil {
 		return []error{err}
 	}
+	if !exists {
+		return []error{unknownSchemaIdError(schema.Name)}
+	}
 
-	// Update builds to reflect request
-	state := make([][]*BuildMetadata, 0, len(schema.Challenges))
-	errs := []error{}
+	createdInstances := []InstanceId{}
+	failBeforeActivation := func(operationErr error) []error {
+		errs := []error{operationErr}
+		for i := len(createdInstances) - 1; i >= 0; i-- {
+			instance, lookupErr := m.lookupInstanceMetadata(createdInstances[i])
+			if lookupErr != nil {
+				errs = append(errs, lookupErr)
+				continue
+			}
+			if cleanupErr := m.stopInstance(instance); cleanupErr != nil {
+				errs = append(
+					errs,
+					fmt.Errorf(
+						"could not roll back staged instance %d: %w",
+						createdInstances[i],
+						cleanupErr,
+					),
+				)
+			}
+		}
+		return errs
+	}
+
+	// Stage and validate the complete desired build set before changing the
+	// active schema. Existing builds and instances remain available if any
+	// build fails.
+	state := make([]*BuildMetadata, 0)
+	buildGroups := make([][]*BuildMetadata, 0, len(schema.Challenges))
 	for challenge, spec := range schema.Challenges {
-		builds := make([]*BuildMetadata, len(spec.Seeds))
-		for i, seed := range spec.Seeds {
-			builds[i] = &BuildMetadata{
+		group := make([]*BuildMetadata, 0, len(spec.Seeds))
+		for _, seed := range spec.Seeds {
+			build := &BuildMetadata{
 				Seed:          seed,
 				Format:        schema.FlagFormat,
 				Challenge:     challenge,
 				Schema:        schema.Name,
 				InstanceCount: spec.InstanceCount,
 			}
-
-			err := m.openBuild(builds[i])
-			if err != nil {
-				errs = append(errs, err)
-				continue
+			if err := m.stageBuild(build); err != nil {
+				return failBeforeActivation(err)
 			}
+			state = append(state, build)
+			group = append(group, build)
 		}
-		state = append(state, builds)
+		buildGroups = append(buildGroups, group)
+	}
+	for _, builds := range buildGroups {
+		if err := m.generateBuilds(builds); err != nil {
+			return failBeforeActivation(err)
+		}
 	}
 
-	// Release obsolete builds
-	err = m.cleanupSchemaResources(schema.Name)
-	if err != nil {
+	// Scale up before the atomic activation. This preserves the prior schema
+	// capacity throughout a replacement and avoids destructive convergence on
+	// a build or container failure.
+	for _, build := range state {
+		target := build.InstanceCount
+		if target == DYNAMIC_INSTANCES {
+			continue
+		}
+		instances, err := m.getBuildInstances(build.Id)
+		if err != nil {
+			return failBeforeActivation(err)
+		}
+		for i := len(instances); i < target; i++ {
+			instanceID, err := m.newInstance(build)
+			if err != nil {
+				return failBeforeActivation(err)
+			}
+			createdInstances = append(createdInstances, instanceID)
+		}
+	}
+
+	targets := make(map[BuildId]int, len(state))
+	for _, build := range state {
+		targets[build.Id] = build.InstanceCount
+	}
+	if err := m.activateSchemaBuilds(schema.Name, targets); err != nil {
+		return failBeforeActivation(err)
+	}
+
+	var errs []error
+	if err := m.cleanupSchemaResources(schema.Name); err != nil {
 		errs = append(errs, err)
 	}
 
-	// Create missing builds and converge instances
-	for _, builds := range state {
-		err := m.generateBuilds(builds)
+	// Reductions are deliberately last. At this point the desired definition is
+	// durable, so any failed removals stay tracked and can be retried.
+	for _, build := range state {
+		target := build.InstanceCount
+		if target == DYNAMIC_INSTANCES {
+			continue
+		}
+		instances, err := m.getBuildInstances(build.Id)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-
-		for _, build := range builds {
-			target := schema.Challenges[build.Challenge].InstanceCount
-			if target == DYNAMIC_INSTANCES || target == LOCKED {
-				continue
+		for i := target; i < len(instances); i++ {
+			instance, err := m.lookupInstanceMetadata(instances[i])
+			if err == nil {
+				err = m.stopInstance(instance)
 			}
-
-			instances, err := m.getBuildInstances(build.Id)
-			m.log.debugf("converging %s/%d: %d found, need %d", build.Challenge, build.Id, len(instances), target)
-			for i := target; i < len(instances); i++ {
-				iMeta, err := m.lookupInstanceMetadata(instances[i])
-				if err != nil {
-					errs = append(errs, err)
-					continue
-				}
-
-				err = m.stopInstance(iMeta)
-				if err != nil {
-					errs = append(errs, err)
-				}
+			if err != nil {
+				errs = append(errs, err)
 			}
-
-			for i := len(instances); i < target; i++ {
-				if len(build.Images) == 0 {
-					// Lazy lookup for case where we resized
-					build, err = m.lookupBuildMetadata(build.Id)
-					if err != nil {
-						errs = append(errs, err)
-						break
-					}
-				}
-				_, err = m.newInstance(build)
-				if err != nil {
-					errs = append(errs, err)
-					break
-				}
-			}
-
 		}
 	}
-
 	return errs
 }
 
 // Tears down all instances and builds belonging to the schema.
 func (m *Manager) DeleteSchema(name string) error {
-	err := m.lockSchema(name)
+	m.schemaMu.Lock()
+	defer m.schemaMu.Unlock()
+
+	manual, err := m.schemaIsManual(name)
+	if err != nil {
+		return err
+	}
+	if manual {
+		return &ConflictError{Err: fmt.Errorf(
+			"schema %q is owned by manual builds",
+			name,
+		)}
+	}
+	err = m.lockSchema(name)
 	if err != nil {
 		return err
 	}
 
-	return m.cleanupSchemaResources(name)
+	if err := m.cleanupSchemaResources(name); err != nil {
+		return err
+	}
+	return m.deleteSchemaRecord(name)
 }
 
 func (m *Manager) cleanupSchemaResources(name string) error {
 	instances, err := m.removedSchemaInstances(name)
+	if err != nil {
+		return err
+	}
 	for _, id := range instances {
 		iMeta, err := m.lookupInstanceMetadata(id)
 		if err != nil {
@@ -480,6 +751,9 @@ func (m *Manager) cleanupSchemaResources(name string) error {
 	}
 
 	builds, err := m.removedSchemaBuilds(name)
+	if err != nil {
+		return err
+	}
 	for _, id := range builds {
 		err = m.destroyImages(id)
 		if err != nil {
@@ -494,6 +768,13 @@ func (m *Manager) cleanupSchemaResources(name string) error {
 // associated builds which belong to the schema through to the instances
 // currently running (to include dynamic instances).
 func (m *Manager) GetSchemaState(name string) ([]*ChallengeMetadata, error) {
+	exists, err := m.schemaExists(name)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, unknownSchemaIdError(name)
+	}
 	builds, err := m.getSchemaBuilds(name)
 	if err != nil {
 		return nil, err

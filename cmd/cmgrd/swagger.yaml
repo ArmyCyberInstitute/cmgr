@@ -1,7 +1,7 @@
 swagger: "2.0"
 info:
   description: "This is a minimal REST API for `cmgr` that allows front-ends for a CTF to remotely manage challenges and their templating for events.  It is not intended to replace `cmgr` entirely as it does not currently expose the challenge update process."
-  version: "0.2.0"
+  version: "0.3.0"
   title: "cmgrd"
   contact:
     email: "code@acictf.com"
@@ -75,17 +75,20 @@ paths:
           schema:
             $ref: "#/definitions/BuildChallengeRequest"
       responses:
+        "400":
+          description: "The request body, flag format, or seeds are invalid"
         "404":
           description: "Invalid path string to include invalid challenge identifier"
+        "409":
+          description: "The request conflicts with existing state"
         "500":
           description: "A database error occurred in `cmgr`"
         "200":
-          description: "A list of the new build IDs in the same order as seeds were given"
+          description: "The builds in the same order as the supplied seeds"
           schema:
             type: array
             items:
-              type: integer
-              format: int64
+              $ref: "#/definitions/BuildMetadata"
   /builds/{build_id}:
     parameters:
       - name: "build_id"
@@ -113,20 +116,23 @@ paths:
       responses:
         "404":
           description: "Invalid path string to include invalid build identifier"
+        "409":
+          description: "The build is controlled by a schema and cannot be started directly"
         "500":
           description: "A database error occurred in `cmgr`"
         "201":
-          description: "The identifier of the new instance"
+          description: "The metadata for the new instance"
           schema:
-            type: integer
-            format: int64
+            $ref: "#/definitions/InstanceMetadata"
     delete:
       tags: [builds]
       produces: ["application/json"]
       summary: "Destroys the build (releases resources)"
       responses:
         "404":
-          description: "Invalid path string to include invalid challenge identifier"
+          description: "Invalid path string to include invalid build identifier"
+        "409":
+          description: "The build is controlled by a schema or still has live instances"
         "500":
           description: "A database error occurred in `cmgr`"
         "204":
@@ -190,9 +196,11 @@ paths:
       summary: "Stops an instance"
       responses:
         "404":
-          description: "Invalid path string to include invalid challenge identifier"
+          description: "Invalid path string to include invalid instance identifier"
+        "409":
+          description: "The instance is controlled by a schema and cannot be stopped directly"
         "500":
-          description: "A database error occurred in `cmgr` (may also indicate that there are live instances of the build)"
+          description: "A database error occurred in `cmgr`"
         "204":
           description: "Indicates successfully stopped"
   /schemas:
@@ -224,7 +232,9 @@ paths:
             $ref: "#/definitions/SchemaDefinition"
       responses:
         "400":
-          description: "Value for 'schema_name' did not match the name in the schema definition"
+          description: "The schema definition is invalid"
+        "409":
+          description: "A schema with this name already exists"
         "404":
           description: "Invalid path string"
         "500":
@@ -250,7 +260,9 @@ paths:
         "200":
           description: "The metadata for all challenges, builds, and instances controlled or referenced by this schema"
           schema:
-            $ref: "#/definitions/ChallengeMetadata"
+            type: array
+            items:
+              $ref: "#/definitions/ChallengeMetadata"
     post:
       tags: [schemas]
       produces: ["application/json"]
@@ -278,6 +290,8 @@ paths:
       responses:
         "404":
           description: "Invalid path string"
+        "409":
+          description: "The schema belongs to manual builds and cannot be deleted through this endpoint"
         "500":
           description: "A database error occurred in `cmgr`"
         "204":
@@ -294,6 +308,10 @@ definitions:
       metadata_checksum:
         type: integer
         format: int64
+      source_digest:
+        type: string
+      metadata_digest:
+        type: string
       solve_script:
         type: boolean
   ChallengeMetadata:
@@ -321,6 +339,10 @@ definitions:
       metadata_checksum:
         type: integer
         format: int64
+      source_digest:
+        type: string
+      metadata_digest:
+        type: string
       path:
         type: string
       templatable:
@@ -328,14 +350,13 @@ definitions:
       port_map:
         type: object
         additionalProperties:
-          type: integer
-          format: int32
+          $ref: "#/definitions/PortInfo"
       max_users:
         type: integer
         format: int32
       category:
         type: string
-      poitns:
+      points:
         type: integer
         format: int32
       tags:
@@ -346,6 +367,8 @@ definitions:
         type: object
         additionalProperties:
           type: string
+      challenge_options:
+        $ref: "#/definitions/ChallengeOptions"
       solve_script:
         type: boolean
       builds:
@@ -364,6 +387,10 @@ definitions:
         type: object
         additionalProperties:
           type: string
+      required_seccomp_tweaks:
+        type: array
+        items:
+          type: string
       seed:
         type: integer
         format: int32
@@ -378,8 +405,13 @@ definitions:
       last_solved:
         type: integer
         format: int64
-      challenge:
+      challenge_id:
         type: string
+      schema:
+        type: string
+      instance_count:
+        type: integer
+        format: int32
       instances:
         type: array
         items:
@@ -390,9 +422,9 @@ definitions:
       id:
         type: integer
         format: int64
-      docker_id:
+      host:
         type: string
-      ports:
+      exposed_ports:
         type: array
         items:
           type: string
@@ -408,36 +440,108 @@ definitions:
       ports:
         type: object
         additionalProperties:
-          type: string
+          type: integer
+          format: int32
       containers:
         type: array
         items:
           type: string
-      last_solve:
+      last_solved:
         type: integer
         format: int64
-      build:
+      build_id:
         type: integer
         format: int64
-      network:
+  PortInfo:
+    type: object
+    required: [host, port]
+    properties:
+      host:
         type: string
+      port:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 65535
+  SeccompOptions:
+    type: object
+    properties:
+      legacy:
+        type: boolean
+      tweaks:
+        type: array
+        items:
+          type: string
+      profile:
+        type: string
+  ContainerOptions:
+    type: object
+    properties:
+      init:
+        type: boolean
+      cpus:
+        type: string
+      memory:
+        type: string
+      ulimits:
+        type: array
+        items:
+          type: string
+      pidslimit:
+        type: integer
+        format: int64
+        minimum: -1
+      readonlyrootfs:
+        type: boolean
+      droppedcaps:
+        type: array
+        items:
+          type: string
+      nonewprivileges:
+        type: boolean
+      diskquota:
+        type: string
+      cgroupparent:
+        type: string
+      seccomp:
+        $ref: "#/definitions/SeccompOptions"
+  ChallengeOptions:
+    allOf:
+      - $ref: "#/definitions/ContainerOptions"
+      - type: object
+        properties:
+          allow_egress:
+            type: boolean
+            default: false
+          overrides:
+            type: object
+            additionalProperties:
+              $ref: "#/definitions/ContainerOptions"
   BuildChallengeRequest:
     type: object
+    required: [seeds]
     properties:
       flag_format:
         type: string
+        maxLength: 128
+        description: "Contains exactly one literal %s placeholder"
       seeds:
         type: array
+        minItems: 1
+        uniqueItems: true
         items:
           type: integer
           format: int32
   SchemaDefinition:
     type: object
+    required: [name, flag_format, challenges]
     properties:
       name:
         type: string
       flag_format:
         type: string
+        maxLength: 128
+        description: "Contains exactly one literal %s placeholder"
       challenges:
         type: object
         additionalProperties:
@@ -447,9 +551,11 @@ definitions:
     properties:
       seeds:
         type: array
+        uniqueItems: true
         items:
           type: integer
           format: int32
       instance_count:
         type: integer
         format: int32
+        minimum: -1

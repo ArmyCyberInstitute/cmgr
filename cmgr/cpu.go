@@ -23,6 +23,5 @@ func parseNanoCPUs(value string) (int64, error) {
 	if !nanoCPUs.Num().IsInt64() {
 		return 0, fmt.Errorf("CPU value %q exceeds the supported range", value)
 	}
-
 	return nanoCPUs.Num().Int64(), nil
 }

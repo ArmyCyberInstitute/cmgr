@@ -1,5 +1,12 @@
 package cmgr
 
+import (
+	"errors"
+	"fmt"
+
+	"github.com/jmoiron/sqlx"
+)
+
 func (m *Manager) openInstance(meta *InstanceMetadata) error {
 	res, err := m.db.NamedExec("INSERT INTO instances(build, lastsolved) VALUES (:build, :lastsolved);", meta)
 
@@ -19,99 +26,111 @@ func (m *Manager) openInstance(meta *InstanceMetadata) error {
 }
 
 func (m *Manager) finalizeInstance(meta *InstanceMetadata) error {
-	txn := m.db.MustBegin()
-	var err error
-	for name, port := range meta.Ports {
-		_, err = txn.Exec("INSERT INTO portAssignments(instance, name, port) VALUES (?, ?, ?);",
-			meta.Id,
-			name,
-			port)
-
-		if err != nil {
-			m.log.errorf("failed to record port assignment: %s", err)
-			cerr := txn.Rollback()
-			if cerr != nil { // If rollback fails, we're in trouble.
-				m.log.error(cerr)
-				err = cerr
+	return withTransaction(m.db, func(txn *sqlx.Tx) error {
+		for name, port := range meta.Ports {
+			if _, err := txn.Exec(
+				"INSERT INTO portAssignments(instance, name, port) VALUES (?, ?, ?);",
+				meta.Id,
+				name,
+				port,
+			); err != nil {
+				return fmt.Errorf("could not record port %q: %w", name, err)
 			}
-			return err
 		}
-	}
-
-	for _, containerId := range meta.Containers {
-		_, err = txn.Exec("INSERT INTO containers(instance, id) VALUES (?, ?);",
-			meta.Id,
-			containerId)
-
-		if err != nil {
-			m.log.errorf("failed to record containers: %s", err)
-			cerr := txn.Rollback()
-			if cerr != nil { // If rollback fails, we're in trouble.
-				m.log.error(cerr)
-				err = cerr
+		for _, containerID := range meta.Containers {
+			if _, err := txn.Exec(
+				"DELETE FROM retiredContainers WHERE id = ?;",
+				containerID,
+			); err != nil {
+				return fmt.Errorf("could not clear retired container %s: %w", containerID, err)
 			}
-			return err
+			if _, err := txn.Exec(
+				"INSERT INTO containers(instance, id) VALUES (?, ?);",
+				meta.Id,
+				containerID,
+			); err != nil {
+				return fmt.Errorf("could not record container %s: %w", containerID, err)
+			}
 		}
-	}
-
-	err = txn.Commit()
-	if err != nil { // It's undocumented what this means...
-		m.log.error(err)
-	}
-	return err
+		return nil
+	})
 }
 
 // replaceInstanceRuntimeMetadata atomically swaps the ephemeral container IDs
 // and host-port assignments for an existing instance. It does not change the
 // instance row or the challenge's logical port definitions in portNames.
 func (m *Manager) replaceInstanceRuntimeMetadata(meta *InstanceMetadata) error {
-	txn := m.db.MustBegin()
-	rollback := func(err error) error {
-		if rollbackErr := txn.Rollback(); rollbackErr != nil {
-			return rollbackErr
-		}
-		return err
-	}
-
-	if _, err := txn.Exec(
-		"DELETE FROM portAssignments WHERE instance=?;",
-		meta.Id,
-	); err != nil {
-		return rollback(err)
-	}
-	if _, err := txn.Exec(
-		"DELETE FROM containers WHERE instance=?;",
-		meta.Id,
-	); err != nil {
-		return rollback(err)
-	}
-	for name, port := range meta.Ports {
-		if _, err := txn.Exec(
-			"INSERT INTO portAssignments(instance, name, port) VALUES (?, ?, ?);",
+	return withTransaction(m.db, func(txn *sqlx.Tx) error {
+		var previous []string
+		if err := txn.Select(
+			&previous,
+			"SELECT id FROM containers WHERE instance=?;",
 			meta.Id,
-			name,
-			port,
 		); err != nil {
-			return rollback(err)
+			return err
 		}
-	}
-	for _, containerID := range meta.Containers {
 		if _, err := txn.Exec(
-			"INSERT INTO containers(instance, id) VALUES (?, ?);",
+			"DELETE FROM portAssignments WHERE instance=?;",
 			meta.Id,
-			containerID,
 		); err != nil {
-			return rollback(err)
+			return err
 		}
-	}
-	return txn.Commit()
+		if _, err := txn.Exec(
+			"DELETE FROM containers WHERE instance=?;",
+			meta.Id,
+		); err != nil {
+			return err
+		}
+		active := make(map[string]struct{}, len(meta.Containers))
+		for name, port := range meta.Ports {
+			if _, err := txn.Exec(
+				"INSERT INTO portAssignments(instance, name, port) VALUES (?, ?, ?);",
+				meta.Id,
+				name,
+				port,
+			); err != nil {
+				return err
+			}
+		}
+		for _, containerID := range meta.Containers {
+			active[containerID] = struct{}{}
+			if _, err := txn.Exec(
+				"DELETE FROM retiredContainers WHERE id=?;",
+				containerID,
+			); err != nil {
+				return err
+			}
+			if _, err := txn.Exec(
+				"INSERT INTO containers(instance, id) VALUES (?, ?);",
+				meta.Id,
+				containerID,
+			); err != nil {
+				return err
+			}
+		}
+		for _, containerID := range previous {
+			if _, stillActive := active[containerID]; stillActive {
+				continue
+			}
+			if _, err := txn.Exec(
+				"INSERT OR IGNORE INTO retiredContainers(id) VALUES (?);",
+				containerID,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (m *Manager) lookupInstanceMetadata(instance InstanceId) (*InstanceMetadata, error) {
 	metadata := new(InstanceMetadata)
-	txn := m.db.MustBegin()
+	txn, err := m.db.Beginx()
+	if err != nil {
+		return metadata, fmt.Errorf("could not begin instance lookup: %w", err)
+	}
 
-	err := txn.Get(metadata, "SELECT * FROM instances WHERE id=?", instance)
+	err = txn.Get(metadata, "SELECT * FROM instances WHERE id=?", instance)
 	if isEmptyQueryError(err) {
 		err = unknownInstanceIdError(instance)
 	}
@@ -142,38 +161,76 @@ func (m *Manager) lookupInstanceMetadata(instance InstanceId) (*InstanceMetadata
 		m.log.errorf("read of database failed: %s", err)
 		closeErr := txn.Rollback()
 		if closeErr != nil {
-			m.log.errorf("rollback failed: %s", err)
-			err = closeErr
+			m.log.errorf("rollback failed: %s", closeErr)
+			err = errors.Join(err, closeErr)
 		}
 	}
 
 	return metadata, err
 }
 
-func (m *Manager) removeContainersMetadata(instance *InstanceMetadata) error {
-	txn := m.db.MustBegin()
-	_, err := txn.Exec("DELETE FROM portAssignments WHERE instance=?;", instance.Id)
-	if err == nil {
-		_, err = txn.Exec("DELETE FROM containers WHERE instance=?", instance.Id)
+func (m *Manager) removeContainerMetadata(
+	instance InstanceId,
+	containerID string,
+) error {
+	result, err := m.db.Exec(
+		"DELETE FROM containers WHERE instance=? AND id=?;",
+		instance,
+		containerID,
+	)
+	if err != nil {
+		return err
 	}
+	_, err = result.RowsAffected()
+	return err
+}
 
-	if err == nil {
-		err = txn.Commit()
-		if err != nil {
-			m.log.errorf("failed to commit deletion of container metadata: %s", err)
-		}
-	} else {
-		m.log.errorf("failed to delete container metadata: %s", err)
-		closeErr := txn.Rollback()
-		if closeErr != nil {
-			m.log.errorf("rollback failed: %s", err)
-			err = closeErr
-		}
-	}
+func (m *Manager) removeInstancePorts(instance InstanceId) error {
+	_, err := m.db.Exec(
+		"DELETE FROM portAssignments WHERE instance=?;",
+		instance,
+	)
+	return err
+}
 
-	instance.Containers = []string{}
-	instance.Ports = make(map[string]int)
+func (m *Manager) retiredContainerIDs() ([]string, error) {
+	var ids []string
+	err := m.db.Select(&ids, "SELECT id FROM retiredContainers ORDER BY id;")
+	return ids, err
+}
 
+func (m *Manager) retireContainer(containerID string) error {
+	_, err := m.db.Exec(
+		"INSERT OR IGNORE INTO retiredContainers(id) VALUES (?);",
+		containerID,
+	)
+	return err
+}
+
+func (m *Manager) forgetRetiredContainer(containerID string) error {
+	_, err := m.db.Exec(
+		"DELETE FROM retiredContainers WHERE id=?;",
+		containerID,
+	)
+	return err
+}
+
+func (m *Manager) retireNetwork(name string) error {
+	_, err := m.db.Exec(
+		"INSERT OR IGNORE INTO retiredNetworks(name) VALUES (?);",
+		name,
+	)
+	return err
+}
+
+func (m *Manager) retiredNetworkNames() ([]string, error) {
+	var names []string
+	err := m.db.Select(&names, "SELECT name FROM retiredNetworks ORDER BY name;")
+	return names, err
+}
+
+func (m *Manager) forgetRetiredNetwork(name string) error {
+	_, err := m.db.Exec("DELETE FROM retiredNetworks WHERE name=?;", name)
 	return err
 }
 
@@ -205,6 +262,29 @@ func (m *Manager) getBuildInstances(build BuildId) ([]InstanceId, error) {
 	return instances, err
 }
 
+func (m *Manager) incompleteInstanceIDs() ([]InstanceId, error) {
+	instances := []InstanceId{}
+	err := m.db.Select(
+		&instances,
+		`SELECT instances.id
+		 FROM instances
+		 LEFT JOIN containers ON containers.instance = instances.id
+		 GROUP BY instances.id
+		 HAVING COUNT(containers.id) = 0
+		 ORDER BY instances.id;`,
+	)
+	return instances, err
+}
+
+func (m *Manager) trackedContainerIDs() ([]string, error) {
+	containers := []string{}
+	err := m.db.Select(
+		&containers,
+		"SELECT id FROM containers ORDER BY id;",
+	)
+	return containers, err
+}
+
 const recordInstanceSolveQuery = `
 	UPDATE instances
 	SET lastsolved = :lastsolved
@@ -216,24 +296,13 @@ const recordBuildSolveQuery = `
 	WHERE id = :build AND lastsolved < :lastsolved;`
 
 func (m *Manager) recordSolve(instance *InstanceMetadata) error {
-	txn := m.db.MustBegin()
-	_, err := txn.NamedExec(recordInstanceSolveQuery, instance)
-	if err == nil {
-		_, err = txn.NamedExec(recordBuildSolveQuery, instance)
-	}
-
-	if err == nil {
-		err = txn.Commit()
-		if err != nil {
-			m.log.errorf("failed to commit deletion of container metadata: %s", err)
+	return withTransaction(m.db, func(txn *sqlx.Tx) error {
+		if _, err := txn.NamedExec(recordInstanceSolveQuery, instance); err != nil {
+			return fmt.Errorf("could not record instance solve: %w", err)
 		}
-	} else {
-		m.log.errorf("failed to delete container metadata: %s", err)
-		closeErr := txn.Rollback()
-		if closeErr != nil {
-			m.log.errorf("rollback failed: %s", err)
-			err = closeErr
+		if _, err := txn.NamedExec(recordBuildSolveQuery, instance); err != nil {
+			return fmt.Errorf("could not record build solve: %w", err)
 		}
-	}
-	return err
+		return nil
+	})
 }

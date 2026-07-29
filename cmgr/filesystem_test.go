@@ -3,7 +3,9 @@ package cmgr
 import (
 	"archive/tar"
 	"encoding/json"
+	"hash/crc32"
 	"io"
+	"strings"
 	"testing"
 
 	"io/ioutil"
@@ -62,6 +64,81 @@ func TestSetDirectories(t *testing.T) {
 
 	if cwd != mgr.chalDir {
 		t.Fatalf("empty environment variable did not use working directory")
+	}
+}
+
+func TestMetadataHashFramingAvoidsConcatenationAmbiguity(t *testing.T) {
+	firstLegacy, first, err := metadataHashes([]byte("ab"), "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondLegacy, second, err := metadataHashes([]byte("a"), "bc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("framed metadata hashes collided for distinct field boundaries")
+	}
+	if firstLegacy != secondLegacy {
+		t.Fatal("legacy CRC32 concatenation behavior unexpectedly changed")
+	}
+	if firstLegacy != crc32.ChecksumIEEE([]byte("abc")) {
+		t.Fatal("legacy metadata checksum is not compatible with prior releases")
+	}
+}
+
+func TestCreateBuildContextRejectsSymlinks(t *testing.T) {
+	directory := t.TempDir()
+	problemPath := filepath.Join(directory, "problem.md")
+	if err := os.WriteFile(problemPath, []byte("# test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "target"), []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(directory, "link")); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{log: newLogger(DISABLED)}
+	_, err := manager.createBuildContext(
+		&ChallengeMetadata{
+			Path:          problemPath,
+			ChallengeType: "custom",
+		},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "cannot contain symlink") {
+		t.Fatalf("unexpected symlink error: %v", err)
+	}
+}
+
+func TestCreateBuildContextHonorsConfigurableEntryLimit(t *testing.T) {
+	directory := t.TempDir()
+	problemPath := filepath.Join(directory, "problem.md")
+	if err := os.WriteFile(problemPath, []byte("# test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"one", "two"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := &Manager{
+		log: newLogger(DISABLED),
+		policy: managerPolicy{
+			MaxBuildContextFiles: 1,
+			MaxBuildContextBytes: 1024 * 1024,
+		},
+	}
+	_, err := manager.createBuildContext(
+		&ChallengeMetadata{
+			Path:          problemPath,
+			ChallengeType: "custom",
+		},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "more than 1 entries") {
+		t.Fatalf("unexpected entry-limit error: %v", err)
 	}
 }
 

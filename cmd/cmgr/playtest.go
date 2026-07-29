@@ -3,8 +3,10 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"flag"
 	"fmt"
+	"html/template"
 	"io"
 	"mime"
 	"net/http"
@@ -13,9 +15,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ArmyCyberInstitute/cmgr/cmgr"
+	"github.com/microcosm-cc/bluemonday"
 )
 
 func playtestChallenge(mgr *cmgr.Manager, args []string) int {
@@ -55,22 +59,79 @@ func playtestChallenge(mgr *cmgr.Manager, args []string) int {
 		fmt.Printf("error creating instance: %s\n", err)
 		return RUNTIME_ERROR
 	}
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, os.Kill)
-	go func() {
-		_ = <-sigs
-		mgr.Stop(iid)
-		mgr.Destroy(bid)
-		os.Exit(0)
-	}()
+	defer mgr.Stop(iid)
 
 	fmt.Printf("challenge information available at: http://%s:%d/\n", iface, *port)
 	return launchPortal(mgr, iface, *port, cid, bid, iid)
 }
 
+type playtestPage struct {
+	Name        string
+	Description template.HTML
+	Details     template.HTML
+	Hints       []template.HTML
+}
+
+var playtestPageTemplate = template.Must(template.New("playtest").Parse(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>cmgr playtest</title>
+</head>
+<body>
+  <h1>{{.Name}}</h1>
+  <h2>Description</h2>
+  <div>{{.Description}}</div>
+  <h2>Details</h2>
+  <div>{{.Details}}</div>
+  {{if .Hints}}
+  <h2>Hints</h2>
+  <ul>{{range .Hints}}<li>{{.}}</li>{{end}}</ul>
+  {{end}}
+  <h2>Submit Flag</h2>
+  <form action="/submit" method="get">
+    <label for="flag">Flag:</label>
+    <input type="text" id="flag" name="flag">
+    <input type="submit" value="Submit">
+  </form>
+</body>
+</html>`))
+
+func expandPlaytestText(
+	value string,
+	iface string,
+	port int,
+	build *cmgr.BuildMetadata,
+	instance *cmgr.InstanceMetadata,
+) template.HTML {
+	artifactURL := fmt.Sprintf("http://%s:%d/artifact/$1", iface, port)
+	value = urlRe.ReplaceAllString(value, artifactURL)
+	value = serverRe.ReplaceAllString(value, iface)
+	value = httpBaseRe.ReplaceAllString(value, fmt.Sprintf("http://%s", iface))
+	for portRe.MatchString(value) {
+		match := portRe.FindStringSubmatch(value)
+		mappedPort, ok := instance.Ports[match[1]]
+		replacement := ""
+		if ok {
+			replacement = fmt.Sprintf("%d", mappedPort)
+		}
+		value = strings.ReplaceAll(value, match[0], replacement)
+	}
+	for lookupRe.MatchString(value) {
+		match := lookupRe.FindStringSubmatch(value)
+		value = strings.ReplaceAll(value, match[0], build.LookupData[match[1]])
+	}
+	policy := bluemonday.UGCPolicy()
+	return template.HTML(policy.Sanitize(value))
+}
+
 func launchPortal(mgr *cmgr.Manager, iface string, port int, cid cmgr.ChallengeId, bid cmgr.BuildId, iid cmgr.InstanceId) int {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		cMeta, err := mgr.GetChallengeMetadata(cid)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -87,83 +148,40 @@ func launchPortal(mgr *cmgr.Manager, iface string, port int, cid cmgr.ChallengeI
 			return
 		}
 
-		w.Write([]byte(`<!DOCTYPE html>
-			<html lang="en">
-				<head>
-					<meta charset="utf-8">
-					<title>cmgr playtest</title>
-				</head>
-				<body>
-			`))
-
-		w.Write([]byte(fmt.Sprintf(`<h1>%s</h1>`, cMeta.Name)))
-
-		w.Write([]byte(fmt.Sprintf(`<h2>Description</h2><p>%s</p>`, cMeta.Description)))
-
-		details := cMeta.Details
-		artifactUrl := fmt.Sprintf("http://%s:%d/artifact/$1", iface, port)
-		details = urlRe.ReplaceAllString(details, artifactUrl)
-		details = serverRe.ReplaceAllString(details, iface)
-		details = httpBaseRe.ReplaceAllString(details, fmt.Sprintf("http://%s", iface))
-
-		for portRe.MatchString(details) {
-			match := portRe.FindStringSubmatch(details)
-			details = strings.ReplaceAll(
-				details,
-				match[0],
-				fmt.Sprintf("%d", iMeta.Ports[match[1]]))
+		page := playtestPage{
+			Name: cMeta.Name,
+			Description: expandPlaytestText(
+				cMeta.Description,
+				iface,
+				port,
+				bMeta,
+				iMeta,
+			),
+			Details: expandPlaytestText(cMeta.Details, iface, port, bMeta, iMeta),
 		}
-
-		for lookupRe.MatchString(details) {
-			match := lookupRe.FindStringSubmatch(details)
-			details = strings.ReplaceAll(
-				details,
-				match[0],
-				fmt.Sprintf("%s", bMeta.LookupData[match[1]]))
+		for _, hint := range cMeta.Hints {
+			page.Hints = append(
+				page.Hints,
+				expandPlaytestText(hint, iface, port, bMeta, iMeta),
+			)
 		}
-
-		w.Write([]byte(fmt.Sprintf(`<h2>Details</h2><p>%s</p>`, details)))
-
-		if len(cMeta.Hints) > 0 {
-			w.Write([]byte(`<h2>Hints</h2><ul>`))
-			for _, hint := range cMeta.Hints {
-				hint = urlRe.ReplaceAllString(hint, artifactUrl)
-				hint = serverRe.ReplaceAllString(hint, iface)
-				hint = httpBaseRe.ReplaceAllString(hint, fmt.Sprintf("http://%s", iface))
-
-				for portRe.MatchString(hint) {
-					match := portRe.FindStringSubmatch(hint)
-					hint = strings.ReplaceAll(
-						hint,
-						match[0],
-						fmt.Sprintf("%d", iMeta.Ports[match[1]]))
-				}
-
-				for lookupRe.MatchString(hint) {
-					match := lookupRe.FindStringSubmatch(hint)
-					hint = strings.ReplaceAll(
-						hint,
-						match[0],
-						fmt.Sprintf("%s", bMeta.LookupData[match[1]]))
-				}
-
-				w.Write([]byte(fmt.Sprintf(`<li>%s</li>`, hint)))
-			}
-			w.Write([]byte(`</ul>`))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := playtestPageTemplate.Execute(w, page); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-		w.Write([]byte(`<h2>Submit Flag</h2>
-			<form action="/submit" method="get">
-				<label for="flag">Flag:</label>
-				<input type="text" id="flag" name="flag">
-				<input type="submit" value="Submit">
-			</form>`))
-
-		w.Write([]byte(`</body></html>`))
 	})
 
-	http.HandleFunc("/artifact/", func(w http.ResponseWriter, r *http.Request) {
-		path := strings.Split(r.URL.Path, "/")
-		filename := path[len(path)-1]
+	mux.HandleFunc("/artifact/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		filename := strings.TrimPrefix(r.URL.Path, "/artifact/")
+		if filename == "" || strings.Contains(filename, "/") ||
+			!regexp.MustCompile("^"+filenamePattern+"$").MatchString(filename) {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		artifactDir, ok := os.LookupEnv(cmgr.ARTIFACT_DIR_ENV)
 		if !ok {
 			artifactDir = "."
@@ -191,7 +209,11 @@ func launchPortal(mgr *cmgr.Manager, iface string, port int, cid cmgr.ChallengeI
 		var hdr *tar.Header
 		for hdr, err = artifacts.Next(); err == nil; hdr, err = artifacts.Next() {
 			if hdr.Name == filename {
-				w.Header()["Content-Type"] = []string{mime.TypeByExtension(filename)}
+				contentType := mime.TypeByExtension(filepath.Ext(filename))
+				if contentType == "" {
+					contentType = "application/octet-stream"
+				}
+				w.Header().Set("Content-Type", contentType)
 				_, err = io.Copy(w, artifacts)
 				return
 			}
@@ -199,9 +221,16 @@ func launchPortal(mgr *cmgr.Manager, iface string, port int, cid cmgr.ChallengeI
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	http.HandleFunc("/submit", func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query()
-		submittedFlag := strings.TrimSpace(query["flag"][0])
+	mux.HandleFunc("/submit", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		submittedFlag := strings.TrimSpace(r.URL.Query().Get("flag"))
+		if submittedFlag == "" {
+			http.Error(w, "missing flag", http.StatusBadRequest)
+			return
+		}
 		bMeta, err := mgr.GetBuildMetadata(bid)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -217,8 +246,39 @@ func launchPortal(mgr *cmgr.Manager, iface string, port int, cid cmgr.ChallengeI
 		w.Write(body)
 	})
 
-	err := http.ListenAndServe(fmt.Sprintf("%s:%d", iface, port), nil)
-	if err != nil {
+	server := &http.Server{
+		Addr:              fmt.Sprintf("%s:%d", iface, port),
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 * 1024,
+	}
+	signalContext, stopSignals := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stopSignals()
+	serverErrors := make(chan error, 1)
+	go func() {
+		serverErrors <- server.ListenAndServe()
+	}()
+	select {
+	case <-signalContext.Done():
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownContext); err != nil {
+			fmt.Printf("error shutting down playtest portal: %s\n", err)
+			return RUNTIME_ERROR
+		}
+	case err := <-serverErrors:
+		if err != nil && err != http.ErrServerClosed {
+			fmt.Printf("error serving playtest portal: %s\n", err)
+			return RUNTIME_ERROR
+		}
+	}
+	if err := server.Close(); err != nil && err != http.ErrServerClosed {
 		return RUNTIME_ERROR
 	}
 	return NO_ERROR

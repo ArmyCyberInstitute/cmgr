@@ -8,18 +8,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ArmyCyberInstitute/cmgr/cmgr"
 )
 
 type state struct {
-	mgr *cmgr.Manager
+	mgr             *cmgr.Manager
+	maxRequestBytes int64
 }
 
 var artifact_dir string
@@ -54,17 +56,77 @@ func main() {
 		log.Fatal("failed to initialize cmgr library")
 	}
 
-	s := state{mgr: mgr}
+	s := state{mgr: mgr, maxRequestBytes: mgr.MaxRequestBytes()}
 
-	http.HandleFunc("/challenges", s.listHandler)
-	http.HandleFunc("/challenges/", s.challengeHandler)
-	http.HandleFunc("/builds/", s.buildHandler)
-	http.HandleFunc("/instances/", s.instanceHandler)
-	http.HandleFunc("/schemas", s.schemaHandler)
-	http.HandleFunc("/schemas/", s.existingSchemaHandler)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/challenges", s.listHandler)
+	mux.HandleFunc("/challenges/", s.challengeHandler)
+	mux.HandleFunc("/builds/", s.buildHandler)
+	mux.HandleFunc("/instances/", s.instanceHandler)
+	mux.HandleFunc("/schemas", s.schemaHandler)
+	mux.HandleFunc("/schemas/", s.existingSchemaHandler)
 
 	connStr := fmt.Sprintf("%s:%d", iface, port)
-	log.Fatal(http.ListenAndServe(connStr, nil))
+	server := &http.Server{
+		Addr:              connStr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 * 1024,
+	}
+	log.Fatal(server.ListenAndServe())
+}
+
+func (s state) decodeJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+	destination any,
+) error {
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("request must contain exactly one JSON value")
+		}
+		return fmt.Errorf("invalid trailing JSON data: %w", err)
+	}
+	return nil
+}
+
+func writeError(w http.ResponseWriter, status int, err error) {
+	http.Error(w, err.Error(), status)
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+func errorStatus(err error, fallback int) int {
+	var unknown *cmgr.UnknownIdentifierError
+	if errors.As(err, &unknown) {
+		return http.StatusNotFound
+	}
+	var invalid *cmgr.InvalidInputError
+	if errors.As(err, &invalid) {
+		return http.StatusBadRequest
+	}
+	var conflict *cmgr.ConflictError
+	if errors.As(err, &conflict) {
+		return http.StatusConflict
+	}
+	return fallback
 }
 
 func printUsage() {
@@ -107,6 +169,8 @@ type ChallengeListElement struct {
 	Id               cmgr.ChallengeId `json:"id"`
 	SourceChecksum   uint32           `json:"source_checksum"`
 	MetadataChecksum uint32           `json:"metadata_checksum"`
+	SourceDigest     string           `json:"source_digest"`
+	MetadataDigest   string           `json:"metadata_digest"`
 	SolveScript      bool             `json:"solve_script"`
 }
 
@@ -119,10 +183,15 @@ func (s state) listHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	tags, ok := query["tags"]
 	var challenges []*cmgr.ChallengeMetadata
+	var err error
 	if !ok {
-		challenges = s.mgr.ListChallenges()
+		challenges, err = s.mgr.ListChallengesWithError()
 	} else {
-		challenges = s.mgr.SearchChallenges(tags)
+		challenges, err = s.mgr.SearchChallengesWithError(tags)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
 	}
 
 	respList := make([]ChallengeListElement, len(challenges))
@@ -130,16 +199,11 @@ func (s state) listHandler(w http.ResponseWriter, r *http.Request) {
 		respList[i].Id = challenge.Id
 		respList[i].SourceChecksum = challenge.SourceChecksum
 		respList[i].MetadataChecksum = challenge.MetadataChecksum
+		respList[i].SourceDigest = challenge.SourceDigest
+		respList[i].MetadataDigest = challenge.MetadataDigest
 		respList[i].SolveScript = challenge.SolveScript
 	}
-	body, err := json.Marshal(respList)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(err.Error()))
-		return
-	}
-
-	w.Write(body)
+	writeJSON(w, http.StatusOK, respList)
 }
 
 type BuildChallengeRequest struct {
@@ -180,12 +244,10 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 			body, err = json.Marshal(meta)
 		}
 	case "POST":
-		var data []byte
 		var buildReq BuildChallengeRequest
-		data, err = ioutil.ReadAll(r.Body)
-
-		if err == nil {
-			err = json.Unmarshal(data, &buildReq)
+		err = s.decodeJSON(w, r, &buildReq)
+		if err != nil {
+			respCode = http.StatusBadRequest
 		}
 
 		var builds []*cmgr.BuildMetadata
@@ -205,15 +267,17 @@ func (s state) challengeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		respCode = http.StatusInternalServerError
-		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-			respCode = http.StatusNotFound
+		if respCode < 400 {
+			respCode = errorStatus(err, http.StatusInternalServerError)
 		}
 		body = []byte(err.Error())
 	}
 
+	if len(body) != 0 && respCode < 400 {
+		w.Header().Set("Content-Type", "application/json")
+	}
 	w.WriteHeader(respCode)
-	w.Write(body)
+	_, _ = w.Write(body)
 }
 
 func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
@@ -232,8 +296,8 @@ func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 
 	buildInt, err := strconv.Atoi(path[pathLen-1])
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error()))
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
 
 	build := cmgr.BuildId(buildInt)
@@ -270,18 +334,22 @@ func (s state) buildHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		respCode = http.StatusInternalServerError
-		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-			respCode = http.StatusNotFound
-		}
+		respCode = errorStatus(err, http.StatusInternalServerError)
 		body = []byte(err.Error())
 	}
 
+	if len(body) != 0 && respCode < 400 {
+		w.Header().Set("Content-Type", "application/json")
+	}
 	w.WriteHeader(respCode)
-	w.Write(body)
+	_, _ = w.Write(body)
 }
 
 func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 	path := strings.Split(r.URL.Path, "/")
 	pathLen := len(path)
 	if pathLen < 4 || path[pathLen-3] != "builds" {
@@ -298,13 +366,16 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 
 	build := cmgr.BuildId(buildInt)
 	meta, err := s.mgr.GetBuildMetadata(build)
-	_, ok := err.(*cmgr.UnknownIdentifierError)
-	if ok || (err != nil && !meta.HasArtifacts) {
+	if err != nil {
+		writeError(w, errorStatus(err, http.StatusInternalServerError), err)
+		return
+	}
+	if !meta.HasArtifacts {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	f, err := os.Open(fmt.Sprintf("%s/%d.tar.gz", artifact_dir, build))
+	f, err := os.Open(filepath.Join(artifact_dir, fmt.Sprintf("%d.tar.gz", build)))
 
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -315,7 +386,10 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 
 	if path[pathLen-1] == "artifacts.tar.gz" {
-		io.Copy(w, f)
+		w.Header().Set("Content-Type", "application/gzip")
+		if _, err := io.Copy(w, f); err != nil {
+			log.Printf("artifact response failed: %v", err)
+		}
 		return
 	}
 	srcGz, err := gzip.NewReader(f)
@@ -331,7 +405,10 @@ func (s state) artifactsHandler(w http.ResponseWriter, r *http.Request) {
 	var h *tar.Header
 	for h, err = srcTar.Next(); err == nil; h, err = srcTar.Next() {
 		if h.Name == path[pathLen-1] {
-			io.Copy(w, srcTar)
+			w.Header().Set("Content-Type", "application/octet-stream")
+			if _, err := io.Copy(w, srcTar); err != nil {
+				log.Printf("artifact response failed: %v", err)
+			}
 			return
 		}
 	}
@@ -383,15 +460,12 @@ func (s state) instanceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		respCode = http.StatusInternalServerError
-		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-			respCode = http.StatusNotFound
-		}
+		respCode = errorStatus(err, http.StatusInternalServerError)
 		body = []byte(err.Error())
 	}
 
 	w.WriteHeader(respCode)
-	w.Write(body)
+	_, _ = w.Write(body)
 }
 
 func (s state) existingSchemaHandler(w http.ResponseWriter, r *http.Request) {
@@ -415,13 +489,12 @@ func (s state) existingSchemaHandler(w http.ResponseWriter, r *http.Request) {
 			body, err = json.Marshal(meta)
 		}
 	case "POST":
-		var data []byte
-		data, err = ioutil.ReadAll(r.Body)
 		respCode = http.StatusNoContent
 
-		var schemaDef *cmgr.Schema
-		if err == nil {
-			err = json.Unmarshal(data, &schemaDef)
+		var schemaDef cmgr.Schema
+		err = s.decodeJSON(w, r, &schemaDef)
+		if err != nil {
+			respCode = http.StatusBadRequest
 		}
 
 		if err == nil {
@@ -429,9 +502,9 @@ func (s state) existingSchemaHandler(w http.ResponseWriter, r *http.Request) {
 				respCode = http.StatusBadRequest // Bad Request
 				err = errors.New("mismatch between endpoint and schema name")
 			} else {
-				errs := s.mgr.UpdateSchema(schemaDef)
+				errs := s.mgr.UpdateSchema(&schemaDef)
 				if len(errs) > 0 {
-					err = fmt.Errorf("%v", errs)
+					err = errors.Join(errs...)
 				}
 			}
 		}
@@ -444,15 +517,14 @@ func (s state) existingSchemaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		respCode = http.StatusInternalServerError
-		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-			respCode = http.StatusNotFound
+		if respCode < 400 {
+			respCode = errorStatus(err, http.StatusInternalServerError)
 		}
 		body = []byte(err.Error())
 	}
 
 	w.WriteHeader(respCode)
-	w.Write(body)
+	_, _ = w.Write(body)
 }
 
 func (s state) schemaHandler(w http.ResponseWriter, r *http.Request) {
@@ -467,18 +539,16 @@ func (s state) schemaHandler(w http.ResponseWriter, r *http.Request) {
 			body, err = json.Marshal(schemaList)
 		}
 	case "POST":
-		var data []byte
-		data, err = ioutil.ReadAll(r.Body)
-
-		var schemaDef *cmgr.Schema
-		if err == nil {
-			err = json.Unmarshal(data, &schemaDef)
+		var schemaDef cmgr.Schema
+		err = s.decodeJSON(w, r, &schemaDef)
+		if err != nil {
+			respCode = http.StatusBadRequest
 		}
 
 		if err == nil {
-			errs := s.mgr.CreateSchema(schemaDef)
+			errs := s.mgr.CreateSchema(&schemaDef)
 			if len(errs) > 0 {
-				err = fmt.Errorf("%v", errs)
+				err = errors.Join(errs...)
 			} else {
 				respCode = http.StatusCreated
 			}
@@ -489,13 +559,12 @@ func (s state) schemaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		respCode = http.StatusInternalServerError
-		if _, ok := err.(*cmgr.UnknownIdentifierError); ok {
-			respCode = http.StatusNotFound
+		if respCode < 400 {
+			respCode = errorStatus(err, http.StatusInternalServerError)
 		}
 		body = []byte(err.Error())
 	}
 
 	w.WriteHeader(respCode)
-	w.Write(body)
+	_, _ = w.Write(body)
 }

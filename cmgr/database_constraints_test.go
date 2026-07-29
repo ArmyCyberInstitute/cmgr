@@ -40,8 +40,12 @@ func TestInitDatabaseCreatesExpectedSchema(t *testing.T) {
 		"images",
 		"instances",
 		"lookupData",
+		"networkOptions",
 		"portAssignments",
 		"portNames",
+		"retiredContainers",
+		"retiredNetworks",
+		"schemas",
 		"hosts",
 		"tags",
 	}

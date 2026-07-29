@@ -234,24 +234,122 @@ func convertToCustom(mgr *cmgr.Manager, args []string) int {
 		return RUNTIME_ERROR
 	}
 	cType := string(cTypeMatch[2])
-
-	retCode := dockerfile(mgr, []string{"-output", filepath.Join(challengeDir, "Dockerfile"), cType})
-	if retCode != NO_ERROR {
-		return retCode
+	dockerfilePath := filepath.Join(challengeDir, "Dockerfile")
+	if _, err := os.Lstat(dockerfilePath); err == nil {
+		fmt.Fprintf(parser.Output(), "error: refusing to replace existing '%s'\n", dockerfilePath)
+		return RUNTIME_ERROR
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintf(parser.Output(), "error: could not inspect '%s': %s\n", dockerfilePath, err)
+		return RUNTIME_ERROR
+	}
+	dockerfileData := mgr.GetDockerfile(cType)
+	if len(dockerfileData) == 0 {
+		fmt.Fprintf(parser.Output(), "error: unknown challenge type %q\n", cType)
+		return RUNTIME_ERROR
 	}
 
 	updatedProblemMd := typeRe.ReplaceAll(problemMd, []byte("\n$1 custom"))
-	out, err := os.OpenFile(problemMdPath, os.O_WRONLY, 0)
+	problemInfo, err := os.Stat(problemMdPath)
 	if err != nil {
-		fmt.Fprintf(parser.Output(), "error: could not open '%s': %s\n", problemMdPath, err)
+		fmt.Fprintf(parser.Output(), "error: could not inspect '%s': %s\n", problemMdPath, err)
 		return RUNTIME_ERROR
 	}
-	defer out.Close()
 
-	_, err = out.Write(updatedProblemMd)
+	writeTemporary := func(prefix string, mode os.FileMode, data []byte) (string, error) {
+		file, err := os.CreateTemp(challengeDir, prefix)
+		if err != nil {
+			return "", err
+		}
+		name := file.Name()
+		ok := false
+		defer func() {
+			_ = file.Close()
+			if !ok {
+				_ = os.Remove(name)
+			}
+		}()
+		if err := file.Chmod(mode.Perm()); err != nil {
+			return "", err
+		}
+		if _, err := file.Write(data); err != nil {
+			return "", err
+		}
+		if err := file.Sync(); err != nil {
+			return "", err
+		}
+		if err := file.Close(); err != nil {
+			return "", err
+		}
+		ok = true
+		return name, nil
+	}
+
+	dockerTemp, err := writeTemporary(".cmgr-Dockerfile-*", 0644, dockerfileData)
 	if err != nil {
-		fmt.Fprintf(parser.Output(), "error: failed to write to '%s': %s\n", problemMdPath, err)
+		fmt.Fprintf(parser.Output(), "error: could not stage Dockerfile: %s\n", err)
 		return RUNTIME_ERROR
+	}
+	defer os.Remove(dockerTemp)
+	problemTemp, err := writeTemporary(
+		".cmgr-problem-*",
+		problemInfo.Mode(),
+		updatedProblemMd,
+	)
+	if err != nil {
+		fmt.Fprintf(parser.Output(), "error: could not stage problem.md: %s\n", err)
+		return RUNTIME_ERROR
+	}
+	defer os.Remove(problemTemp)
+	backupFile, err := os.CreateTemp(challengeDir, ".cmgr-problem-backup-*")
+	if err != nil {
+		fmt.Fprintf(parser.Output(), "error: could not reserve rollback path: %s\n", err)
+		return RUNTIME_ERROR
+	}
+	backupPath := backupFile.Name()
+	if err := backupFile.Close(); err != nil {
+		fmt.Fprintf(parser.Output(), "error: could not close rollback file: %s\n", err)
+		return RUNTIME_ERROR
+	}
+	if err := os.Remove(backupPath); err != nil {
+		fmt.Fprintf(parser.Output(), "error: could not prepare rollback path: %s\n", err)
+		return RUNTIME_ERROR
+	}
+	defer os.Remove(backupPath)
+
+	if err := os.Rename(problemMdPath, backupPath); err != nil {
+		fmt.Fprintf(parser.Output(), "error: could not stage original problem.md: %s\n", err)
+		return RUNTIME_ERROR
+	}
+	rollbackProblem := func() error {
+		_ = os.Remove(problemMdPath)
+		return os.Rename(backupPath, problemMdPath)
+	}
+	if err := os.Rename(dockerTemp, dockerfilePath); err != nil {
+		rollbackErr := rollbackProblem()
+		fmt.Fprintf(parser.Output(), "error: could not install Dockerfile: %s", err)
+		if rollbackErr != nil {
+			fmt.Fprintf(parser.Output(), "; rollback failed: %s", rollbackErr)
+		}
+		fmt.Fprintln(parser.Output())
+		return RUNTIME_ERROR
+	}
+	if err := os.Rename(problemTemp, problemMdPath); err != nil {
+		_ = os.Remove(dockerfilePath)
+		rollbackErr := rollbackProblem()
+		fmt.Fprintf(parser.Output(), "error: could not install problem.md: %s", err)
+		if rollbackErr != nil {
+			fmt.Fprintf(parser.Output(), "; rollback failed: %s", rollbackErr)
+		}
+		fmt.Fprintln(parser.Output())
+		return RUNTIME_ERROR
+	}
+	if err := os.Remove(backupPath); err != nil {
+		fmt.Fprintf(parser.Output(), "error: conversion succeeded but backup cleanup failed: %s\n", err)
+		return RUNTIME_ERROR
+	}
+	if directory, err := os.Open(challengeDir); err == nil {
+		_ = directory.Sync()
+		_ = directory.Close()
 	}
 	return NO_ERROR
 }

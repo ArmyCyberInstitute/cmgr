@@ -2,7 +2,8 @@ package cmgr
 
 import (
 	"context"
-	"math/rand"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/moby/moby/client"
@@ -38,12 +39,23 @@ type Manager struct {
 	db                   *sqlx.DB
 	dbPath               string
 	challengeDockerfiles map[string][]byte
-	rand                 *rand.Rand
+	schemaMu             sync.Mutex
+	buildLocksMu         sync.Mutex
+	buildLocks           map[string]*buildLock
+	buildSlots           chan struct{}
+	runtimeDefaults      ContainerOptions
+	policy               managerPolicy
 	challengeInterface   string
 	challengeRegistry    string
 	authString           string
+	diskQuotasEnabled    atomic.Bool
 	portLow              int
 	portHigh             int
+}
+
+type buildLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 type PortInfo struct {
@@ -56,7 +68,11 @@ type HostInfo struct {
 	Target string `json:"target,omitempty"`
 }
 
-type NetworkOptions struct{}
+type NetworkOptions struct {
+	// Challenge networks are isolated from external networks by default.
+	// Challenges that intentionally need outbound connectivity must opt in.
+	AllowEgress bool `json:"allow_egress,omitempty" yaml:"allow_egress"`
+}
 
 type SeccompOptions struct {
 	Legacy      bool     `json:"legacy,omitempty"       yaml:"legacy"`
@@ -98,6 +114,8 @@ type ChallengeMetadata struct {
 	Hints            []string            `json:"hints,omitempty"`
 	SourceChecksum   uint32              `json:"source_checksum"`
 	MetadataChecksum uint32              `json:"metadata_checksum"`
+	SourceDigest     string              `json:"source_digest,omitempty"`
+	MetadataDigest   string              `json:"metadata_digest,omitempty"`
 	Path             string              `json:"path"`
 	Templatable      bool                `json:"templatable,omitempty"`
 	PortMap          map[string]PortInfo `json:"port_map,omitempty"`
