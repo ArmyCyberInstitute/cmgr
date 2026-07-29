@@ -8,7 +8,7 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/moby/moby/api v1.55.0
-	github.com/moby/moby/client v0.5.0
+	github.com/moby/moby/client v0.5.1
 	github.com/yuin/goldmark v1.8.4
 	go.yaml.in/yaml/v3 v3.0.5
 	modernc.org/sqlite v1.54.0
