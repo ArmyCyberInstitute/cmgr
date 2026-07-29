@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ArmyCyberInstitute/cmgr/internal/ociinterceptor"
@@ -470,11 +469,12 @@ func (m *Manager) freezeBaseImage(challenge ChallengeId, force bool) error {
 
 	// Setup build options
 	opts := client.ImageBuildOptions{
-		Remove:     true,
-		Tags:       []string{imageName},
-		Target:     "base",
-		NoCache:    force, // Require to use latest info on force
-		PullParent: force, // Update parent image as well on force
+		Remove:      true,
+		ForceRemove: true,
+		Tags:        []string{imageName},
+		Target:      "base",
+		NoCache:     force, // Require to use latest info on force
+		PullParent:  force, // Update parent image as well on force
 	}
 
 	// Build the image
@@ -782,6 +782,155 @@ func (m *Manager) finishStagedBuild(promotion *stagedBuildPromotion) error {
 	return firstErr
 }
 
+const stagedBuildQualifierPrefix = "cmgr-validate-"
+
+func isUpdateQualifier(value string) bool {
+	const randomIdentifierLength = 32
+	if len(value) != len(stagedBuildQualifierPrefix)+randomIdentifierLength ||
+		!strings.HasPrefix(value, stagedBuildQualifierPrefix) {
+		return false
+	}
+	for _, character := range value[len(stagedBuildQualifierPrefix):] {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func stagedImageBuildID(
+	tag string,
+	challenge ChallengeId,
+) (BuildId, bool) {
+	repositoryPrefix := string(challenge) + ":"
+	remainder, found := strings.CutPrefix(tag, repositoryPrefix)
+	if !found {
+		return 0, false
+	}
+	separator := strings.IndexByte(remainder, '-')
+	for separator >= 0 {
+		qualifier := remainder[:separator]
+		if isUpdateQualifier(qualifier) {
+			buildAndHost := remainder[separator+1:]
+			buildEnd := strings.IndexByte(buildAndHost, '-')
+			if buildEnd <= 0 || buildEnd == len(buildAndHost)-1 {
+				return 0, false
+			}
+			value, err := strconv.ParseInt(buildAndHost[:buildEnd], 10, 64)
+			if err != nil || value <= 0 {
+				return 0, false
+			}
+			return BuildId(value), true
+		}
+		next := strings.IndexByte(remainder[separator+1:], '-')
+		if next < 0 {
+			return 0, false
+		}
+		separator += next + 1
+	}
+	return 0, false
+}
+
+func stagedArtifactBuildID(name string) (BuildId, bool) {
+	for _, prefix := range []string{".", ".cmgr-old-"} {
+		remainder, found := strings.CutPrefix(name, prefix)
+		if !found || !strings.HasSuffix(remainder, ".tar.gz") {
+			continue
+		}
+		remainder = strings.TrimSuffix(remainder, ".tar.gz")
+		for separator := strings.LastIndexByte(remainder, '-'); separator >= 0; {
+			qualifier := remainder[:separator]
+			if isUpdateQualifier(qualifier) {
+				value, err := strconv.ParseInt(remainder[separator+1:], 10, 64)
+				if err == nil && value > 0 {
+					return BuildId(value), true
+				}
+				break
+			}
+			remainder = remainder[:separator]
+			separator = strings.LastIndexByte(remainder, '-')
+		}
+	}
+	return 0, false
+}
+
+// cleanupInterruptedBuildResources removes only cmgr's reserved staging names
+// after every build for a challenge has converged. A killed updater cannot
+// record these names in SQLite, so a successful retry is the point at which
+// they can be safely identified as orphaned.
+func (m *Manager) cleanupInterruptedBuildResources(
+	challenge ChallengeId,
+	buildIDs []BuildId,
+) error {
+	if len(buildIDs) == 0 {
+		return nil
+	}
+	expectedBuilds := make(map[BuildId]struct{}, len(buildIDs))
+	for _, buildID := range buildIDs {
+		expectedBuilds[buildID] = struct{}{}
+	}
+
+	var errs []error
+	imageResult, err := m.cli.ImageList(
+		m.ctx,
+		client.ImageListOptions{All: true},
+	)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list staged images: %w", err))
+	} else {
+		removedTags := make(map[string]struct{})
+		removeOptions := client.ImageRemoveOptions{PruneChildren: false}
+		for _, image := range imageResult.Items {
+			for _, tag := range image.RepoTags {
+				buildID, staged := stagedImageBuildID(tag, challenge)
+				if _, expected := expectedBuilds[buildID]; !staged || !expected {
+					continue
+				}
+				if _, removed := removedTags[tag]; removed {
+					continue
+				}
+				removedTags[tag] = struct{}{}
+				if _, removeErr := m.cli.ImageRemove(
+					m.ctx,
+					tag,
+					removeOptions,
+				); removeErr != nil && !errdefs.IsNotFound(removeErr) {
+					errs = append(
+						errs,
+						fmt.Errorf("remove orphaned staged image %s: %w", tag, removeErr),
+					)
+				}
+			}
+		}
+	}
+
+	entries, err := os.ReadDir(m.artifactsDir)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list staged artifacts: %w", err))
+	} else {
+		for _, entry := range entries {
+			buildID, staged := stagedArtifactBuildID(entry.Name())
+			if _, expected := expectedBuilds[buildID]; !staged || !expected {
+				continue
+			}
+			artifactPath := filepath.Join(m.artifactsDir, entry.Name())
+			if removeErr := os.Remove(artifactPath); removeErr != nil &&
+				!errors.Is(removeErr, os.ErrNotExist) {
+				errs = append(
+					errs,
+					fmt.Errorf(
+						"remove orphaned staged artifacts %s: %w",
+						artifactPath,
+						removeErr,
+					),
+				)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (m *Manager) discardStagedBuild(
 	metadata *ChallengeMetadata,
 	build *BuildMetadata,
@@ -889,10 +1038,11 @@ func (m *Manager) executeBuild(
 				"SEED":        &seedStr,
 				"FLAG":        bMeta.makeFlag(),
 			},
-			Remove:    true,
-			CacheFrom: buildCache,
-			Tags:      []string{imageName},
-			Target:    host.Target,
+			Remove:      true,
+			ForceRemove: true,
+			CacheFrom:   buildCache,
+			Tags:        []string{imageName},
+			Target:      host.Target,
 		}
 
 		// Call build
@@ -1154,12 +1304,6 @@ func (m *Manager) stopNetwork(instance *InstanceMetadata) error {
 	return err
 }
 
-// This approach is pretty heavy-handed and effectively serializes the creation
-// of all challenges that expose ports.  If this becomes a performance issue,
-// may need to look at fully managing ports in memory rather than a hybrid
-// with the SQLite database.
-var portLock sync.Mutex
-
 func (m *Manager) startContainers(
 	build *BuildMetadata,
 	instance *InstanceMetadata,
@@ -1174,7 +1318,7 @@ func (m *Manager) startContainersWithPersistence(
 	opts map[string]ContainerOptions,
 	persist bool,
 	preferredPorts map[string]int,
-) error {
+) (err error) {
 	revPortMap, err := m.getReversePortMap(build.Challenge)
 	if err != nil {
 		return err
@@ -1182,8 +1326,38 @@ func (m *Manager) startContainersWithPersistence(
 
 	if len(revPortMap) != 0 {
 		// No need to lock the port mapping if we are not mapping any ports...
-		portLock.Lock()
-		defer portLock.Unlock()
+		releasePortLock, err := m.acquirePortAllocationLock()
+		if err != nil {
+			return err
+		}
+		defer releasePortLock()
+
+		// If creation fails after Docker has bound a selected port but before
+		// the assignment commits, release those containers while still holding
+		// the allocation lock. This prevents a following process from selecting
+		// the same uncommitted port during the caller's broader rollback.
+		complete := false
+		defer func() {
+			if complete {
+				return
+			}
+			if cleanupErr := m.removeRetiredContainerIDs(
+				instance.Containers,
+			); cleanupErr != nil {
+				err = errors.Join(
+					err,
+					fmt.Errorf(
+						"release failed instance containers: %w",
+						cleanupErr,
+					),
+				)
+			}
+		}()
+		defer func() {
+			if err == nil {
+				complete = true
+			}
+		}()
 	}
 	hostIP, err := netip.ParseAddr(m.challengeInterface)
 	if err != nil {
@@ -1444,7 +1618,11 @@ func (m *Manager) startContainersWithPersistence(
 	if persist {
 		return m.finalizeInstance(instance)
 	}
-	return nil
+	// Replacement instances must publish any newly selected ports before the
+	// allocation lock is released. Existing ports normally reuse the old
+	// assignments, but a challenge update can add a port that is not yet
+	// represented in the database.
+	return m.replaceInstanceRuntimeMetadata(instance)
 }
 
 func inspectedPortAssignments(
@@ -1602,33 +1780,6 @@ func (m *Manager) prepareInstanceCutover(
 		return nil, err
 	}
 
-	if err := m.replaceInstanceRuntimeMetadata(candidate); err != nil {
-		var recoveryProblems []string
-		if cleanupErr := m.removeRetiredContainerIDs(
-			candidate.Containers,
-		); cleanupErr != nil {
-			recoveryProblems = append(
-				recoveryProblems,
-				fmt.Sprintf("remove replacement containers: %v", cleanupErr),
-			)
-		}
-		restartErr := m.resumeContainerProcesses(oldContainerIDs)
-		if restartErr != nil {
-			recoveryProblems = append(
-				recoveryProblems,
-				fmt.Sprintf("restart old containers: %v", restartErr),
-			)
-		}
-		if len(recoveryProblems) != 0 {
-			return nil, fmt.Errorf(
-				"could not record replacement containers: %v; recovery also failed: %s",
-				err,
-				strings.Join(recoveryProblems, "; "),
-			)
-		}
-		return nil, err
-	}
-
 	return &instanceCutover{old: &old, candidate: candidate}, nil
 }
 
@@ -1717,6 +1868,144 @@ func (m *Manager) removeRetiredContainerIDs(containerIDs []string) error {
 	return errors.Join(errs...)
 }
 
+func appendUniqueInstanceID(
+	instanceIDs []InstanceId,
+	seen map[InstanceId]struct{},
+	instanceID InstanceId,
+) []InstanceId {
+	if _, exists := seen[instanceID]; exists {
+		return instanceIDs
+	}
+	seen[instanceID] = struct{}{}
+	return append(instanceIDs, instanceID)
+}
+
+func (m *Manager) removeBrokenInstanceContainers(containerIDs []string) error {
+	var errs []error
+	for _, containerID := range containerIDs {
+		_, err := m.cli.ContainerRemove(
+			m.ctx,
+			containerID,
+			client.ContainerRemoveOptions{RemoveVolumes: true, Force: true},
+		)
+		if err != nil && !errdefs.IsNotFound(err) {
+			errs = append(
+				errs,
+				fmt.Errorf(
+					"remove broken instance container %s: %w",
+					containerID,
+					err,
+				),
+			)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (m *Manager) removeBrokenInstance(instance *InstanceMetadata) error {
+	// Keep every active ownership row until all of the instance's containers
+	// are gone. stopContainers removes rows incrementally, which would make a
+	// failed multi-container cleanup look healthy on the next startup as long
+	// as one container remained.
+	if err := m.removeBrokenInstanceContainers(instance.Containers); err != nil {
+		return err
+	}
+	if err := m.stopNetwork(instance); err != nil {
+		if retireErr := m.retireNetwork(instance.getNetworkName()); retireErr != nil {
+			return errors.Join(err, retireErr)
+		}
+		m.log.warnf(
+			"deferred removal of network %s during instance recovery",
+			instance.getNetworkName(),
+		)
+	}
+	return m.removeInstanceMetadata(instance.Id)
+}
+
+func (m *Manager) reconcileBrokenInstancesWith(
+	instanceIDs []InstanceId,
+	createInstance func(*BuildMetadata) (InstanceId, error),
+) error {
+	var errs []error
+	buildsToRestore := make([]*BuildMetadata, 0)
+	seenBuilds := make(map[BuildId]struct{})
+
+	for _, instanceID := range instanceIDs {
+		instance, err := m.lookupInstanceMetadata(instanceID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		build, err := m.lookupBuildMetadata(instance.Build)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := m.removeBrokenInstance(instance); err != nil {
+			errs = append(
+				errs,
+				fmt.Errorf("remove broken instance %d: %w", instanceID, err),
+			)
+			continue
+		}
+		m.log.warnf("removed broken instance %d", instanceID)
+
+		switch {
+		case build.InstanceCount >= 0:
+			if _, exists := seenBuilds[build.Id]; !exists {
+				seenBuilds[build.Id] = struct{}{}
+				buildsToRestore = append(buildsToRestore, build)
+			}
+		case build.InstanceCount == DYNAMIC_INSTANCES,
+			build.InstanceCount == LOCKED:
+			// Dynamic instances are user-created. LOCKED builds are staged or
+			// retired and must not regain capacity during startup cleanup.
+		default:
+			errs = append(
+				errs,
+				fmt.Errorf(
+					"build %d has invalid instance target %d",
+					build.Id,
+					build.InstanceCount,
+				),
+			)
+		}
+	}
+
+	for _, build := range buildsToRestore {
+		instances, err := m.getBuildInstances(build.Id)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for len(instances) < build.InstanceCount {
+			instanceID, err := createInstance(build)
+			if err != nil {
+				errs = append(
+					errs,
+					fmt.Errorf(
+						"restore capacity for build %d: %w",
+						build.Id,
+						err,
+					),
+				)
+				break
+			}
+			instances = append(instances, instanceID)
+			m.log.warnf(
+				"created replacement instance %d for build %d",
+				instanceID,
+				build.Id,
+			)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (m *Manager) reconcileBrokenInstances(instanceIDs []InstanceId) error {
+	return m.reconcileBrokenInstancesWith(instanceIDs, m.newInstance)
+}
+
 func (m *Manager) retryRetiredResources() error {
 	var errs []error
 	containerIDs, err := m.retiredContainerIDs()
@@ -1747,73 +2036,92 @@ func (m *Manager) retryRetiredResources() error {
 			}
 		}
 	}
-	incompleteInstances, err := m.incompleteInstanceIDs()
+	brokenInstances, err := m.incompleteInstanceIDs()
+	seenBrokenInstances := make(map[InstanceId]struct{}, len(brokenInstances))
 	if err != nil {
 		errs = append(errs, err)
 	} else {
-		for _, instanceID := range incompleteInstances {
-			instance, lookupErr := m.lookupInstanceMetadata(instanceID)
-			if lookupErr != nil {
-				errs = append(errs, lookupErr)
-				continue
-			}
-			if removeErr := m.stopNetwork(instance); removeErr != nil {
-				if retireErr := m.retireNetwork(
-					instance.getNetworkName(),
-				); retireErr != nil {
-					errs = append(errs, retireErr)
-				}
-			}
-			if removeErr := m.removeInstanceMetadata(instanceID); removeErr != nil {
-				errs = append(
-					errs,
-					fmt.Errorf(
-						"remove incomplete instance %d: %w",
-						instanceID,
-						removeErr,
-					),
-				)
-			}
+		for _, instanceID := range brokenInstances {
+			seenBrokenInstances[instanceID] = struct{}{}
 		}
 	}
-	trackedContainers, err := m.trackedContainerIDs()
+	trackedContainers, err := m.trackedContainers()
 	if err != nil {
 		errs = append(errs, err)
 	} else {
-		for _, containerID := range trackedContainers {
+		for _, tracked := range trackedContainers {
 			inspection, inspectErr := m.cli.ContainerInspect(
 				m.ctx,
-				containerID,
+				tracked.ID,
 				client.ContainerInspectOptions{},
 			)
 			if inspectErr != nil {
+				if errdefs.IsNotFound(inspectErr) {
+					m.log.warnf(
+						"tracked container %s for instance %d is missing",
+						tracked.ID,
+						tracked.Instance,
+					)
+					brokenInstances = appendUniqueInstanceID(
+						brokenInstances,
+						seenBrokenInstances,
+						tracked.Instance,
+					)
+					continue
+				}
 				errs = append(
 					errs,
 					fmt.Errorf(
 						"inspect tracked container %s: %w",
-						containerID,
+						tracked.ID,
 						inspectErr,
 					),
 				)
 				continue
 			}
-			if inspection.Container.State != nil &&
-				!inspection.Container.State.Running {
+			if inspection.Container.State == nil {
+				errs = append(
+					errs,
+					fmt.Errorf(
+						"inspect tracked container %s: Docker omitted runtime state",
+						tracked.ID,
+					),
+				)
+				continue
+			}
+			if !inspection.Container.State.Running {
 				if _, startErr := m.cli.ContainerStart(
 					m.ctx,
-					containerID,
+					tracked.ID,
 					client.ContainerStartOptions{},
 				); startErr != nil {
+					if errdefs.IsNotFound(startErr) {
+						m.log.warnf(
+							"tracked container %s disappeared before restart",
+							tracked.ID,
+						)
+						brokenInstances = appendUniqueInstanceID(
+							brokenInstances,
+							seenBrokenInstances,
+							tracked.Instance,
+						)
+						continue
+					}
 					errs = append(
 						errs,
 						fmt.Errorf(
 							"restart tracked container %s: %w",
-							containerID,
+							tracked.ID,
 							startErr,
 						),
 					)
 				}
 			}
+		}
+	}
+	if len(brokenInstances) != 0 {
+		if err := m.reconcileBrokenInstances(brokenInstances); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)

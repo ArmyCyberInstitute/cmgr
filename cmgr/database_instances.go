@@ -269,18 +269,29 @@ func (m *Manager) incompleteInstanceIDs() ([]InstanceId, error) {
 		`SELECT instances.id
 		 FROM instances
 		 LEFT JOIN containers ON containers.instance = instances.id
-		 GROUP BY instances.id
+		 GROUP BY instances.id, instances.build
 		 HAVING COUNT(containers.id) = 0
+		    OR COUNT(containers.id) != (
+				SELECT COUNT(*)
+				FROM images
+				WHERE images.build = instances.build
+				  AND images.host != 'builder'
+			)
 		 ORDER BY instances.id;`,
 	)
 	return instances, err
 }
 
-func (m *Manager) trackedContainerIDs() ([]string, error) {
-	containers := []string{}
+type trackedContainerRecord struct {
+	Instance InstanceId `db:"instance"`
+	ID       string     `db:"id"`
+}
+
+func (m *Manager) trackedContainers() ([]trackedContainerRecord, error) {
+	containers := []trackedContainerRecord{}
 	err := m.db.Select(
 		&containers,
-		"SELECT id FROM containers ORDER BY id;",
+		"SELECT instance, id FROM containers ORDER BY instance, id;",
 	)
 	return containers, err
 }

@@ -1,10 +1,14 @@
 package cmgr
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
+	"syscall"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
@@ -204,8 +208,12 @@ const schemaQuery string = `
 		ON containerOptions(challenge, host);`
 
 const (
-	currentDatabaseVersion = 2
-	sqliteBusyTimeoutMS    = 5000
+	currentDatabaseVersion          = 2
+	sqliteBusyTimeoutMS             = 5000
+	databaseBackupTimestampFormat   = "20060102T150405.000000000Z"
+	databaseMigrationBackupFileMode = 0600
+	databaseMigrationLatchSuffix    = ".cmgr-migration-latch"
+	databaseMigrationLatchErrorMax  = 4096
 
 	databaseV1IndexesQuery = `
 		CREATE UNIQUE INDEX IF NOT EXISTS hostsOrderIndex
@@ -307,6 +315,16 @@ const (
 type databaseMigration struct {
 	to    int
 	apply func(*sqlx.Tx) error
+}
+
+type databaseMigrationLatch struct {
+	State       string `json:"state"`
+	FromVersion int    `json:"from_version"`
+	ToVersion   int    `json:"to_version"`
+	StartedAt   string `json:"started_at"`
+	FailedAt    string `json:"failed_at,omitempty"`
+	BackupPath  string `json:"backup_path"`
+	Error       string `json:"error,omitempty"`
 }
 
 type databaseConflictCheck struct {
@@ -779,7 +797,254 @@ func migrateDatabase(db *sqlx.DB, fromVersion int) error {
 	return nil
 }
 
+func databaseMigrationBackupPath(
+	dbPath string,
+	fromVersion int,
+	now time.Time,
+) string {
+	return fmt.Sprintf(
+		"%s.pre-migration-v%d-to-v%d-%s.bak",
+		dbPath,
+		fromVersion,
+		currentDatabaseVersion,
+		now.UTC().Format(databaseBackupTimestampFormat),
+	)
+}
+
+func databaseMigrationLatchPath(dbPath string) string {
+	if dbPath == "" || dbPath == ":memory:" {
+		return ""
+	}
+	return dbPath + databaseMigrationLatchSuffix
+}
+
+func syncParentDirectory(path string) error {
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	return errors.Join(directory.Sync(), directory.Close())
+}
+
+func checkDatabaseMigrationLatch(path string) error {
+	if path == "" {
+		return nil
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("could not inspect database migration latch: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("database migration latch %s is not a regular file", path)
+	}
+	return fmt.Errorf(
+		"database migration is blocked by %s; inspect or restore the database, then move or remove the latch before retrying",
+		path,
+	)
+}
+
+func writeDatabaseMigrationLatch(
+	path string,
+	latch *databaseMigrationLatch,
+	create bool,
+) error {
+	contents, err := json.MarshalIndent(latch, "", "  ")
+	if err != nil {
+		return fmt.Errorf("could not encode database migration latch: %w", err)
+	}
+	contents = append(contents, '\n')
+
+	flags := os.O_WRONLY | syscall.O_NOFOLLOW
+	if create {
+		flags |= os.O_CREATE | os.O_EXCL
+	} else {
+		flags |= os.O_TRUNC
+	}
+	file, err := os.OpenFile(path, flags, databaseMigrationBackupFileMode)
+	if err != nil {
+		return fmt.Errorf("could not open database migration latch %s: %w", path, err)
+	}
+	_, writeErr := file.Write(contents)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		return fmt.Errorf("could not write database migration latch %s: %w", path, err)
+	}
+	if err := syncParentDirectory(path); err != nil {
+		return fmt.Errorf("could not sync database migration latch: %w", err)
+	}
+	return nil
+}
+
+func recordDatabaseMigrationFailure(
+	path string,
+	latch *databaseMigrationLatch,
+	migrationErr error,
+) error {
+	latch.State = "failed"
+	latch.FailedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	latch.Error = migrationErr.Error()
+	if len(latch.Error) > databaseMigrationLatchErrorMax {
+		latch.Error = latch.Error[:databaseMigrationLatchErrorMax]
+	}
+	if err := writeDatabaseMigrationLatch(path, latch, false); err != nil {
+		return errors.Join(
+			migrationErr,
+			fmt.Errorf("could not record database migration failure: %w", err),
+		)
+	}
+	return migrationErr
+}
+
+func removeDatabaseMigrationLatch(path string) error {
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("could not remove database migration latch %s: %w", path, err)
+	}
+	if err := syncParentDirectory(path); err != nil {
+		return fmt.Errorf("could not sync removal of database migration latch: %w", err)
+	}
+	return nil
+}
+
+func databaseMigrationRequired(db *sqlx.DB) (bool, int, error) {
+	var version int
+	if err := db.Get(&version, "PRAGMA user_version;"); err != nil {
+		return false, 0, fmt.Errorf("could not read database version: %w", err)
+	}
+	var tableCount int
+	if err := db.Get(
+		&tableCount,
+		`SELECT COUNT(*)
+		 FROM sqlite_schema
+		 WHERE type = 'table' AND name NOT LIKE 'sqlite_%';`,
+	); err != nil {
+		return false, 0, fmt.Errorf("could not inspect database tables: %w", err)
+	}
+	return tableCount != 0 && version < currentDatabaseVersion, version, nil
+}
+
+// backupDatabaseBeforeMigration creates a transactionally consistent snapshot
+// of an existing older database. VACUUM INTO avoids copying a live SQLite
+// database file without its journal or WAL and refuses to overwrite an
+// existing backup.
+func backupDatabaseBeforeMigration(
+	db *sqlx.DB,
+	dbPath string,
+	now time.Time,
+) (string, error) {
+	var version int
+	if err := db.Get(&version, "PRAGMA user_version;"); err != nil {
+		return "", fmt.Errorf("could not read database version before backup: %w", err)
+	}
+
+	var tableCount int
+	if err := db.Get(
+		&tableCount,
+		`SELECT COUNT(*)
+		 FROM sqlite_schema
+		 WHERE type = 'table' AND name NOT LIKE 'sqlite_%';`,
+	); err != nil {
+		return "", fmt.Errorf("could not inspect database before backup: %w", err)
+	}
+	if tableCount == 0 || version >= currentDatabaseVersion {
+		return "", nil
+	}
+	if dbPath == "" || dbPath == ":memory:" {
+		// An in-memory database has no durable source file to preserve.
+		return "", nil
+	}
+
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("could not inspect database file before backup: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("database path %s is not a regular file", dbPath)
+	}
+
+	backupPath := databaseMigrationBackupPath(dbPath, version, now)
+	stagingPath := backupPath + ".tmp"
+	backupFile, err := os.OpenFile(
+		stagingPath,
+		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
+		databaseMigrationBackupFileMode,
+	)
+	if err != nil {
+		return "", fmt.Errorf(
+			"could not reserve pre-migration database backup %s: %w",
+			stagingPath,
+			err,
+		)
+	}
+	if err := backupFile.Close(); err != nil {
+		_ = os.Remove(stagingPath)
+		return "", fmt.Errorf(
+			"could not prepare pre-migration database backup %s: %w",
+			stagingPath,
+			err,
+		)
+	}
+	if _, err := db.Exec("VACUUM INTO ?;", stagingPath); err != nil {
+		_ = os.Remove(stagingPath)
+		return "", fmt.Errorf(
+			"could not create pre-migration database backup %s: %w",
+			stagingPath,
+			err,
+		)
+	}
+
+	// Never make the automatic safety copy more permissive than a private
+	// database, even if the process umask would otherwise allow it.
+	if err := os.Chmod(stagingPath, databaseMigrationBackupFileMode); err != nil {
+		removeErr := os.Remove(stagingPath)
+		if removeErr != nil && !os.IsNotExist(removeErr) {
+			err = errors.Join(
+				err,
+				fmt.Errorf("could not remove incomplete backup: %w", removeErr),
+			)
+		}
+		return "", fmt.Errorf("could not secure database backup: %w", err)
+	}
+
+	backupFile, err = os.Open(stagingPath)
+	if err == nil {
+		err = backupFile.Sync()
+		err = errors.Join(err, backupFile.Close())
+	}
+	if err != nil {
+		_ = os.Remove(stagingPath)
+		return "", fmt.Errorf("could not sync database backup: %w", err)
+	}
+	// Publish without replacement. Both names are in the same directory, so a
+	// hard link atomically makes the synced snapshot visible and fails with
+	// EEXIST rather than overwriting an earlier backup.
+	if err := os.Link(stagingPath, backupPath); err != nil {
+		_ = os.Remove(stagingPath)
+		return "", fmt.Errorf("could not publish database backup: %w", err)
+	}
+	if err := syncParentDirectory(backupPath); err != nil {
+		return "", fmt.Errorf("could not sync published database backup: %w", err)
+	}
+	if err := os.Remove(stagingPath); err != nil {
+		return "", fmt.Errorf("could not remove staged database backup: %w", err)
+	}
+	if err := syncParentDirectory(backupPath); err != nil {
+		return "", fmt.Errorf("could not sync database backup directory: %w", err)
+	}
+	return backupPath, nil
+}
+
 func ensureDatabaseSchema(db *sqlx.DB) error {
+	return ensureDatabaseSchemaWithChanges(db, true)
+}
+
+func ensureDatabaseSchemaWithChanges(
+	db *sqlx.DB,
+	allowChanges bool,
+) error {
 	var version int
 	if err := db.Get(&version, "PRAGMA user_version;"); err != nil {
 		return fmt.Errorf("could not read database version: %w", err)
@@ -809,6 +1074,11 @@ func ensureDatabaseSchema(db *sqlx.DB) error {
 				version,
 			)
 		}
+		if !allowChanges {
+			return errors.New(
+				"database initialization requires exclusive startup access",
+			)
+		}
 		if err := createCurrentDatabaseSchema(db); err != nil {
 			return err
 		}
@@ -816,6 +1086,13 @@ func ensureDatabaseSchema(db *sqlx.DB) error {
 	}
 	if version == currentDatabaseVersion {
 		return validateCurrentDatabaseSchema(db)
+	}
+	if !allowChanges {
+		return fmt.Errorf(
+			"database migration from version %d to %d requires exclusive startup access",
+			version,
+			currentDatabaseVersion,
+		)
 	}
 	if err := migrateDatabase(db, version); err != nil {
 		return err
@@ -826,10 +1103,29 @@ func ensureDatabaseSchema(db *sqlx.DB) error {
 // Connects to the desired database (creating it if it does not exist) and then
 // creates or migrates its schema and ensures that the sqlite engine is
 // enforcing foreign key constraints.
-func (m *Manager) initDatabase() error {
+func configuredDatabasePath() string {
 	dbPath, isSet := os.LookupEnv(DB_ENV)
 	if !isSet {
-		dbPath = "cmgr.db"
+		return "cmgr.db"
+	}
+	return dbPath
+}
+
+func (m *Manager) initDatabase() error {
+	return m.initDatabaseWithSchemaChanges(true)
+}
+
+func (m *Manager) initDatabaseWithSchemaChanges(allowChanges bool) error {
+	dbPath := configuredDatabasePath()
+	canonicalPath, err := canonicalDatabasePath(dbPath)
+	if err != nil {
+		m.log.errorf("could not resolve database path: %s", err)
+		return err
+	}
+	latchPath := databaseMigrationLatchPath(canonicalPath)
+	if err := checkDatabaseMigrationLatch(latchPath); err != nil {
+		m.log.error(err)
+		return err
 	}
 
 	dataSourceName := fmt.Sprintf(
@@ -876,9 +1172,70 @@ func (m *Manager) initDatabase() error {
 		)
 	}
 
-	if err = ensureDatabaseSchema(db); err != nil {
+	migrationRequired, fromVersion, err := databaseMigrationRequired(db)
+	if err != nil {
+		m.log.error(err)
+		return err
+	}
+
+	var migrationLatch *databaseMigrationLatch
+	if allowChanges && migrationRequired {
+		startedAt := time.Now().UTC()
+		migrationLatch = &databaseMigrationLatch{
+			State:       "attempting",
+			FromVersion: fromVersion,
+			ToVersion:   currentDatabaseVersion,
+			StartedAt:   startedAt.Format(time.RFC3339Nano),
+			BackupPath: databaseMigrationBackupPath(
+				canonicalPath,
+				fromVersion,
+				startedAt,
+			),
+		}
+		if err := writeDatabaseMigrationLatch(
+			latchPath,
+			migrationLatch,
+			true,
+		); err != nil {
+			m.log.errorf("could not create database migration latch: %s", err)
+			return err
+		}
+
+		backupPath, err := backupDatabaseBeforeMigration(
+			db,
+			canonicalPath,
+			startedAt,
+		)
+		if err != nil {
+			err = recordDatabaseMigrationFailure(
+				latchPath,
+				migrationLatch,
+				err,
+			)
+			m.log.errorf("could not back up database before migration: %s", err)
+			return err
+		}
+		if backupPath != "" {
+			m.log.warnf("created pre-migration database backup: %s", backupPath)
+		}
+	}
+
+	if err = ensureDatabaseSchemaWithChanges(db, allowChanges); err != nil {
+		if migrationLatch != nil {
+			err = recordDatabaseMigrationFailure(
+				latchPath,
+				migrationLatch,
+				err,
+			)
+		}
 		m.log.errorf("could not set database schema: %s", err)
 		return err
+	}
+	if migrationLatch != nil {
+		if err := removeDatabaseMigrationLatch(latchPath); err != nil {
+			m.log.error(err)
+			return err
+		}
 	}
 
 	m.dbPath = dbPath

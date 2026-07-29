@@ -330,7 +330,17 @@ func (m *Manager) updateChallengesInternal(
 				continue
 			}
 		}
-		if err := m.replaceChallengeMetadata(metadata); err != nil {
+		persistedMetadata := metadata
+		if rebuild {
+			// An empty source digest is a durable "rebuild incomplete"
+			// marker. DetectChanges treats it as modified, so an update
+			// interrupted after this transaction will rebuild every build
+			// again instead of accepting a partially cut-over generation.
+			inProgressMetadata := *metadata
+			inProgressMetadata.SourceDigest = ""
+			persistedMetadata = &inProgressMetadata
+		}
+		if err := m.replaceChallengeMetadata(persistedMetadata); err != nil {
 			err = fmt.Errorf("could not update challenge %q: %w", metadata.Id, err)
 			m.log.error(err)
 			errs = append(errs, err)
@@ -387,7 +397,7 @@ func (m *Manager) updateChallengesInternal(
 						challengeFailed = true
 						break
 					}
-					qualifier := "cmgr-validate-" + randomSuffix
+					qualifier := stagedBuildQualifierPrefix + randomSuffix
 
 					// Resetting the flag signals to rebuild the Dockerfile
 					candidate.Flag = ""
@@ -491,9 +501,36 @@ func (m *Manager) updateChallengesInternal(
 					)
 					continue
 				}
+				var finishErrs []error
 				for _, update := range completedUpdates {
-					errs = append(errs, m.finishBuildUpdate(update)...)
+					finishErrs = append(finishErrs, m.finishBuildUpdate(update)...)
 				}
+				if len(finishErrs) != 0 {
+					errs = append(errs, finishErrs...)
+					continue
+				}
+			}
+			if err := m.cleanupInterruptedBuildResources(
+				metadata.Id,
+				buildIds,
+			); err != nil {
+				err = fmt.Errorf(
+					"could not clean interrupted update resources for challenge %q: %w",
+					metadata.Id,
+					err,
+				)
+				m.log.error(err)
+				errs = append(errs, err)
+				continue
+			}
+			if err := m.replaceChallengeMetadata(metadata); err != nil {
+				err = fmt.Errorf(
+					"could not complete update for challenge %q: %w",
+					metadata.Id,
+					err,
+				)
+				m.log.error(err)
+				errs = append(errs, err)
 			}
 		}
 	}

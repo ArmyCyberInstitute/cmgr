@@ -37,12 +37,73 @@ also launch the REST server on port 4200 with `./cmgrd` or launch all of the
 examples from the CLI with `./cmgr test --no-solve` which will launch an
 instance of each example challenge and print the associated port information.
 
+## Upgrading and database migrations
+
+Always make your own verified backup of `CMGR_DB` before starting a newer cmgr
+binary that may migrate the database. Stop every `cmgr` and `cmgrd` process
+that shares the database first, then create a timestamped copy. For example:
+
+```sh
+cmgr_db_path=${CMGR_DB:-cmgr.db}
+cp -p -- "$cmgr_db_path" \
+  "$cmgr_db_path.user-backup-$(date -u +%Y%m%dT%H%M%SZ)"
+```
+
+Keep that operator-managed backup until the upgraded deployment and its
+challenges have been validated. Do not copy a database while another process
+may be writing it; use SQLite's backup tooling instead if the deployment
+cannot be stopped.
+
+As an additional safeguard, cmgr creates a transactionally consistent,
+timestamped copy immediately before it migrates an existing older schema. The
+copy is written beside the database as
+`<CMGR_DB>.pre-migration-v<old>-to-v<new>-<UTC timestamp>.bak`, and migration
+is aborted if the copy cannot be created. This automatic copy is retained
+whether migration succeeds or fails, but it is a fallback rather than a
+replacement for the operator-managed backup.
+
+Before the backup starts, cmgr creates
+`<CMGR_DB>.cmgr-migration-latch`. It removes the latch only after every
+migration and the final schema validation succeed. A failed migration records
+the failure in that file; an interrupted process leaves it in the `attempting`
+state. Any later startup fails before creating another backup or modifying the
+database while the latch exists.
+
+To recover, stop every process using the database and preserve the database,
+its sidecars, automatic backup, and migration latch. Restore the selected
+backup to `CMGR_DB` (or otherwise repair and validate the database), and move
+aside any `CMGR_DB-wal` and `CMGR_DB-shm` files belonging to the failed
+database. Only after that recovery work should you move the latch aside, for
+example:
+
+```sh
+cmgr_db_path=${CMGR_DB:-cmgr.db}
+mv -- "$cmgr_db_path.cmgr-migration-latch" \
+  "$cmgr_db_path.cmgr-migration-latch.$(date -u +%Y%m%dT%H%M%SZ)"
+```
+
+Restart the cmgr version appropriate for the restored database. Keep the
+failed database, sidecars, backup, and moved latch until recovery is confirmed.
+
 ## Configuration
 
 **cmgr** is configured using environment variables.  In particular, it
 currently uses the following variables:
 
-- *CMGR\_DB*: path to cmgr's database file (defaults to 'cmgr.db')
+- *CMGR\_DB*: path to cmgr's database file (defaults to 'cmgr.db'). cmgr
+  creates sibling `<CMGR_DB>.cmgr.lock`,
+  `<CMGR_DB>.cmgr.lock.gate`, and `<CMGR_DB>.cmgr.lock.ports` files to
+  coordinate updates, fair reader/writer acquisition, and host-port allocation
+  across local `cmgr` and `cmgrd` processes. These files contain no application
+  data; their `flock` state is maintained by the kernel. Do not remove or
+  replace them while a cmgr process is running. All processes using one
+  database must see the same database directory and lock files; when
+  containerizing cmgr, bind-mount the directory rather than only the database
+  file. Migrations, recovery cleanup, and schema convergence require exclusive
+  access. When the database is already current and another ordinary operation
+  is active, a new cmgr process opens it with shared access and defers cleanup
+  instead of waiting for that operation. Separate processes can still build
+  different challenges concurrently when no exclusive operation is pending.
 
 - *CMGR\_DIR*: directory containing all challenges (defaults to '.')
 
@@ -98,7 +159,8 @@ does **not** impose a limit on the number of active instances:
   build or schema request (defaults to `10000`)
 
 - *CMGR\_MAX\_CONCURRENT\_BUILDS*: Docker builds cmgr may execute concurrently
-  (defaults to `4`)
+  within one process (defaults to `4`). Separate cmgr processes have their own
+  limits; this setting is not an aggregate host-wide limit.
 
 - *CMGR\_MAX\_BUILD\_CONTEXT\_FILES* and
   *CMGR\_MAX\_BUILD\_CONTEXT\_BYTES*: challenge or solver context limits

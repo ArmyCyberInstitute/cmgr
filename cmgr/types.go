@@ -38,6 +38,10 @@ type Manager struct {
 	artifactsDir         string
 	db                   *sqlx.DB
 	dbPath               string
+	operationLockPath    string
+	operationGatePath    string
+	portLockPath         string
+	operationMu          sync.RWMutex
 	challengeDockerfiles map[string][]byte
 	schemaMu             sync.Mutex
 	buildLocksMu         sync.Mutex

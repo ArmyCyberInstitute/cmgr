@@ -58,7 +58,11 @@ func (m *Manager) runSolver(instance InstanceId) error {
 	solveContext := m.createSolveContext(bMeta)
 
 	imageName := fmt.Sprintf("%s/%s:%d", bMeta.Challenge, "solver", bMeta.Id)
-	opts := client.ImageBuildOptions{Remove: true, Tags: []string{imageName}}
+	opts := client.ImageBuildOptions{
+		Remove:      true,
+		ForceRemove: true,
+		Tags:        []string{imageName},
+	}
 
 	// Build the base image (will run the solver)
 	resp, err := m.cli.ImageBuild(operationContext, solveContext, opts)

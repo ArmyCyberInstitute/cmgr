@@ -264,6 +264,16 @@ jobs:
           CMGR_PORTS: 24750-25249
         run: bin/cmgr test --require-solve examples
 
+      - name: Build distinct challenges from four cmgr processes
+        env:
+          DOCKER_HOST: tcp://127.0.0.1:23750
+          CMGR_INTERFACE: 0.0.0.0
+          CMGR_PORTS: 24750-25249
+          CMGR_PARALLEL_TEST_ROOT: ${{ runner.temp }}/cmgr-parallel-builds
+        run: |
+          mkdir -p "${CMGR_PARALLEL_TEST_ROOT}"
+          bash support/test_parallel_process_builds.sh bin/cmgr examples
+
       - name: Show nested Docker logs
         if: failure()
         run: sudo docker logs cmgr-ci-engine

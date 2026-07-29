@@ -7,9 +7,24 @@
 - cmgr now uses SQLite schema version 2. Existing unversioned, version 0, and
   version 1 databases are migrated transactionally at startup. The migration
   adds SHA-256 challenge digests, explicit schema ownership, persisted network
-  policy, and deferred Docker cleanup records. Back up `CMGR_DB` before the
-  first upgrade. Databases from newer cmgr versions or databases missing
-  required schema invariants are rejected instead of being modified
+  policy, and deferred Docker cleanup records. Before the first upgrade, stop
+  every process sharing `CMGR_DB` and make your own verified, timestamped
+  backup; keep it until the upgraded deployment has been validated.
+
+- As a second safety layer, cmgr creates a transactionally consistent backup
+  immediately before migrating an existing older database. It is retained as
+  `<CMGR_DB>.pre-migration-v<old>-to-v<new>-<UTC timestamp>.bak` whether the
+  migration succeeds or fails, and migration is aborted if the backup cannot
+  be created. Before attempting that backup, cmgr creates
+  `<CMGR_DB>.cmgr-migration-latch` and removes it only after migration and
+  schema validation succeed. A failed or interrupted migration leaves the
+  latch in place, and later startups stop before creating another backup or
+  changing the database until an operator repairs or restores the database and
+  moves the latch aside. Automatic backup publication also refuses to
+  overwrite an existing destination. This does not replace the
+  operator-managed backup. Recovery and SQLite sidecar-file handling are
+  documented in the README. Databases from newer cmgr versions or databases
+  missing required schema invariants are rejected instead of being modified
   opportunistically.
 
 - Flag formats are now limited to 128 bytes and must contain exactly one
@@ -65,6 +80,24 @@
 
 ### Correctness and hardening
 
+- Process-shared operation locking now uses a writer-preference gate so a
+  pending challenge update, schema convergence, migration, or recovery pass
+  cannot be starved by a stream of later builds. Independent ordinary builds
+  retain shared access and can still run concurrently. Schema creation,
+  updates, and deletion are exclusive for the complete convergence interval.
+
+- Host-port selection is protected by a database-scoped process lock from
+  selection through Docker creation and database persistence. Parallel
+  `cmgr`/`cmgrd` processes using one database can no longer select the same
+  not-yet-persisted port.
+
+- Startup recovery now reconciles incomplete instances and instances whose
+  tracked Docker containers no longer exist. Broken dynamic instances are
+  removed; fixed-count schema builds are restored to their configured
+  capacity. Multi-container cleanup retains the complete ownership record
+  until every sibling is gone, and transient Docker failures preserve state
+  for a later retry.
+
 - Schema convergence stages and validates replacement builds before activating
   a new definition, scales up before destructive cleanup, and persists
   explicit ownership for empty and manual schemas.
@@ -73,6 +106,23 @@
   transactions and preserve the original operation error if rollback also
   fails. Failed container cutovers are retained for cleanup and retried on the
   next startup.
+
+- Challenge updates now hold a process-shared exclusive lock associated with
+  `CMGR_DB`. Startup cleanup and other mutating `cmgr`/`cmgrd` operations wait
+  for that update to finish, preventing a concurrent process from deleting
+  rollback-reserve containers or starting an instance from a candidate image.
+  This creates a sibling `<CMGR_DB>.cmgr.lock` file; container deployments must
+  share the database directory, not only the database file. Migrations and
+  recovery cleanup remain exclusive, while a process opening an already-current
+  database may use shared startup access when another ordinary operation is
+  active. This permits separate processes to build distinct challenges
+  concurrently instead of serializing behind startup cleanup.
+
+- Rebuilding a challenge now persists an incomplete-update marker until every
+  build and running instance has cut over successfully. If `cmgr` is killed
+  between builds, the next update retries the whole challenge instead of
+  treating a mixed old/new generation as unmodified, and removes orphaned
+  staging images and artifacts after convergence.
 
 - SQLite connections now wait for short-lived writer locks instead of
   immediately returning `SQLITE_BUSY` during concurrent API requests. An
@@ -90,6 +140,10 @@
   use SHA-256 source identity, build generation is protected against duplicate
   concurrent work, and malformed or duplicate Docker build metadata is
   rejected.
+
+- Failed challenge, frozen-base, and solver image builds now force-remove
+  Docker intermediate containers instead of leaking stopped build containers
+  on the daemon.
 
 - `cmgrd` now enforces bounded, single-value JSON bodies with unknown-field
   rejection; preserves database errors; and returns 400, 404, or 409 for typed

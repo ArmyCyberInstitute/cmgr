@@ -46,12 +46,27 @@ func NewManager(logLevel LogLevel) *Manager {
 		return nil
 	}
 
-	if err := mgr.initDatabase(); err != nil {
+	if err := mgr.initOperationLock(); err != nil {
+		mgr.log.error(err)
+		return nil
+	}
+	releaseStartupLock, exclusiveStartup, err := mgr.acquireStartupOperationLock()
+	if err != nil {
+		mgr.log.error(err)
+		return nil
+	}
+	defer releaseStartupLock()
+
+	if err := mgr.initDatabaseWithSchemaChanges(exclusiveStartup); err != nil {
 		return nil
 	}
 
-	if err := mgr.retryRetiredResources(); err != nil {
-		mgr.log.warnf("could not finish deferred Docker cleanup: %v", err)
+	if exclusiveStartup {
+		if err := mgr.retryRetiredResources(); err != nil {
+			mgr.log.warnf("could not finish deferred Docker cleanup: %v", err)
+		}
+	} else {
+		mgr.log.debug("skipping startup cleanup while another operation is active")
 	}
 
 	return mgr
@@ -212,6 +227,12 @@ func (m *Manager) DetectChanges(fp string) *ChallengeUpdates {
 // perform any removals of challenge metadata (removing a built challenge is
 // considered an error).
 func (m *Manager) Update(fp string) *ChallengeUpdates {
+	release, err := m.acquireOperationLock(true)
+	if err != nil {
+		return &ChallengeUpdates{Errors: []error{err}}
+	}
+	defer release()
+
 	cu := m.DetectChanges(fp)
 	candidates := cu.Added
 	var errs []error
@@ -260,6 +281,11 @@ func (m *Manager) Update(fp string) *ChallengeUpdates {
 // non-functional.  It is ultimately the challenge author's responsibility to
 // take proper precautions.
 func (m *Manager) Freeze(challenge ChallengeId, force bool) error {
+	release, err := m.acquireOperationLock(false)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return m.freezeBaseImage(challenge, force)
 }
 
@@ -276,6 +302,12 @@ func (m *Manager) Freeze(challenge ChallengeId, force bool) error {
 // challenges harder.  This feature is opt-in by setting the
 // `CMGR_REGISTRY` environment variable.
 func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) ([]*BuildMetadata, error) {
+	release, err := m.acquireOperationLock(false)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	if len(seeds) == 0 {
 		return nil, invalidInput(errors.New("at least one seed is required"))
 	}
@@ -333,6 +365,12 @@ func (m *Manager) Build(challenge ChallengeId, seeds []int, flagFormat string) (
 // Creates a running "instance" of the given build and returns its identifier
 // on success otherwise an error.
 func (m *Manager) Start(build BuildId) (InstanceId, error) {
+	release, err := m.acquireOperationLock(false)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+
 	// Get build metadata
 	bMeta, err := m.lookupBuildMetadata(build)
 	if err != nil {
@@ -405,6 +443,12 @@ func (m *Manager) newInstance(build *BuildMetadata) (id InstanceId, err error) {
 
 // Stops the running "instance".
 func (m *Manager) Stop(instance InstanceId) error {
+	release, err := m.acquireOperationLock(false)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	// Get instance metadata
 	iMeta, err := m.lookupInstanceMetadata(instance)
 	if err != nil {
@@ -441,6 +485,12 @@ func (m *Manager) stopInstance(instance *InstanceMetadata) error {
 
 // Destroys the assoicated "build".
 func (m *Manager) Destroy(build BuildId) error {
+	release, err := m.acquireOperationLock(false)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	// Get build metadata
 	bMeta, err := m.lookupBuildMetadata(build)
 	if err != nil {
@@ -465,6 +515,11 @@ func (m *Manager) Destroy(build BuildId) error {
 
 // Runs the automated solver against the designated instance.
 func (m *Manager) CheckInstance(instance InstanceId) error {
+	release, err := m.acquireOperationLock(false)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return m.runSolver(instance)
 }
 
@@ -516,6 +571,12 @@ func (m *Manager) ListSchemas() ([]string, error) {
 // likely to be extremely time and resource intensive as it will start creating
 // all of the requested builds immediately and not return until complete.
 func (m *Manager) CreateSchema(schema *Schema) []error {
+	release, err := m.acquireOperationLock(true)
+	if err != nil {
+		return []error{err}
+	}
+	defer release()
+
 	if err := validateSchemaDefinition(schema); err != nil {
 		return []error{invalidInput(err)}
 	}
@@ -563,6 +624,12 @@ func (m *Manager) CreateSchema(schema *Schema) []error {
 // particular, updating the flag format will cause a complete rebuild of the
 // state.
 func (m *Manager) UpdateSchema(schema *Schema) []error {
+	release, err := m.acquireOperationLock(true)
+	if err != nil {
+		return []error{err}
+	}
+	defer release()
+
 	if err := validateSchemaDefinition(schema); err != nil {
 		return []error{invalidInput(err)}
 	}
@@ -709,6 +776,12 @@ func (m *Manager) convergeSchema(schema *Schema) []error {
 
 // Tears down all instances and builds belonging to the schema.
 func (m *Manager) DeleteSchema(name string) error {
+	release, err := m.acquireOperationLock(true)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	m.schemaMu.Lock()
 	defer m.schemaMu.Unlock()
 

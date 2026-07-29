@@ -1,6 +1,8 @@
 package cmgr
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -78,11 +80,35 @@ func TestInitDatabase(t *testing.T) {
 			sqliteBusyTimeoutMS,
 		)
 	}
+
+	backups, err := filepath.Glob(dbFile.Name() + ".pre-migration-*.bak")
+	if err != nil {
+		t.Fatalf("failed to inspect migration backups: %s", err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("new database unexpectedly created migration backups: %v", backups)
+	}
 }
 
 func TestDatabaseConcurrentWriterWaitsForLock(t *testing.T) {
-	manager := newSchemaTestManager(t)
-	txn, err := manager.db.Beginx()
+	databasePath := filepath.Join(t.TempDir(), "cmgr.db")
+	t.Setenv(DB_ENV, databasePath)
+
+	first := &Manager{log: newLogger(DISABLED)}
+	if err := first.initDatabase(); err != nil {
+		t.Fatal(err)
+	}
+	defer first.db.Close()
+
+	// A separate sql.DB has its own connection pool and busy handler, matching
+	// the database-locking behavior of another cmgr process.
+	second := &Manager{log: newLogger(DISABLED)}
+	if err := second.initDatabaseWithSchemaChanges(false); err != nil {
+		t.Fatal(err)
+	}
+	defer second.db.Close()
+
+	txn, err := first.db.Beginx()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +121,7 @@ func TestDatabaseConcurrentWriterWaitsForLock(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() {
-		result <- manager.createSchemaRecord("waiting-writer", true)
+		result <- second.createSchemaRecord("waiting-writer", true)
 	}()
 
 	// Without a busy timeout SQLite rejects the second writer immediately.
@@ -112,6 +138,48 @@ func TestDatabaseConcurrentWriterWaitsForLock(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("concurrent writer did not resume after the lock was released")
+	}
+}
+
+func TestSharedStartupDoesNotMigrateOlderDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cmgr.db")
+	db := newVersionZeroDatabase(t, dbPath)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(DB_ENV, dbPath)
+	manager := &Manager{log: newLogger(DISABLED)}
+	err := manager.initDatabaseWithSchemaChanges(false)
+	if err == nil {
+		if manager.db != nil {
+			_ = manager.db.Close()
+		}
+		t.Fatal("shared startup migrated an older database")
+	}
+	if !strings.Contains(err.Error(), "requires exclusive startup access") {
+		t.Fatalf("unexpected shared-startup migration error: %v", err)
+	}
+
+	backups, globErr := filepath.Glob(dbPath + ".pre-migration-*.bak")
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("shared startup unexpectedly created backups: %v", backups)
+	}
+
+	db, err = sqlx.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version int
+	if err := db.Get(&version, "PRAGMA user_version;"); err != nil {
+		t.Fatal(err)
+	}
+	if version != 0 {
+		t.Fatalf("shared startup changed database version to %d", version)
 	}
 }
 
@@ -203,6 +271,32 @@ func TestDatabaseV0ToV1Migration(t *testing.T) {
 	if endpointIndexCount != 1 {
 		t.Fatal("version 1 indexes were not created")
 	}
+
+	backupPath := requireSingleMigrationBackup(t, dbPath, 0)
+	backup, err := sqlx.Open("sqlite", backupPath)
+	if err != nil {
+		t.Fatalf("failed to open migration backup: %s", err)
+	}
+	defer backup.Close()
+	if err := backup.Get(&version, "PRAGMA user_version;"); err != nil {
+		t.Fatalf("failed to inspect migration backup version: %s", err)
+	}
+	if version != 0 {
+		t.Fatalf("migration backup version = %d, want 0", version)
+	}
+	if err := backup.Get(
+		&portCount,
+		`SELECT COUNT(*) FROM portNames
+		 WHERE challenge = 'challenge' AND name = 'http';`,
+	); err != nil {
+		t.Fatalf("failed to inspect migration backup data: %s", err)
+	}
+	if portCount != 2 {
+		t.Fatalf("migration backup was modified: got %d duplicate rows", portCount)
+	}
+	if _, err := os.Stat(databaseMigrationLatchPath(dbPath)); !os.IsNotExist(err) {
+		t.Fatalf("successful migration left its latch behind: %v", err)
+	}
 }
 
 func TestDatabaseAdoptsUnversionedCurrentSchema(t *testing.T) {
@@ -281,6 +375,61 @@ func TestDatabaseV0MigrationConflictRollsBack(t *testing.T) {
 		t.Fatal("manager retained a database handle after failed migration")
 	}
 
+	latchPath := databaseMigrationLatchPath(dbPath)
+	latchInfo, err := os.Stat(latchPath)
+	if err != nil {
+		t.Fatalf("failed migration did not create its latch: %s", err)
+	}
+	if mode := latchInfo.Mode().Perm(); mode != databaseMigrationBackupFileMode {
+		t.Fatalf(
+			"migration latch permissions = %04o, want %04o",
+			mode,
+			databaseMigrationBackupFileMode,
+		)
+	}
+	latchContents, err := os.ReadFile(latchPath)
+	if err != nil {
+		t.Fatalf("failed to read migration latch: %s", err)
+	}
+	var latch databaseMigrationLatch
+	if err := json.Unmarshal(latchContents, &latch); err != nil {
+		t.Fatalf("failed to decode migration latch: %s", err)
+	}
+	if latch.State != "failed" ||
+		latch.FromVersion != 0 ||
+		latch.ToVersion != currentDatabaseVersion ||
+		latch.BackupPath == "" ||
+		latch.Error == "" {
+		t.Fatalf("unexpected migration latch: %#v", latch)
+	}
+
+	firstBackups, err := filepath.Glob(dbPath + ".pre-migration-*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := &Manager{log: newLogger(DISABLED)}
+	secondErr := second.initDatabase()
+	if secondErr == nil {
+		if second.db != nil {
+			_ = second.db.Close()
+		}
+		t.Fatal("second migration attempt ignored the failure latch")
+	}
+	if !strings.Contains(secondErr.Error(), "migration is blocked") {
+		t.Fatalf("unexpected repeated-migration error: %s", secondErr)
+	}
+	secondBackups, err := filepath.Glob(dbPath + ".pre-migration-*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(secondBackups, firstBackups) {
+		t.Fatalf(
+			"blocked migration created another backup: before=%v after=%v",
+			firstBackups,
+			secondBackups,
+		)
+	}
+
 	db, err = sqlx.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("failed to reopen rolled-back database: %s", err)
@@ -324,6 +473,123 @@ func TestDatabaseV0MigrationConflictRollsBack(t *testing.T) {
 	}
 	if endpointIndexCount != 0 {
 		t.Fatal("failed migration left version 1 indexes behind")
+	}
+
+	backupPath := requireSingleMigrationBackup(t, dbPath, 0)
+	backup, err := sqlx.Open("sqlite", backupPath)
+	if err != nil {
+		t.Fatalf("failed to open failed-migration backup: %s", err)
+	}
+	defer backup.Close()
+	if err := backup.Get(&version, "PRAGMA user_version;"); err != nil {
+		t.Fatalf("failed to inspect failed-migration backup version: %s", err)
+	}
+	if version != 0 {
+		t.Fatalf("failed-migration backup version = %d, want 0", version)
+	}
+	if err := backup.Get(&portCount, "SELECT COUNT(*) FROM portNames;"); err != nil {
+		t.Fatalf("failed to inspect failed-migration backup data: %s", err)
+	}
+	if portCount != 3 {
+		t.Fatalf("failed-migration backup was modified: got %d rows", portCount)
+	}
+}
+
+func TestInterruptedMigrationLatchBlocksUntilRemoved(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cmgr.db")
+	db := newVersionZeroDatabase(t, dbPath)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	latchPath := databaseMigrationLatchPath(dbPath)
+	latch := &databaseMigrationLatch{
+		State:       "attempting",
+		FromVersion: 0,
+		ToVersion:   currentDatabaseVersion,
+		StartedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		BackupPath:  databaseMigrationBackupPath(dbPath, 0, time.Now()),
+	}
+	if err := writeDatabaseMigrationLatch(latchPath, latch, true); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(DB_ENV, dbPath)
+	blocked := &Manager{log: newLogger(DISABLED)}
+	err := blocked.initDatabase()
+	if err == nil || !strings.Contains(err.Error(), "migration is blocked") {
+		t.Fatalf("interrupted migration latch was not enforced: %v", err)
+	}
+	backups, err := filepath.Glob(dbPath + ".pre-migration-*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("blocked interrupted migration created backups: %v", backups)
+	}
+
+	if err := os.Remove(latchPath); err != nil {
+		t.Fatal(err)
+	}
+	retried := &Manager{log: newLogger(DISABLED)}
+	if err := retried.initDatabase(); err != nil {
+		t.Fatalf("migration did not resume after latch removal: %s", err)
+	}
+	defer retried.db.Close()
+	if _, err := os.Stat(latchPath); !os.IsNotExist(err) {
+		t.Fatalf("successful retry left migration latch behind: %v", err)
+	}
+}
+
+func TestMigrationLatchRejectsNonRegularPath(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cmgr.db")
+	db := newVersionZeroDatabase(t, dbPath)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	latchPath := databaseMigrationLatchPath(dbPath)
+	if err := os.Mkdir(latchPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(DB_ENV, dbPath)
+	manager := &Manager{log: newLogger(DISABLED)}
+	err := manager.initDatabase()
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("nonregular migration latch was not rejected: %v", err)
+	}
+}
+
+func TestMigrationBackupPublicationDoesNotOverwrite(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cmgr.db")
+	db := newVersionZeroDatabase(t, dbPath)
+	defer db.Close()
+
+	now := time.Date(2026, time.July, 29, 12, 0, 0, 123, time.UTC)
+	backupPath, err := backupDatabaseBeforeMigration(db, dbPath, now)
+	if err != nil {
+		t.Fatalf("failed to create initial migration backup: %s", err)
+	}
+	before, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Exec("CREATE TABLE later_change(value TEXT);"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backupDatabaseBeforeMigration(db, dbPath, now); err == nil {
+		t.Fatal("second backup overwrote an existing destination")
+	}
+	after, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("existing migration backup content changed")
+	}
+	if _, err := os.Stat(backupPath + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("failed publication left staged backup behind: %v", err)
 	}
 }
 
@@ -387,6 +653,51 @@ func newVersionZeroDatabase(t *testing.T, dbPath string) *sqlx.DB {
 		t.Fatalf("failed to downgrade database fixture to version 0: %s", err)
 	}
 	return db
+}
+
+func requireSingleMigrationBackup(
+	t *testing.T,
+	dbPath string,
+	fromVersion int,
+) string {
+	t.Helper()
+
+	prefix := fmt.Sprintf(
+		"%s.pre-migration-v%d-to-v%d-",
+		dbPath,
+		fromVersion,
+		currentDatabaseVersion,
+	)
+	backups, err := filepath.Glob(prefix + "*.bak")
+	if err != nil {
+		t.Fatalf("failed to inspect migration backups: %s", err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("got %d migration backups, want one: %v", len(backups), backups)
+	}
+	stagingFiles, err := filepath.Glob(prefix + "*.bak.tmp")
+	if err != nil {
+		t.Fatalf("failed to inspect staged migration backups: %s", err)
+	}
+	if len(stagingFiles) != 0 {
+		t.Fatalf("migration left staged backups: %v", stagingFiles)
+	}
+	timestamp := strings.TrimSuffix(strings.TrimPrefix(backups[0], prefix), ".bak")
+	if _, err := time.Parse(databaseBackupTimestampFormat, timestamp); err != nil {
+		t.Fatalf("migration backup does not contain a UTC timestamp: %s", backups[0])
+	}
+	info, err := os.Stat(backups[0])
+	if err != nil {
+		t.Fatalf("failed to inspect migration backup permissions: %s", err)
+	}
+	if mode := info.Mode().Perm(); mode != databaseMigrationBackupFileMode {
+		t.Fatalf(
+			"migration backup permissions = %04o, want %04o",
+			mode,
+			databaseMigrationBackupFileMode,
+		)
+	}
+	return backups[0]
 }
 
 func TestReplaceInstanceRuntimeMetadataPreservesAssignedPorts(t *testing.T) {
@@ -505,6 +816,7 @@ func TestIncompleteInstancesAreDiscoverableForStartupRecovery(t *testing.T) {
 	manager := newSchemaTestManager(t)
 	insertConstraintChallenge(t, manager.db)
 	insertConstraintBuild(t, manager.db)
+	insertConstraintImage(t, manager.db)
 	insertConstraintInstance(t, manager.db)
 
 	instances, err := manager.incompleteInstanceIDs()
@@ -525,6 +837,31 @@ func TestIncompleteInstancesAreDiscoverableForStartupRecovery(t *testing.T) {
 	}
 	if len(instances) != 0 {
 		t.Fatalf("active instance was marked incomplete: %#v", instances)
+	}
+
+	requireExec(
+		t,
+		manager.db,
+		"INSERT INTO images(id, build, host) VALUES (2, 1, 'database');",
+	)
+	instances, err = manager.incompleteInstanceIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(instances, []InstanceId{1}) {
+		t.Fatalf("partially populated instance was not detected: %#v", instances)
+	}
+	requireExec(
+		t,
+		manager.db,
+		"INSERT INTO containers(instance, id) VALUES (1, 'database');",
+	)
+	instances, err = manager.incompleteInstanceIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instances) != 0 {
+		t.Fatalf("complete multi-container instance was marked incomplete: %#v", instances)
 	}
 }
 
@@ -567,6 +904,74 @@ func TestUpdateChallengesPreservesFailureAndRollsBack(t *testing.T) {
 	if persisted.Name != original.Name ||
 		!reflect.DeepEqual(persisted.Tags, original.Tags) {
 		t.Fatalf("failed update was partially committed: %#v", persisted)
+	}
+}
+
+func TestRebuildUpdateRemainsDetectablyIncompleteUntilFinalCommit(t *testing.T) {
+	manager := newSchemaTestManager(t)
+	original := newAddChallengeTestMetadata("rebuild-marker", nil)
+	original.SourceDigest = "old-digest"
+	if err := manager.addChallenge(original); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.db.Exec(`
+		CREATE TRIGGER reject_completed_rebuild
+		BEFORE UPDATE ON challenges
+		WHEN NEW.sourcedigest = 'new-digest'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced completion failure');
+		END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	updated := *original
+	updated.Name = "Updated"
+	updated.SourceDigest = "new-digest"
+	errs := manager.updateChallengesInternal(
+		[]*ChallengeMetadata{&updated},
+		true,
+		false,
+	)
+	if len(errs) != 1 ||
+		!strings.Contains(errs[0].Error(), "forced completion failure") {
+		t.Fatalf("completion failure was not returned: %v", errs)
+	}
+	persisted, err := manager.lookupChallengeMetadata(original.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.SourceDigest != "" {
+		t.Fatalf(
+			"interrupted rebuild was marked complete with digest %q",
+			persisted.SourceDigest,
+		)
+	}
+	if persisted.Name != updated.Name {
+		t.Fatalf("new metadata was not retained for recovery: %#v", persisted)
+	}
+
+	if _, err := manager.db.Exec("DROP TRIGGER reject_completed_rebuild;"); err != nil {
+		t.Fatal(err)
+	}
+	errs = manager.updateChallengesInternal(
+		[]*ChallengeMetadata{&updated},
+		true,
+		false,
+	)
+	if len(errs) != 0 {
+		t.Fatalf("retry did not complete the rebuild marker: %v", errs)
+	}
+	persisted, err = manager.lookupChallengeMetadata(original.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.SourceDigest != updated.SourceDigest {
+		t.Fatalf(
+			"completed rebuild digest = %q, want %q",
+			persisted.SourceDigest,
+			updated.SourceDigest,
+		)
 	}
 }
 
