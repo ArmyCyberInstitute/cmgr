@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"syscall"
 	"time"
 
@@ -210,6 +211,7 @@ const schemaQuery string = `
 const (
 	currentDatabaseVersion          = 2
 	sqliteBusyTimeoutMS             = 5000
+	sqliteJournalMode               = "wal"
 	databaseBackupTimestampFormat   = "20060102T150405.000000000Z"
 	databaseMigrationBackupFileMode = 0600
 	databaseMigrationLatchSuffix    = ".cmgr-migration-latch"
@@ -926,6 +928,12 @@ func databaseMigrationRequired(db *sqlx.DB) (bool, int, error) {
 	return tableCount != 0 && version < currentDatabaseVersion, version, nil
 }
 
+// databaseIsInMemory reports whether a configured database path names an
+// in-memory database rather than a file on disk.
+func databaseIsInMemory(dbPath string) bool {
+	return dbPath == "" || dbPath == ":memory:"
+}
+
 // backupDatabaseBeforeMigration creates a transactionally consistent snapshot
 // of an existing older database. VACUUM INTO avoids copying a live SQLite
 // database file without its journal or WAL and refuses to overwrite an
@@ -1128,11 +1136,20 @@ func (m *Manager) initDatabaseWithSchemaChanges(allowChanges bool) error {
 		return err
 	}
 
+	// A write-ahead log needs shared memory beside the database file, so it
+	// cannot be used on storage that lacks working mmap and file locking.
+	// Deployments that keep the database on a network filesystem opt out here
+	// rather than having to patch the connection string.
+	_, walDisabled := os.LookupEnv(DISABLE_WAL_ENV)
+
 	dataSourceName := fmt.Sprintf(
 		"%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)",
 		dbPath,
 		sqliteBusyTimeoutMS,
 	)
+	if !walDisabled {
+		dataSourceName += fmt.Sprintf("&_pragma=journal_mode(%s)", sqliteJournalMode)
+	}
 	db, err := sqlx.Open("sqlite", dataSourceName)
 	if err != nil {
 		m.log.errorf("could not open database: %s", err)
@@ -1170,6 +1187,32 @@ func (m *Manager) initDatabaseWithSchemaChanges(allowChanges bool) error {
 			busyTimeoutMS,
 			sqliteBusyTimeoutMS,
 		)
+	}
+
+	// Unlike the busy timeout, a write-ahead log is not available everywhere:
+	// an in-memory database keeps its own journal mode, and a database on
+	// storage without working mmap stays on the rollback journal. SQLite
+	// reports the surviving mode instead of failing, so treat a refused
+	// upgrade as a warning rather than blocking startup on storage that
+	// otherwise works today.
+	if !walDisabled && !databaseIsInMemory(dbPath) {
+		var journalMode string
+		err = db.QueryRow("PRAGMA journal_mode;").Scan(&journalMode)
+		if err != nil {
+			m.log.errorf("could not check SQLite journal mode: %s", err)
+			return err
+		}
+		if !strings.EqualFold(journalMode, sqliteJournalMode) {
+			m.log.warnf(
+				"SQLite journal mode is %q; expected %q. Readers and writers "+
+					"will block each other, which can surface as slow "+
+					"operations under concurrent load. This usually means the "+
+					"database is on storage that cannot support a write-ahead "+
+					"log, such as a network filesystem.",
+				journalMode,
+				sqliteJournalMode,
+			)
+		}
 	}
 
 	migrationRequired, fromVersion, err := databaseMigrationRequired(db)

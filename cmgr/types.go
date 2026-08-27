@@ -20,6 +20,7 @@ const (
 	IFACE_ENV          string = "CMGR_INTERFACE"
 	PORTS_ENV          string = "CMGR_PORTS"
 	DISK_QUOTA_ENV     string = "CMGR_ENABLE_DISK_QUOTAS"
+	DISABLE_WAL_ENV    string = "CMGR_DISABLE_DB_WAL"
 
 	DYNAMIC_INSTANCES int = -1
 	LOCKED            int = -2

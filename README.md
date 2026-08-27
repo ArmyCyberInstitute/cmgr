@@ -105,6 +105,14 @@ currently uses the following variables:
   instead of waiting for that operation. Separate processes can still build
   different challenges concurrently when no exclusive operation is pending.
 
+- *CMGR\_DISABLE\_DB\_WAL*: set to any value to open the database with SQLite's
+  rollback journal instead of a write-ahead log. cmgr uses a write-ahead log by
+  default so that readers do not block behind writers, and so that a crash
+  leaves the database file itself at its last committed state. WAL requires
+  shared memory beside the database and the sibling `<CMGR_DB>-wal` and
+  `<CMGR_DB>-shm` files it creates; set this variable when the database must
+  live on storage that cannot support that, such as a network filesystem.
+
 - *CMGR\_DIR*: directory containing all challenges (defaults to '.')
 
 - *CMGR\_ARTIFACT\_DIR*: directory for storing artifact bundles (defaults to '.')

@@ -1194,3 +1194,64 @@ func TestOpenCompletedBuildRestoresRuntimeMetadata(t *testing.T) {
 		)
 	}
 }
+
+func TestDatabaseUsesWriteAheadLog(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cmgr.db")
+	t.Setenv(DB_ENV, dbPath)
+
+	mgr := &Manager{log: newLogger(DISABLED)}
+	if err := mgr.initDatabase(); err != nil {
+		t.Fatalf("failed to initialize database: %s", err)
+	}
+	defer mgr.db.Close()
+
+	var journalMode string
+	if err := mgr.db.Get(&journalMode, "PRAGMA journal_mode;"); err != nil {
+		t.Fatalf("failed to read journal mode: %s", err)
+	}
+	if !strings.EqualFold(journalMode, sqliteJournalMode) {
+		t.Fatalf("journal mode is %q; expected %q", journalMode, sqliteJournalMode)
+	}
+
+	// A write-ahead log is recorded in the database header, so an independent
+	// connection that sets no pragmas of its own must observe it too. This
+	// distinguishes a persisted journal mode from one that only applies to the
+	// connection cmgr happens to have opened.
+	independent, err := sqlx.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to reopen database: %s", err)
+	}
+	defer independent.Close()
+
+	var persistedMode string
+	if err := independent.Get(&persistedMode, "PRAGMA journal_mode;"); err != nil {
+		t.Fatalf("failed to read persisted journal mode: %s", err)
+	}
+	if !strings.EqualFold(persistedMode, sqliteJournalMode) {
+		t.Fatalf(
+			"persisted journal mode is %q; expected %q",
+			persistedMode,
+			sqliteJournalMode,
+		)
+	}
+}
+
+func TestDatabaseWriteAheadLogCanBeDisabled(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cmgr.db")
+	t.Setenv(DB_ENV, dbPath)
+	t.Setenv(DISABLE_WAL_ENV, "1")
+
+	mgr := &Manager{log: newLogger(DISABLED)}
+	if err := mgr.initDatabase(); err != nil {
+		t.Fatalf("failed to initialize database without a write-ahead log: %s", err)
+	}
+	defer mgr.db.Close()
+
+	var journalMode string
+	if err := mgr.db.Get(&journalMode, "PRAGMA journal_mode;"); err != nil {
+		t.Fatalf("failed to read journal mode: %s", err)
+	}
+	if strings.EqualFold(journalMode, sqliteJournalMode) {
+		t.Fatalf("journal mode is %q despite %s being set", journalMode, DISABLE_WAL_ENV)
+	}
+}
