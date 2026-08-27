@@ -138,6 +138,7 @@ func testChallenges(mgr *cmgr.Manager, args []string) int {
 	updateUsage(parser, "[<path>]")
 	noSolve := parser.Bool("no-solve", false, "do not run any solvers")
 	required := parser.Bool("require-solve", false, "raise an error if a challenge is missing a solver")
+	keepImages := parser.Bool("keep-images", false, "retain build images until the whole run finishes so challenges can share base layers")
 	seed := parser.Int("seed", time.Now().Nanosecond(), "the random `seed` for the challenge")
 	parser.Lookup("seed").DefValue = "random"
 	flagFormat := parser.String("flag-format", "flag{%s}", "the `format-string` to use for the flag")
@@ -166,9 +167,27 @@ func testChallenges(mgr *cmgr.Manager, args []string) int {
 
 	metalist := getMetaByDir(mgr, path)
 
+	// With --keep-images, build images are retained for the duration of the run so
+	// challenges can share base layers: a per-challenge Destroy prunes the shared
+	// base before the next challenge builds, forcing every challenge to reinstall
+	// it. Teardown is deferred to the end of the batch instead. Instances are
+	// unaffected -- runTest stops them per challenge when solving, and leaves them
+	// running in interactive --no-solve mode as before -- so only image layers
+	// accumulate during the run.
+	var built []cmgr.BuildId
+	if *keepImages {
+		defer func() {
+			for _, id := range built {
+				if err := mgr.Destroy(id); err != nil {
+					fmt.Printf("warning: could not destroy build %d: %s\n", id, err)
+				}
+			}
+		}()
+	}
+
 	retCode := NO_ERROR
 	for _, cMeta := range metalist {
-		if !runTest(mgr, cMeta, *flagFormat, *seed, !*noSolve, *required) {
+		if !runTest(mgr, cMeta, *flagFormat, *seed, !*noSolve, *required, *keepImages, &built) {
 			retCode = RUNTIME_ERROR
 		}
 	}
@@ -440,7 +459,7 @@ func getMetaByDir(m *cmgr.Manager, dir string) []*cmgr.ChallengeMetadata {
 	return cu.Unmodified
 }
 
-func runTest(mgr *cmgr.Manager, cMeta *cmgr.ChallengeMetadata, flagFormat string, seed int, solve, required bool) bool {
+func runTest(mgr *cmgr.Manager, cMeta *cmgr.ChallengeMetadata, flagFormat string, seed int, solve, required, keepImages bool, built *[]cmgr.BuildId) bool {
 
 	// Build
 	builds, err := mgr.Build(cMeta.Id, []int{seed}, flagFormat)
@@ -450,7 +469,13 @@ func runTest(mgr *cmgr.Manager, cMeta *cmgr.ChallengeMetadata, flagFormat string
 	}
 	build := builds[0]
 	if solve {
-		defer mgr.Destroy(build.Id)
+		if keepImages {
+			// Defer teardown to the end of the batch (see testChallenges) so the
+			// shared base layers survive for the next challenge to reuse.
+			*built = append(*built, build.Id)
+		} else {
+			defer mgr.Destroy(build.Id)
+		}
 	}
 
 	// Start
